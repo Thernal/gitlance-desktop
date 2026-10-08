@@ -180,11 +180,14 @@ impl Workspace {
                         )),
                         _ => None,
                     };
-                    anyhow::Ok((branches, refname, open))
+                    anyhow::Ok((branches, refname, open, repo.decorations()))
                 })
                 .await;
             this.update(cx, |this, cx| match loaded {
-                Ok((branches, refname, open)) => this.apply_reload(branches, refname, open, cx),
+                Ok((branches, refname, open, decor)) => {
+                    this.decor = decor;
+                    this.apply_reload(branches, refname, open, cx)
+                }
                 // Mid-rebase the repository can be unreadable for a moment; the next change retries.
                 Err(_) => this.set_status(Status::UpToDate, cx),
             })

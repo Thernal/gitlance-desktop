@@ -14,6 +14,7 @@ pub use versions::{Version, VersionDiff};
 
 use anyhow::{Context as _, Result};
 use git2::{BranchType, Oid, Repository, Sort};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Where a repository lives on the web: GitLab, GitHub or similar, from its clone URL.
@@ -80,6 +81,22 @@ impl WebRemote {
     }
 }
 
+/// A label on a commit: where a branch, a remote branch or a tag points.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Deco {
+    pub name: String,
+    pub kind: DecoKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecoKind {
+    /// The checked-out branch: shown as `HEAD → name`.
+    Head,
+    Local,
+    Remote,
+    Tag,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RefKind {
     Local,
@@ -144,6 +161,49 @@ impl Repo {
             .or_else(|| names.first().copied())?;
         let remote = self.inner.find_remote(name).ok()?;
         WebRemote::parse(remote.url().ok()?)
+    }
+
+    /// The branches, remote branches and tags that point at each commit.
+    pub fn decorations(&self) -> HashMap<Oid, Vec<Deco>> {
+        let mut out: HashMap<Oid, Vec<Deco>> = HashMap::new();
+        let head = self
+            .inner
+            .head()
+            .ok()
+            .and_then(|h| h.name().ok().map(str::to_owned));
+        let Ok(refs) = self.inner.references() else {
+            return out;
+        };
+        for reference in refs.flatten() {
+            let (Ok(name), Ok(commit)) = (reference.name(), reference.peel_to_commit()) else {
+                continue;
+            };
+            let short = lossy(reference.shorthand_bytes());
+            let kind = if name.starts_with("refs/heads/") {
+                if head.as_deref() == Some(name) {
+                    DecoKind::Head
+                } else {
+                    DecoKind::Local
+                }
+            } else if name.starts_with("refs/remotes/") {
+                // `origin/HEAD` is only a pointer to another remote branch.
+                if short.ends_with("/HEAD") {
+                    continue;
+                }
+                DecoKind::Remote
+            } else if name.starts_with("refs/tags/") {
+                DecoKind::Tag
+            } else {
+                continue;
+            };
+            out.entry(commit.id())
+                .or_default()
+                .push(Deco { name: short, kind });
+        }
+        for decos in out.values_mut() {
+            decos.sort_by_key(|d| d.kind as u8);
+        }
+        out
     }
 
     /// Local branches first, the checked-out one at the top; remote-tracking refs after them.

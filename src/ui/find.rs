@@ -203,6 +203,8 @@ impl Workspace {
             } else if self.repo_menu {
                 self.repo_menu = false;
                 cx.notify();
+            } else if self.field.is_some() {
+                self.filter_key(event, cx);
             } else if self.dfind.is_some() {
                 self.close_dfind(cx);
             } else if self.find.text.is_some() {
@@ -213,6 +215,10 @@ impl Workspace {
             } else if self.sel.take().is_some() {
                 cx.notify();
             }
+            return;
+        }
+        if self.field.is_some() {
+            self.filter_key(event, cx);
             return;
         }
         if let Some(mut text) = self.dfind.clone() {

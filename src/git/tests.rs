@@ -348,3 +348,26 @@ fn clone_urls_become_web_addresses() {
     assert!(WebRemote::parse("/local/path/repo").is_none());
     assert!(WebRemote::parse("").is_none());
 }
+
+#[test]
+fn decorations_label_branches_remote_branches_and_tags() {
+    let mut fx = Fixture::new();
+    let a = fx.commit("refs/heads/main", &[], &[("a.txt", "1\n")], "a");
+    let b = fx.commit("refs/heads/main", &[a], &[("a.txt", "2\n")], "b");
+    fx.repo.reference("refs/tags/v1", a, true, "tag").unwrap();
+    fx.repo
+        .reference("refs/remotes/origin/main", b, true, "fetch")
+        .unwrap();
+    fx.repo.set_head("refs/heads/main").unwrap();
+    let decos = fx.open().decorations();
+    let on_b: Vec<_> = decos[&b]
+        .iter()
+        .map(|d| (d.name.as_str(), d.kind))
+        .collect();
+    assert_eq!(
+        on_b,
+        [("main", DecoKind::Head), ("origin/main", DecoKind::Remote)]
+    );
+    assert_eq!(decos[&a][0].name, "v1");
+    assert_eq!(decos[&a][0].kind, DecoKind::Tag);
+}

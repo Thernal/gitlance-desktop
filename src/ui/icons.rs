@@ -38,7 +38,21 @@ const ICONS: &[(&str, &str)] = &[
             r#"<circle cx="12" cy="12" r="3"/>"#
         ),
     ),
+    ("back", lucide!(r#"<path d="m15 18-6-6 6-6"/>"#)),
+    ("forward", lucide!(r#"<path d="m9 18 6-6-6-6"/>"#)),
     ("chevron", lucide!(r#"<path d="m6 9 6 6 6-6"/>"#)),
+    (
+        "sidebar",
+        lucide!(r#"<rect width="18" height="18" x="3" y="3" rx="2"/>"# r#"<path d="M9 3v18"/>"#),
+    ),
+    (
+        "files",
+        lucide!(
+            r#"<path d="M20 7h-3a2 2 0 0 1-2-2V2"/>"#
+            r#"<path d="M9 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7l4 4v10a2 2 0 0 1-2 2Z"/>"#
+            r#"<path d="M3 7.6v12.8A1.6 1.6 0 0 0 4.6 22h9.8"/>"#
+        ),
+    ),
     (
         "branch",
         lucide!(

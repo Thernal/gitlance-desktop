@@ -55,6 +55,9 @@ pub struct Layout {
     pub files: f32,
     /// Height of the branch list.
     pub branches: f32,
+    /// The branches/versions/commits column and the files column are shown (⌘1, ⌘2).
+    pub show_sidebar: bool,
+    pub show_files: bool,
 }
 
 impl Default for Layout {
@@ -63,6 +66,8 @@ impl Default for Layout {
             sidebar: 340.,
             files: 280.,
             branches: 180.,
+            show_sidebar: true,
+            show_files: true,
         }
     }
 }
@@ -79,6 +84,11 @@ impl Layout {
     fn parse(text: &str) -> Self {
         let mut layout = Self::default();
         for (key, value) in pairs(text) {
+            match key {
+                "show_sidebar" => layout.show_sidebar = value != "false",
+                "show_files" => layout.show_files = value != "false",
+                _ => {}
+            }
             let Ok(value) = value.parse::<f32>() else {
                 continue;
             };
@@ -97,7 +107,9 @@ impl std::fmt::Display for Layout {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "sidebar={}", self.sidebar)?;
         writeln!(f, "files={}", self.files)?;
-        writeln!(f, "branches={}", self.branches)
+        writeln!(f, "branches={}", self.branches)?;
+        writeln!(f, "show_sidebar={}", self.show_sidebar)?;
+        writeln!(f, "show_files={}", self.show_files)
     }
 }
 
@@ -290,6 +302,8 @@ pub struct ViewOptions {
     pub full_context: bool,
     /// Whitespace-only changes count as unchanged.
     pub ignore_whitespace: bool,
+    /// Changed files as a flat list instead of a folder tree.
+    pub list_files: bool,
 }
 
 impl ViewOptions {
@@ -312,6 +326,7 @@ impl ViewOptions {
                 "wrap" => options.wrap = value,
                 "full_context" => options.full_context = value,
                 "ignore_whitespace" => options.ignore_whitespace = value,
+                "list_files" => options.list_files = value,
                 _ => {}
             }
         }
@@ -324,7 +339,8 @@ impl std::fmt::Display for ViewOptions {
         writeln!(f, "unified={}", self.unified)?;
         writeln!(f, "wrap={}", self.wrap)?;
         writeln!(f, "full_context={}", self.full_context)?;
-        writeln!(f, "ignore_whitespace={}", self.ignore_whitespace)
+        writeln!(f, "ignore_whitespace={}", self.ignore_whitespace)?;
+        writeln!(f, "list_files={}", self.list_files)
     }
 }
 
@@ -360,6 +376,8 @@ mod tests {
             sidebar: 400.,
             files: 250.5,
             branches: 120.,
+            show_sidebar: false,
+            show_files: true,
         };
         assert_eq!(Layout::parse(&layout.to_string()), layout);
         assert_eq!(

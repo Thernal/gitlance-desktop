@@ -6,15 +6,14 @@ mod find;
 mod format;
 mod icons;
 mod input;
+mod lists;
 mod menu;
 mod rows;
 mod settings;
 mod theme;
 mod watch;
 
-use crate::git::{
-    BranchRef, ChangeKind, CommitInfo, DiffSettings, FileDiff, RefKind, Repo, Version,
-};
+use crate::git::{BranchRef, ChangeKind, CommitInfo, DiffSettings, FileDiff, Repo, Version};
 use crate::storage::{self, DiffMode, Layout, Settings, ViewOptions};
 use diff_view::{RowStyle, chip};
 use gpui::{
@@ -24,6 +23,7 @@ use gpui::{
     TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas,
     div, font, list, prelude::*, px, size, uniform_list,
 };
+use lists::{Field, History};
 use menu::{Act, CtxMenu, Entry};
 use rows::{FileData, Row};
 use std::cell::Cell as Shared;
@@ -49,6 +49,12 @@ actions!(
         NextMatch,
         PreviousMatch,
         FindCommits,
+        FilterFiles,
+        GoBack,
+        GoForward,
+        ToggleSidebar,
+        ToggleFiles,
+        FocusDiff,
         CopySelection,
         NextChange,
         PreviousChange,
@@ -82,6 +88,12 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("cmd-,", OpenSettings, None),
                 KeyBinding::new("cmd-f", Find, Some("Workspace")),
                 KeyBinding::new("cmd-shift-f", FindCommits, Some("Workspace")),
+                KeyBinding::new("cmd-p", FilterFiles, Some("Workspace")),
+                KeyBinding::new("cmd-[", GoBack, Some("Workspace")),
+                KeyBinding::new("cmd-]", GoForward, Some("Workspace")),
+                KeyBinding::new("cmd-1", ToggleSidebar, Some("Workspace")),
+                KeyBinding::new("cmd-2", ToggleFiles, Some("Workspace")),
+                KeyBinding::new("cmd-.", FocusDiff, Some("Workspace")),
                 KeyBinding::new("cmd-c", CopySelection, Some("Workspace && !Typing")),
                 KeyBinding::new("f7", NextChange, Some("Workspace")),
                 KeyBinding::new("shift-f7", PreviousChange, Some("Workspace")),
@@ -154,11 +166,20 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
             MenuItem::action("Find Previous", PreviousMatch),
             MenuItem::separator(),
             MenuItem::action("Find Commits…", FindCommits),
+            MenuItem::action("Filter Files…", FilterFiles),
             MenuItem::separator(),
             MenuItem::action("Next Change", NextChange),
             MenuItem::action("Previous Change", PreviousChange),
         ]),
+        Menu::new("Go").items([
+            MenuItem::action("Back", GoBack),
+            MenuItem::action("Forward", GoForward),
+        ]),
         Menu::new("View").items([
+            MenuItem::action("Show Branches and Commits", ToggleSidebar),
+            MenuItem::action("Show Files", ToggleFiles),
+            MenuItem::action("Focus on the Diff", FocusDiff),
+            MenuItem::separator(),
             MenuItem::action("Unified Diff", ToggleUnified).checked(options.unified),
             MenuItem::action("Line Diff", SetLines).checked(options.mode == DiffMode::Lines),
             MenuItem::action("Word Diff", SetWords).checked(options.mode == DiffMode::Words),
@@ -479,6 +500,16 @@ pub struct Workspace {
     jump: Option<u64>,
     /// "Copied ✓" on the Copy button until something changes.
     copied: bool,
+    /// Back / forward through what was looked at.
+    history: History,
+    /// The branch and path filters, and which of them (if any) takes the keyboard.
+    bfilter: String,
+    pfilter: String,
+    field: Option<Field>,
+    /// Folders closed in the file tree.
+    collapsed: HashSet<String>,
+    /// Labels on commits: where branches, remote branches and tags point.
+    decor: std::collections::HashMap<git2::Oid, Vec<crate::git::Deco>>,
     /// A context menu open at the pointer, and the repository's address on the web.
     ctx_menu: Option<CtxMenu>,
     web: Option<crate::git::WebRemote>,
@@ -554,6 +585,12 @@ impl Workspace {
             review_open: false,
             jump: None,
             copied: false,
+            history: History::default(),
+            bfilter: String::new(),
+            pfilter: String::new(),
+            field: None,
+            collapsed: HashSet::new(),
+            decor: Default::default(),
             ctx_menu: None,
             web: None,
             sel: None,
@@ -605,13 +642,22 @@ impl Workspace {
                     let git_dir = repo.git_dir();
                     let fingerprint = crate::git::fingerprint(&git_dir);
                     let web = repo.web_remote();
-                    anyhow::Ok((repo.root(), repo.branches()?, git_dir, fingerprint, web))
+                    let decor = repo.decorations();
+                    anyhow::Ok((
+                        repo.root(),
+                        repo.branches()?,
+                        git_dir,
+                        fingerprint,
+                        web,
+                        decor,
+                    ))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 match loaded {
-                    Ok((root, branches, git_dir, fingerprint, web)) => {
+                    Ok((root, branches, git_dir, fingerprint, web, decor)) => {
                         this.web = web;
+                        this.decor = decor;
                         this.recent = storage::remember(&root);
                         if this.root.as_ref() != Some(&root) {
                             this.find.reset();
@@ -724,6 +770,7 @@ impl Workspace {
         };
         self.clear_diff();
         self.selection = Selection::Commit(ix);
+        self.record();
         if let Some(row) = self.row_of(ix) {
             self.commit_scroll
                 .scroll_to_item(row, ScrollStrategy::Nearest);
@@ -759,6 +806,7 @@ impl Workspace {
         };
         self.clear_diff();
         self.selection = Selection::Versions { from, to };
+        self.record();
         let settings = self.settings();
         self.load_diff(keep, cx, move || {
             let diff = Repo::open(&root)?.version_diff(&a, &b, settings)?;
@@ -816,7 +864,7 @@ impl Workspace {
         };
         self.file = ix;
         self.clear_file();
-        self.file_scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
+        self.scroll_file_into_view(ix);
         let mode = self.options.mode;
         self.view_task = Some(cx.spawn(async move |this, cx| {
             let data = cx
@@ -1216,16 +1264,54 @@ impl Workspace {
     }
 
     fn previous_file(&mut self, _: &PreviousFile, _: &mut Window, cx: &mut Context<Self>) {
-        if self.file > 0 {
-            self.select_file(self.file - 1, cx);
+        let order = self.file_order();
+        if let Some(at) = order.iter().position(|&ix| ix == self.file)
+            && at > 0
+        {
+            self.select_file(order[at - 1], cx);
         }
     }
 
     fn next_file(&mut self, _: &NextFile, _: &mut Window, cx: &mut Context<Self>) {
-        let count = self.diff.as_ref().map_or(0, |d| d.files.len());
-        if self.file + 1 < count {
-            self.select_file(self.file + 1, cx);
+        let order = self.file_order();
+        if let Some(at) = order.iter().position(|&ix| ix == self.file)
+            && at + 1 < order.len()
+        {
+            self.select_file(order[at + 1], cx);
         }
+    }
+
+    fn filter_files_action(&mut self, _: &FilterFiles, _: &mut Window, cx: &mut Context<Self>) {
+        self.start_field(Field::Files, cx);
+    }
+
+    fn go_back_action(&mut self, _: &GoBack, _: &mut Window, cx: &mut Context<Self>) {
+        self.go_back(cx);
+    }
+
+    fn go_forward_action(&mut self, _: &GoForward, _: &mut Window, cx: &mut Context<Self>) {
+        self.go_forward(cx);
+    }
+
+    fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
+        self.layout.show_sidebar = !self.layout.show_sidebar;
+        self.layout.save();
+        cx.notify();
+    }
+
+    fn toggle_files(&mut self, _: &ToggleFiles, _: &mut Window, cx: &mut Context<Self>) {
+        self.layout.show_files = !self.layout.show_files;
+        self.layout.save();
+        cx.notify();
+    }
+
+    /// ⌘.: the diff alone; pressed again, the islands come back.
+    fn focus_diff(&mut self, _: &FocusDiff, _: &mut Window, cx: &mut Context<Self>) {
+        let hide = self.layout.show_sidebar || self.layout.show_files;
+        self.layout.show_sidebar = !hide;
+        self.layout.show_files = !hide;
+        self.layout.save();
+        cx.notify();
     }
 
     fn toggle_unified(&mut self, _: &ToggleUnified, _: &mut Window, cx: &mut Context<Self>) {
@@ -1417,6 +1503,24 @@ impl Workspace {
             .pl(px(78.))
             .pr(px(GAP))
             .child(
+                div()
+                    .flex()
+                    .gap(px(2.))
+                    .child(
+                        nav_button("go-back", "back", "Back  ⌘[", self.history.can_back())
+                            .on_click(cx.listener(|this, _, _, cx| this.go_back(cx))),
+                    )
+                    .child(
+                        nav_button(
+                            "go-forward",
+                            "forward",
+                            "Forward  ⌘]",
+                            self.history.can_forward(),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.go_forward(cx))),
+                    ),
+            )
+            .child(
                 // The repository is a menu: open, refresh and the recent repositories.
                 div()
                     .id("repo-menu")
@@ -1566,6 +1670,52 @@ impl Workspace {
             )
     }
 
+    /// The rail on the window's left edge: one button per hideable island (⌘1, ⌘2).
+    fn render_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let button = |id: &'static str, icon: &'static str, on: bool, tip: &'static str| {
+            div()
+                .id(id)
+                .size(px(26.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(ROW_RADIUS))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::hover()))
+                .when(on, |s| s.bg(theme::hover()))
+                .tooltip(move |_, cx| cx.new(|_| Tip(tip)).into())
+                .child(icons::icon(icon).text_color(if on {
+                    theme::accent()
+                } else {
+                    theme::muted()
+                }))
+        };
+        div()
+            .w(px(30.))
+            .flex_none()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(4.))
+            .pt(px(2.))
+            .child(
+                button(
+                    "rail-sidebar",
+                    "sidebar",
+                    self.layout.show_sidebar,
+                    "Branches and commits  ⌘1",
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_sidebar(&ToggleSidebar, window, cx)
+                })),
+            )
+            .child(
+                button("rail-files", "files", self.layout.show_files, "Files  ⌘2").on_click(
+                    cx.listener(|this, _, window, cx| this.toggle_files(&ToggleFiles, window, cx)),
+                ),
+            )
+    }
+
     fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex_1()
@@ -1618,37 +1768,6 @@ impl Workspace {
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let branches = self.branches.iter().enumerate().map(|(ix, b)| {
-            let selected = self.branch == Some(ix);
-            row(("branch", ix), selected)
-                .h(px(26.))
-                .gap_2()
-                .child(
-                    div()
-                        .w(px(8.))
-                        .text_color(theme::accent())
-                        .child(if b.is_head { "●" } else { "" }),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(match b.kind {
-                            RefKind::Local => theme::text(),
-                            RefKind::Remote => theme::muted(),
-                        })
-                        .child(b.name.clone()),
-                )
-                .on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                        this.branch_context(ix, event.position, cx)
-                    }),
-                )
-                .on_click(cx.listener(move |this, _, _, cx| this.select_branch(ix, None, cx)))
-        });
-
         div()
             .w(px(self.layout.sidebar))
             .flex_none()
@@ -1658,16 +1777,7 @@ impl Workspace {
                 island()
                     .h(px(self.layout.branches))
                     .child(island_label("Branches"))
-                    .child(
-                        div()
-                            .id("branches")
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .px(px(6.))
-                            .pb(px(6.))
-                            .children(branches.map(|b| div().py(px(1.)).child(b))),
-                    ),
+                    .child(self.render_branches(cx)),
             )
             .child(self.handle(Split::Branches, cx))
             .children((self.versions.len() > 1).then(|| {
@@ -1792,6 +1902,12 @@ impl Workspace {
                             .font_family(theme::CODE_FONT)
                             .child(format::short(commit.id)),
                     )
+                    .children(
+                        self.decor
+                            .get(&commit.id)
+                            .map(|d| lists::deco_tags(d))
+                            .unwrap_or_default(),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -1839,8 +1955,13 @@ impl Workspace {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(self.render_files(diff, cx))
-                    .child(self.handle(Split::Files, cx))
+                    .children(self.layout.show_files.then(|| {
+                        div()
+                            .flex()
+                            .flex_none()
+                            .child(self.render_files(diff, cx))
+                            .child(self.handle(Split::Files, cx))
+                    }))
                     .child(self.render_file(diff, cx))
                     .children(self.review_open.then(|| self.render_review(cx))),
             )
@@ -2048,30 +2169,6 @@ impl Workspace {
                         .child(stats),
                 ),
         }
-    }
-
-    fn render_files(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
-        island()
-            .w(px(self.layout.files))
-            .flex_none()
-            .child(island_label(plural(diff.files.len(), "file")))
-            .child(
-                uniform_list(
-                    "files",
-                    diff.files.len(),
-                    cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                        let Some(diff) = &this.diff else {
-                            return Vec::new();
-                        };
-                        range
-                            .map(|ix| render_file_row(&diff.files[ix], ix, this.file == ix, cx))
-                            .collect::<Vec<_>>()
-                    }),
-                )
-                .track_scroll(&self.file_scroll)
-                .flex_1()
-                .pb(px(6.)),
-            )
     }
 
     fn render_file(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2365,7 +2462,11 @@ impl Render for Workspace {
         div()
             .id("workspace")
             .key_context(
-                if self.find.text.is_some() || self.dfind.is_some() || self.compose.is_some() {
+                if self.find.text.is_some()
+                    || self.dfind.is_some()
+                    || self.compose.is_some()
+                    || self.field.is_some()
+                {
                     "Workspace Typing"
                 } else {
                     "Workspace"
@@ -2386,6 +2487,12 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::open_settings_action))
             .on_action(cx.listener(Self::find_action))
             .on_action(cx.listener(Self::find_commits_action))
+            .on_action(cx.listener(Self::filter_files_action))
+            .on_action(cx.listener(Self::go_back_action))
+            .on_action(cx.listener(Self::go_forward_action))
+            .on_action(cx.listener(Self::toggle_sidebar))
+            .on_action(cx.listener(Self::toggle_files))
+            .on_action(cx.listener(Self::focus_diff))
             .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::next_change))
             .on_action(cx.listener(Self::previous_change))
@@ -2442,8 +2549,14 @@ impl Render for Workspace {
                     .flex()
                     .px(px(GAP))
                     .pb(px(GAP))
-                    .child(self.render_sidebar(cx))
-                    .child(self.handle(Split::Sidebar, cx))
+                    .child(self.render_rail(cx))
+                    .children(self.layout.show_sidebar.then(|| {
+                        div()
+                            .flex()
+                            .flex_none()
+                            .child(self.render_sidebar(cx))
+                            .child(self.handle(Split::Sidebar, cx))
+                    }))
                     .child(self.render_diff(cx))
                     .into_any_element(),
             })
@@ -2462,7 +2575,7 @@ fn axis(split: Split, position: Point<gpui::Pixels>) -> f32 {
     })
 }
 
-fn render_file_row(
+pub(super) fn render_file_row(
     file: &FileDiff,
     ix: usize,
     selected: bool,
@@ -2492,26 +2605,7 @@ fn render_file_row(
                         .child(d)
                 })),
         )
-        .child(
-            div()
-                .flex()
-                .gap_1()
-                .text_size(px(11.))
-                .when(file.added > 0, |s| {
-                    s.child(
-                        div()
-                            .text_color(theme::added())
-                            .child(format!("+{}", file.added)),
-                    )
-                })
-                .when(file.removed > 0, |s| {
-                    s.child(
-                        div()
-                            .text_color(theme::removed())
-                            .child(format!("−{}", file.removed)),
-                    )
-                }),
-        )
+        .child(stats(file))
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -2520,6 +2614,25 @@ fn render_file_row(
         )
         .on_click(cx.listener(move |this, _, _, cx| this.select_file(ix, cx)));
     div().w_full().h(px(42.)).px(px(6.)).py(px(1.)).child(item)
+}
+
+/// A file's added and removed line counts.
+fn stats(file: &FileDiff) -> impl IntoElement + use<> {
+    let (added, removed) = (file.added, file.removed);
+    div()
+        .flex()
+        .gap_1()
+        .text_size(px(11.))
+        .when(added > 0, |s| {
+            s.child(div().text_color(theme::added()).child(format!("+{added}")))
+        })
+        .when(removed > 0, |s| {
+            s.child(
+                div()
+                    .text_color(theme::removed())
+                    .child(format!("−{removed}")),
+            )
+        })
 }
 
 fn change_badge(change: ChangeKind) -> impl IntoElement {
@@ -2614,6 +2727,42 @@ fn icon_button(
                 .group_hover(id, |s| s.text_color(theme::text())),
         )
         .tooltip(move |_, cx| cx.new(|_| Tip(tip)).into())
+}
+
+/// Back / forward: dim when there is nowhere to go (the handlers check again).
+fn nav_button(
+    id: &'static str,
+    icon: &'static str,
+    tip: &'static str,
+    enabled: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let button = div()
+        .id(id)
+        .size(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(ROW_RADIUS))
+        .group(id)
+        .child(
+            icons::icon(icon)
+                .text_color(if enabled {
+                    theme::muted()
+                } else {
+                    theme::faint()
+                })
+                .when(enabled, |s| {
+                    s.group_hover(id, |s| s.text_color(theme::text()))
+                }),
+        );
+    if enabled {
+        button
+            .cursor_pointer()
+            .hover(|s| s.bg(theme::hover()))
+            .tooltip(move |_, cx| cx.new(|_| Tip(tip)).into())
+    } else {
+        button.opacity(0.45)
+    }
 }
 
 /// A tooltip: a small panel with a line of text.
