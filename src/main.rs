@@ -2,9 +2,11 @@
 
 mod git;
 mod highlight;
+mod search;
 mod storage;
 mod structural;
 mod ui;
+mod worddiff;
 
 use std::path::PathBuf;
 

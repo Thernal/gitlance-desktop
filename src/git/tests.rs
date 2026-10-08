@@ -290,3 +290,29 @@ fn whitespace_only_changes_can_be_ignored() {
     let quiet = repo.commit_diff(b, hidden).unwrap();
     assert!(quiet.iter().all(|f| f.added + f.removed == 0));
 }
+
+#[test]
+fn changed_paths_lists_what_each_commit_touched() {
+    let mut fx = Fixture::new();
+    let a = fx.commit("refs/heads/main", &[], &[("a.txt", "1\n")], "a");
+    let b = fx.commit(
+        "refs/heads/main",
+        &[a],
+        &[("a.txt", "1\n"), ("b.txt", "2\n")],
+        "b",
+    );
+    let found = fx.open().changed_paths(&[a, b]);
+    assert_eq!(found[0], (a, vec!["a.txt".to_owned(), "a.txt".to_owned()]));
+    assert_eq!(found[1].1, ["b.txt", "b.txt"]);
+}
+
+#[test]
+fn the_fingerprint_changes_with_refs_and_not_without_them() {
+    let mut fx = Fixture::new();
+    let a = fx.commit("refs/heads/main", &[], &[("a.txt", "1\n")], "a");
+    let dir = fx.open().git_dir();
+    let before = fingerprint(&dir);
+    assert_eq!(fingerprint(&dir), before, "reading changes nothing");
+    fx.commit("refs/heads/main", &[a], &[("a.txt", "2\n")], "amend");
+    assert_ne!(fingerprint(&dir), before);
+}

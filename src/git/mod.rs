@@ -64,6 +64,11 @@ impl Repo {
             .to_path_buf()
     }
 
+    /// The git directory, where refs and reflogs live.
+    pub fn git_dir(&self) -> PathBuf {
+        self.inner.path().to_path_buf()
+    }
+
     /// Local branches first, the checked-out one at the top; remote-tracking refs after them.
     pub fn branches(&self) -> Result<Vec<BranchRef>> {
         let mut out = Vec::new();
@@ -116,6 +121,34 @@ impl Repo {
         })
     }
 
+    /// The paths each of `ids` touched against its first parent, without reading file contents.
+    pub fn changed_paths(&self, ids: &[Oid]) -> Vec<(Oid, Vec<String>)> {
+        let mut opts = git2::DiffOptions::new();
+        opts.context_lines(0).skip_binary_check(true);
+        ids.iter()
+            .map(|&id| {
+                let paths = (|| -> Result<Vec<String>> {
+                    let commit = self.inner.find_commit(id)?;
+                    let new = commit.tree()?;
+                    let old = match commit.parent_count() {
+                        0 => None,
+                        _ => Some(commit.parent(0)?.tree()?),
+                    };
+                    let diff =
+                        self.inner
+                            .diff_tree_to_tree(old.as_ref(), Some(&new), Some(&mut opts))?;
+                    Ok(diff
+                        .deltas()
+                        .flat_map(|d| [d.old_file().path(), d.new_file().path()])
+                        .flatten()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .collect())
+                })();
+                (id, paths.unwrap_or_default())
+            })
+            .collect()
+    }
+
     /// What a commit changed against its first parent; a root commit against the empty tree.
     pub fn commit_diff(&self, id: Oid, settings: DiffSettings) -> Result<Vec<FileDiff>> {
         let commit = self.inner.find_commit(id)?;
@@ -148,4 +181,35 @@ impl Repo {
 
 fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// A value that changes whenever a ref, `HEAD` or a reflog under `git_dir` does: file sizes and
+/// modification times, hashed. Reads metadata only.
+pub fn fingerprint(git_dir: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    fn visit(path: &Path, hasher: &mut impl Hasher) {
+        let Ok(meta) = std::fs::metadata(path) else {
+            return;
+        };
+        path.hash(hasher);
+        meta.len().hash(hasher);
+        meta.modified().ok().hash(hasher);
+        if meta.is_dir() {
+            let mut entries: Vec<_> = std::fs::read_dir(path)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .collect();
+            entries.sort();
+            for entry in entries {
+                visit(&entry, hasher);
+            }
+        }
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for name in ["HEAD", "packed-refs", "refs", "logs"] {
+        visit(&git_dir.join(name), &mut hasher);
+    }
+    hasher.finish()
 }
