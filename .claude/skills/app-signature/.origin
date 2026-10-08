@@ -1,0 +1,8 @@
+repo=git@github.com:Thernal/knowledge.git
+kind=skill
+skill=app-signature
+path=skills/app-signature
+ref=default
+commit=a6feecb01e83eba382d2f3ec8be6c67a86092cce
+tree=68c898aa4815e2b143a8d8331c97826d2e5f85e8
+installed_at=2026-10-08T07:39:06Z
