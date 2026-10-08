@@ -152,6 +152,9 @@ impl Workspace {
 
     /// Typing into the field: it takes text, backspace, paste, enter and escape.
     pub(super) fn find_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        if self.compose.is_some() {
+            return self.compose_key(event, cx);
+        }
         let key = &event.keystroke;
         if key.key == "escape" {
             if self.repo_menu {

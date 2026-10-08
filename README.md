@@ -38,7 +38,7 @@ overwritten before a fetch is not visible, and versions expire with the reflog (
 
 - Uncommitted work against `HEAD`, merging staged, unstaged and untracked files and detecting renames.
 - Per-file "reviewed" marks that reset when the file changes.
-- Line comments written to `.misc/review.md` in the reviewed repository, for an agent to pick up.
+- Line comments for an agent: written in the diff, kept on this Mac, copied as markdown (built). Later: `.misc/review.md` or an MCP server so an agent can read and resolve them itself.
 - A command-line launcher (`gitlance [path]`), if opening from a terminal turns out to be wanted.
 
 Staging and committing stay out of GitLance.

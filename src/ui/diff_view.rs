@@ -9,6 +9,7 @@ use gpui::{
     AnyElement, App, FontStyle, HighlightStyle, Rgba, SharedString, StyledText, UnderlineStyle,
     div, prelude::*, px,
 };
+use std::rc::Rc;
 
 const TAB_WIDTH: usize = 4;
 /// Width of the `+`/`−` column in a unified diff.
@@ -39,11 +40,15 @@ impl RowStyle<'_> {
     }
 }
 
+/// Called with (on the removed side, line number) when a gutter's + is clicked.
+pub type OnComment = Rc<dyn Fn(bool, u32, &mut App)>;
+
 pub fn row(
     data: &FileData,
     row: Row,
     style: RowStyle<'_>,
     on_expand: impl Fn(usize, &mut App) + 'static,
+    on_comment: OnComment,
 ) -> AnyElement {
     match row {
         Row::Gap { segment, count } => div()
@@ -70,10 +75,13 @@ pub fn row(
             .w_full()
             .min_h(px(DIFF_ROW))
             .flex()
-            .child(half(&data.old, left, true, style))
+            .group("diff-row")
+            .child(half(&data.old, left, true, style, on_comment.clone()))
             .child(div().w(px(1.)).flex_none().bg(theme::border()))
-            .child(half(&data.new, right, false, style))
+            .child(half(&data.new, right, false, style, on_comment))
             .into_any_element(),
+        // Drawn by the workspace, which owns the comments.
+        Row::Thread(_) | Row::Composer => div().into_any_element(),
         Row::Unified {
             cell,
             old,
@@ -91,8 +99,14 @@ pub fn row(
                 .min_h(px(DIFF_ROW))
                 .flex()
                 .when_some(line_bg, |s, bg| s.bg(bg))
-                .child(gutter(old_line, gutter_bg, style))
-                .child(gutter(new_line, gutter_bg, style))
+                .group("diff-row")
+                .child(gutter(old_line, gutter_bg, style, None))
+                .child(gutter(
+                    new_line,
+                    gutter_bg,
+                    style,
+                    Some((old, cell.line, on_comment)),
+                ))
                 .child(
                     div()
                         .w(px(SIGN_WIDTH))
@@ -112,6 +126,7 @@ fn half(
     cell: Option<Cell>,
     old: bool,
     style: RowStyle<'_>,
+    on_comment: OnComment,
 ) -> impl IntoElement + use<> {
     let half = div().flex_1().min_w_0().flex();
     let Some(cell) = cell else {
@@ -119,20 +134,51 @@ fn half(
     };
     let (line_bg, gutter_bg) = tints(cell.kind);
     half.when_some(line_bg, |s, bg| s.bg(bg))
-        .child(gutter(Some(cell.line), gutter_bg, style))
+        .child(gutter(
+            Some(cell.line),
+            gutter_bg,
+            style,
+            Some((old, cell.line, on_comment)),
+        ))
         .child(code(side, cell, old, style))
 }
 
-fn gutter(line: Option<u32>, bg: Option<Rgba>, style: RowStyle<'_>) -> impl IntoElement + use<> {
+/// A line-number column; `comment` adds a + that appears on hover and starts a comment on that line.
+fn gutter(
+    line: Option<u32>,
+    bg: Option<Rgba>,
+    style: RowStyle<'_>,
+    comment: Option<(bool, u32, OnComment)>,
+) -> impl IntoElement + use<> {
     div()
         .w(px(style.gutter))
         .flex_none()
+        .relative()
         .flex()
         .justify_end()
         .pr_2()
         .when_some(bg, |s, bg| s.bg(bg))
         .text_color(theme::faint())
         .children(line.map(|l| l.to_string()))
+        .children(comment.map(|(old, line, on_comment)| {
+            div()
+                .id(("comment-plus", u64::from(line) * 2 + u64::from(old)))
+                .absolute()
+                .left(px(3.))
+                .top(px(1.))
+                .size(px(18.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(ROW_RADIUS))
+                .bg(theme::accent())
+                .text_color(theme::base())
+                .cursor_pointer()
+                .invisible()
+                .group_hover("diff-row", |s| s.visible())
+                .child("+")
+                .on_click(move |_, _, cx| on_comment(old, line, cx))
+        }))
 }
 
 fn code(side: &Side, cell: Cell, old: bool, style: RowStyle<'_>) -> impl IntoElement + use<> {

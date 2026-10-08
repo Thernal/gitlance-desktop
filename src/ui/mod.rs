@@ -1,5 +1,6 @@
 //! The GitLance window: branches, versions and commits on the left, the diff on the right.
 
+mod comments;
 mod diff_view;
 mod find;
 mod format;
@@ -218,6 +219,10 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                     for name in view.split(',') {
                         let opt = match name.trim() {
                             "unified" => Opt::Unified,
+                            "split" => {
+                                this.set_option_unsaved(Opt::Unified, false, cx);
+                                continue;
+                            }
                             "lines" => {
                                 this.set_mode(DiffMode::Lines, cx);
                                 continue;
@@ -233,6 +238,42 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                             "underlined" => {
                                 // Not saved either: only this frame.
                                 this.settings.mark_style = crate::storage::MarkStyle::Underlined;
+                                continue;
+                            }
+                            "comments" => {
+                                // Unsaved sample comments on the first changed line, one being written.
+                                let (Some(data), Some(path)) = (&this.data, this.current_path())
+                                else {
+                                    continue;
+                                };
+                                let target = this.rows.iter().find_map(|row| match row {
+                                    Row::Split { right: Some(c), .. }
+                                    | Row::Unified {
+                                        cell: c,
+                                        old: false,
+                                        ..
+                                    } if c.kind == crate::git::LineKind::Added => Some(c.line),
+                                    _ => None,
+                                });
+                                if let Some(line) = target {
+                                    let code = data.side(false).line(line).0.to_owned();
+                                    this.comments.push(crate::review::Comment {
+                                        id: 1,
+                                        path: path.clone(),
+                                        old: false,
+                                        line,
+                                        code: code.clone(),
+                                        body: "Clamp this value — the API rejects anything else."
+                                            .into(),
+                                        at: "a10f3cf".into(),
+                                    });
+                                    this.review_open = true;
+                                    this.start_comment(false, line + 1, cx);
+                                    if let Some(c) = this.compose.as_mut() {
+                                        c.body = "Name this after what it holds.".into();
+                                    }
+                                    this.refresh_rows();
+                                }
                                 continue;
                             }
                             "notice" => {
@@ -380,6 +421,14 @@ pub struct Workspace {
     repo_menu: bool,
     find: find::Find,
     watch: watch::Watch,
+    /// Review comments of this repository, the one being written, and the Review island.
+    comments: Vec<crate::review::Comment>,
+    compose: Option<comments::Compose>,
+    review_open: bool,
+    /// A comment to scroll to once its file is laid out.
+    jump: Option<u64>,
+    /// "Copied ✓" on the Copy button until something changes.
+    copied: bool,
     /// Rows of the open diff that hold a search word, and the one stepped to.
     matches: Vec<usize>,
     match_at: usize,
@@ -437,6 +486,11 @@ impl Workspace {
             repo_menu: false,
             find: find::Find::default(),
             watch: watch::Watch::default(),
+            comments: Vec::new(),
+            compose: None,
+            review_open: false,
+            jump: None,
+            copied: false,
             matches: Vec::new(),
             match_at: 0,
             notice: None,
@@ -488,6 +542,10 @@ impl Workspace {
                         this.recent = storage::remember(&root);
                         if this.root.as_ref() != Some(&root) {
                             this.find.reset();
+                        }
+                        if this.root.as_ref() != Some(&root) {
+                            this.comments = crate::review::load(&root);
+                            this.compose = None;
                         }
                         this.watch.watch(git_dir, fingerprint);
                         this.root = Some(root);
@@ -691,6 +749,7 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 this.data = Some(Arc::new(data));
                 this.relayout();
+                this.apply_jump(cx);
                 if let Some((path, offset)) = this.restore_scroll.take()
                     && this
                         .diff
@@ -710,11 +769,12 @@ impl Workspace {
 
     /// Lays the selected file out again for the current options; the diff scrolls to the top.
     fn relayout(&mut self) {
-        self.rows = self
+        let rows = self
             .data
             .as_ref()
             .map(|data| rows::layout(data, &self.options, &self.expanded))
             .unwrap_or_default();
+        self.rows = self.with_comments(rows);
         self.diff_list.reset(self.rows.len());
         self.offset = self.offset.min(self.max_offset());
         self.recompute_matches();
@@ -733,7 +793,7 @@ impl Workspace {
             return;
         };
         self.expanded.insert(segment);
-        let rows = rows::layout(&data, &self.options, &self.expanded);
+        let rows = self.with_comments(rows::layout(&data, &self.options, &self.expanded));
         let inserted = rows.len() + 1 - self.rows.len();
         self.rows = rows;
         self.diff_list.splice(at..at + 1, inserted);
@@ -1498,7 +1558,8 @@ impl Workspace {
                     .flex()
                     .child(self.render_files(diff, cx))
                     .child(self.handle(Split::Files, cx))
-                    .child(self.render_file(diff, cx)),
+                    .child(self.render_file(diff, cx))
+                    .children(self.review_open.then(|| self.render_review(cx))),
             )
             .into_any_element()
     }
@@ -1545,6 +1606,19 @@ impl Workspace {
                     },
                 ))
             })))
+            .child(
+                diff_view::group().child(
+                    chip(
+                        "review",
+                        format!("Review · {}", self.comments.len()),
+                        self.review_open,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.review_open = !this.review_open;
+                        cx.notify();
+                    })),
+                ),
+            )
             .child(
                 diff_view::group()
                     .child(chip("wrap", "Wrap", o.wrap).on_click(toggle(Opt::Wrap)))
@@ -1827,11 +1901,28 @@ impl Workspace {
                 return div().into_any_element();
             };
             let style = workspace.row_style();
-            let this = this.clone();
-            diff_view::row(&data, row, style, move |segment, cx| {
-                this.update(cx, |this, cx| this.expand_gap(segment, cx))
-                    .ok();
-            })
+            let indent = style.gutter + 8.;
+            match row {
+                Row::Thread(id) => return workspace.render_thread(id, indent, this.clone()),
+                Row::Composer => return workspace.render_composer(indent, this.clone()),
+                _ => {}
+            }
+            let (expand, comment) = (this.clone(), this.clone());
+            diff_view::row(
+                &data,
+                row,
+                style,
+                move |segment, cx| {
+                    expand
+                        .update(cx, |this, cx| this.expand_gap(segment, cx))
+                        .ok();
+                },
+                std::rc::Rc::new(move |old, line, cx| {
+                    comment
+                        .update(cx, |this, cx| this.start_comment(old, line, cx))
+                        .ok();
+                }),
+            )
         })
         .flex_1();
 
@@ -1894,7 +1985,7 @@ impl Render for Workspace {
 
         div()
             .id("workspace")
-            .key_context(if self.find.text.is_some() {
+            .key_context(if self.find.text.is_some() || self.compose.is_some() {
                 "Workspace Typing"
             } else {
                 "Workspace"

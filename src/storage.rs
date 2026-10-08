@@ -11,7 +11,7 @@ fn file(name: &str) -> Option<PathBuf> {
 }
 
 /// Writes `body` to `name`; failures only cost what would have been remembered.
-fn save(name: &str, body: String) {
+pub(crate) fn save(name: &str, body: String) {
     if let Some(file) = file(name)
         && let Some(dir) = file.parent()
         && std::fs::create_dir_all(dir).is_ok()
@@ -20,7 +20,7 @@ fn save(name: &str, body: String) {
     }
 }
 
-fn read(name: &str) -> String {
+pub(crate) fn read(name: &str) -> String {
     file(name)
         .and_then(|f| std::fs::read_to_string(f).ok())
         .unwrap_or_default()

@@ -2,6 +2,7 @@
 
 mod git;
 mod highlight;
+mod review;
 mod search;
 mod storage;
 mod structural;

@@ -51,6 +51,10 @@ pub enum Row {
         left: Option<Cell>,
         right: Option<Cell>,
     },
+    /// The thread of review comment `0` under the line above.
+    Thread(u64),
+    /// The box for writing a new comment under the line above.
+    Composer,
     /// One line of a unified diff; its text is from the old side when `old`.
     Unified {
         cell: Cell,
@@ -87,7 +91,7 @@ impl Side {
         }
     }
 
-    fn count(&self) -> u32 {
+    pub fn count(&self) -> u32 {
         self.lines.len() as u32
     }
 
@@ -538,7 +542,7 @@ pub fn matching_rows(data: &FileData, rows: &[Row], words: &[String]) -> Vec<usi
     rows.iter()
         .enumerate()
         .filter(|(_, row)| match **row {
-            Row::Gap { .. } => false,
+            Row::Gap { .. } | Row::Thread(_) | Row::Composer => false,
             Row::Split { left, right } => hit(true, left) || hit(false, right),
             Row::Unified { cell, old, .. } => hit(old, Some(cell)),
         })
