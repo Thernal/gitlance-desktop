@@ -914,12 +914,26 @@ impl Workspace {
             .pl(px(84.))
             .pr(px(GAP))
             .child(
+                // The empty part of the bar: a double click zooms the window, as in other apps.
                 div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(repo.unwrap_or_else(|| "GitLance".to_owned())),
+                    .id("title-bar")
+                    .flex_1()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .on_click(|event, window, _| {
+                        if event.click_count() == 2 {
+                            window.titlebar_double_click();
+                        }
+                    })
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(repo.unwrap_or_else(|| "GitLance".to_owned())),
+                    )
+                    .children(branch.map(|b| div().text_color(theme::muted()).child(b))),
             )
-            .children(branch.map(|b| div().text_color(theme::muted()).child(b)))
-            .child(div().flex_1())
             .when(self.root.is_some(), |s| {
                 s.child(button("refresh", "Refresh", "⌘R").on_click(
                     cx.listener(|this, _, window, cx| this.refresh(&Refresh, window, cx)),
