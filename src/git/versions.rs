@@ -4,7 +4,7 @@
 //! fetches. Consecutive tips that only fast-forward belong to one version; a tip that does not
 //! descend from the previous one (amend, rebase, force push) starts the next.
 
-use super::diff::{self, FileDiff};
+use super::diff::{self, DiffSettings, FileDiff};
 use anyhow::{Context as _, Result};
 use git2::{IndexConflict, Oid, Repository};
 use std::path::PathBuf;
@@ -135,16 +135,21 @@ fn count_commits(repo: &Repository, tip: Oid, base: Option<Oid>) -> Result<usize
 }
 
 /// `repo` must be a private handle: the in-memory object backend added here stays on it.
-pub(super) fn version_diff(repo: &Repository, from: &Version, to: &Version) -> Result<VersionDiff> {
+pub(super) fn version_diff(
+    repo: &Repository,
+    from: &Version,
+    to: &Version,
+    settings: DiffSettings,
+) -> Result<VersionDiff> {
     let tree = |id: Oid| repo.find_commit(id).and_then(|c| c.tree());
     let from_tip = tree(from.tip)?;
     let to_tip = tree(to.tip)?;
 
     let (Some(from_base), Some(to_base)) = (from.base, to.base) else {
-        return plain(repo, &from_tip, &to_tip);
+        return plain(repo, &from_tip, &to_tip, settings);
     };
     if from_base == to_base {
-        return plain(repo, &from_tip, &to_tip);
+        return plain(repo, &from_tip, &to_tip, settings);
     }
 
     let odb = repo.odb()?;
@@ -171,7 +176,7 @@ pub(super) fn version_diff(repo: &Repository, from: &Version, to: &Version) -> R
         conflicts.push(path.to_string_lossy().into_owned());
     }
 
-    let mut opts = diff::options();
+    let mut opts = diff::options(settings);
     opts.reverse(true);
     let changes = repo.diff_tree_to_index(Some(&to_tip), Some(&index), Some(&mut opts))?;
     let mut files = diff::collect(repo, changes)?;
@@ -189,9 +194,14 @@ pub(super) fn version_diff(repo: &Repository, from: &Version, to: &Version) -> R
     })
 }
 
-fn plain(repo: &Repository, from: &git2::Tree<'_>, to: &git2::Tree<'_>) -> Result<VersionDiff> {
+fn plain(
+    repo: &Repository,
+    from: &git2::Tree<'_>,
+    to: &git2::Tree<'_>,
+    settings: DiffSettings,
+) -> Result<VersionDiff> {
     Ok(VersionDiff {
-        files: diff::tree_to_tree(repo, Some(from), Some(to))?,
+        files: diff::tree_to_tree(repo, Some(from), Some(to), settings)?,
         rebased: false,
         conflicts: Vec::new(),
     })

@@ -1,5 +1,5 @@
 //! What GitLance remembers between runs, as small text files in its application support directory:
-//! recently opened repositories and the pane sizes.
+//! recently opened repositories, pane sizes and how diffs are shown.
 
 use std::path::{Path, PathBuf};
 
@@ -78,14 +78,11 @@ impl Layout {
 
     fn parse(text: &str) -> Self {
         let mut layout = Self::default();
-        for line in text.lines() {
-            let Some((key, value)) = line.split_once('=') else {
+        for (key, value) in pairs(text) {
+            let Ok(value) = value.parse::<f32>() else {
                 continue;
             };
-            let Ok(value) = value.trim().parse::<f32>() else {
-                continue;
-            };
-            match key.trim() {
+            match key {
                 "sidebar" => layout.sidebar = value,
                 "files" => layout.files = value,
                 "branches" => layout.branches = value,
@@ -102,6 +99,64 @@ impl std::fmt::Display for Layout {
         writeln!(f, "files={}", self.files)?;
         writeln!(f, "branches={}", self.branches)
     }
+}
+
+/// How a diff is shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ViewOptions {
+    /// One column with removals above additions, instead of side by side.
+    pub unified: bool,
+    /// difftastic's syntax-aware alignment and token marks, instead of git's line diff.
+    pub structural: bool,
+    /// Long lines wrap instead of scrolling horizontally.
+    pub wrap: bool,
+    /// Every unchanged line, instead of three around each change.
+    pub full_context: bool,
+    /// Whitespace-only changes count as unchanged.
+    pub ignore_whitespace: bool,
+}
+
+impl ViewOptions {
+    pub fn load() -> Self {
+        Self::parse(&read("view.txt"))
+    }
+
+    pub fn save(&self) {
+        save("view.txt", self.to_string());
+    }
+
+    fn parse(text: &str) -> Self {
+        let mut options = Self::default();
+        for (key, value) in pairs(text) {
+            let value = value == "true";
+            match key {
+                "unified" => options.unified = value,
+                "structural" => options.structural = value,
+                "wrap" => options.wrap = value,
+                "full_context" => options.full_context = value,
+                "ignore_whitespace" => options.ignore_whitespace = value,
+                _ => {}
+            }
+        }
+        options
+    }
+}
+
+impl std::fmt::Display for ViewOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "unified={}", self.unified)?;
+        writeln!(f, "structural={}", self.structural)?;
+        writeln!(f, "wrap={}", self.wrap)?;
+        writeln!(f, "full_context={}", self.full_context)?;
+        writeln!(f, "ignore_whitespace={}", self.ignore_whitespace)
+    }
+}
+
+/// `key=value` lines; anything else is skipped.
+fn pairs(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    text.lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(k, v)| (k.trim(), v.trim()))
 }
 
 #[cfg(test)]

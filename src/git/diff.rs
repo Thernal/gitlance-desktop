@@ -36,8 +36,6 @@ pub struct DiffLine {
 
 #[derive(Clone, Debug)]
 pub struct Hunk {
-    pub old_start: u32,
-    pub new_start: u32,
     pub lines: Vec<DiffLine>,
 }
 
@@ -65,9 +63,18 @@ impl FileDiff {
     }
 }
 
-pub(super) fn options() -> DiffOptions {
+/// How a diff is computed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DiffSettings {
+    /// Lines that differ only in whitespace count as unchanged (`git diff -w`).
+    pub ignore_whitespace: bool,
+}
+
+pub(super) fn options(settings: DiffSettings) -> DiffOptions {
     let mut opts = DiffOptions::new();
-    opts.context_lines(3).ignore_submodules(false);
+    opts.context_lines(3)
+        .ignore_submodules(false)
+        .ignore_whitespace(settings.ignore_whitespace);
     opts
 }
 
@@ -75,8 +82,9 @@ pub(super) fn tree_to_tree(
     repo: &Repository,
     old: Option<&Tree<'_>>,
     new: Option<&Tree<'_>>,
+    settings: DiffSettings,
 ) -> Result<Vec<FileDiff>> {
-    let diff = repo.diff_tree_to_tree(old, new, Some(&mut options()))?;
+    let diff = repo.diff_tree_to_tree(old, new, Some(&mut options(settings)))?;
     collect(repo, diff)
 }
 
@@ -119,7 +127,7 @@ pub(super) fn collect(repo: &Repository, mut diff: Diff<'_>) -> Result<Vec<FileD
         let mut hunks = Vec::new();
         if note.is_none() {
             for h in 0..patch.num_hunks() {
-                let (hunk, count) = patch.hunk(h)?;
+                let (_, count) = patch.hunk(h)?;
                 let mut lines = Vec::with_capacity(count);
                 for l in 0..count {
                     let line = patch.line_in_hunk(h, l)?;
@@ -135,11 +143,7 @@ pub(super) fn collect(repo: &Repository, mut diff: Diff<'_>) -> Result<Vec<FileD
                         new_line: line.new_lineno(),
                     });
                 }
-                hunks.push(Hunk {
-                    old_start: hunk.old_start(),
-                    new_start: hunk.new_start(),
-                    lines,
-                });
+                hunks.push(Hunk { lines });
             }
         }
 

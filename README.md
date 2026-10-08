@@ -19,6 +19,16 @@ Early: the first milestone below is being built.
   - an unchanged base: a plain tree diff between the two versions;
   - a moved base (rebase): the two patches are compared, so upstream changes do not show up as noise.
 - Code styled in One Dark.
+- Diff view options, in the toolbar and the View menu, remembered between runs:
+  - **Split / Unified** (⌥U) — side by side, or one column with removals above additions.
+  - **Line / Structural** (⌥D) — git's line diff, or [difftastic](https://difftastic.wilfred.me.uk)'s
+    syntax-aware one: reformatting is not a change and changed tokens are marked. Needs `difft`
+    (`brew install difftastic`); without it the line diff is shown and the header says why.
+  - **Wrap** (⌥Z) — long lines wrap; off, they scroll horizontally (trackpad or shift + wheel).
+  - **All lines** (⌥E) — every unchanged line; off, three around each change, and a click on
+    "N unchanged lines" opens one run.
+  - **Hide whitespace** (⌥W) — whitespace-only changes count as unchanged (`git diff -w`). Off by
+    default: whitespace matters in Python, YAML or Makefiles.
 
 Earlier versions come from the reflogs of the branch and of its remote-tracking ref, so GitLance sees the
 versions this machine has seen — its own amends and rebases, and every fetch. A push made elsewhere and
@@ -27,7 +37,6 @@ overwritten before a fetch is not visible, and versions expire with the reflog (
 ## Later
 
 - Uncommitted work against `HEAD`, merging staged, unstaged and untracked files and detecting renames.
-- Structural diff through difftastic (`difft --display json`).
 - Per-file "reviewed" marks that reset when the file changes.
 - Line comments written to `.misc/review.md` in the reviewed repository, for an agent to pick up.
 - A command-line launcher (`gitlance [path]`), if opening from a terminal turns out to be wanted.
@@ -43,6 +52,7 @@ Rust end to end.
   when a widget (resizable panes, selects) earns it.
 - **Git:** `git2` (libgit2, vendored), read-only; the rebase-aware version diff merges in memory.
 - **Highlighting:** `syntect` with bat's syntaxes (`two-face`), in One Dark.
+- **Structural diff:** difftastic's JSON output (`difft --display json`), optional.
 
 ## Why not an existing app
 

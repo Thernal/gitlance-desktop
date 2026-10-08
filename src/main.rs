@@ -3,6 +3,7 @@
 mod git;
 mod highlight;
 mod storage;
+mod structural;
 mod ui;
 
 use std::path::PathBuf;

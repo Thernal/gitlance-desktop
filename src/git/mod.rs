@@ -7,7 +7,7 @@ mod versions;
 #[cfg(test)]
 mod tests;
 
-pub use diff::{ChangeKind, FileDiff, LineKind};
+pub use diff::{ChangeKind, DiffSettings, FileDiff, LineKind};
 #[cfg(test)]
 pub use diff::{DiffLine, Hunk};
 pub use versions::{Version, VersionDiff};
@@ -117,14 +117,14 @@ impl Repo {
     }
 
     /// What a commit changed against its first parent; a root commit against the empty tree.
-    pub fn commit_diff(&self, id: Oid) -> Result<Vec<FileDiff>> {
+    pub fn commit_diff(&self, id: Oid, settings: DiffSettings) -> Result<Vec<FileDiff>> {
         let commit = self.inner.find_commit(id)?;
         let new = commit.tree()?;
         let old = match commit.parent_count() {
             0 => None,
             _ => Some(commit.parent(0)?.tree()?),
         };
-        diff::tree_to_tree(&self.inner, old.as_ref(), Some(&new))
+        diff::tree_to_tree(&self.inner, old.as_ref(), Some(&new), settings)
     }
 
     /// The versions of a branch, oldest first, read from the ref's reflog.
@@ -133,11 +133,16 @@ impl Repo {
     }
 
     /// What changed from version `from` to version `to`, without the noise of a rebase.
-    pub fn version_diff(&self, from: &Version, to: &Version) -> Result<VersionDiff> {
+    pub fn version_diff(
+        &self,
+        from: &Version,
+        to: &Version,
+        settings: DiffSettings,
+    ) -> Result<VersionDiff> {
         // The virtual rebase writes merged blobs; a private handle with an in-memory object
         // backend keeps them out of the repository.
         let scratch = Repository::open(self.inner.path())?;
-        versions::version_diff(&scratch, from, to)
+        versions::version_diff(&scratch, from, to, settings)
     }
 }
 

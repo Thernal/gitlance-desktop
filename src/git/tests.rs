@@ -106,7 +106,7 @@ fn commit_diff_reports_changes_and_lines() {
         ],
         "second",
     );
-    let files = fx.open().commit_diff(b).unwrap();
+    let files = fx.open().commit_diff(b, DiffSettings::default()).unwrap();
     let kind = |p: &str| files.iter().find(|f| f.path() == p).unwrap().change;
     assert_eq!(kind("a.txt"), ChangeKind::Modified);
     assert_eq!(kind("gone.txt"), ChangeKind::Deleted);
@@ -179,7 +179,9 @@ fn version_diff_with_the_same_base_is_a_tree_diff() {
 
     let repo = fx.open();
     let versions = repo.versions(feature).unwrap();
-    let diff = repo.version_diff(&versions[0], &versions[1]).unwrap();
+    let diff = repo
+        .version_diff(&versions[0], &versions[1], DiffSettings::default())
+        .unwrap();
     assert!(!diff.rebased);
     assert_eq!(paths(&diff.files), ["a.txt", "b.txt"]);
     let a = diff.files.iter().find(|f| f.path() == "a.txt").unwrap();
@@ -222,7 +224,9 @@ fn version_diff_after_a_rebase_hides_upstream_changes() {
     assert_eq!((versions[0].base, versions[1].base), (Some(m1), Some(m2)));
 
     let before = fx.loose_objects();
-    let diff = repo.version_diff(&versions[0], &versions[1]).unwrap();
+    let diff = repo
+        .version_diff(&versions[0], &versions[1], DiffSettings::default())
+        .unwrap();
     assert_eq!(
         fx.loose_objects(),
         before,
@@ -253,9 +257,36 @@ fn a_conflicting_rebase_falls_back_per_file() {
 
     let repo = fx.open();
     let versions = repo.versions(feature).unwrap();
-    let diff = repo.version_diff(&versions[0], &versions[1]).unwrap();
+    let diff = repo
+        .version_diff(&versions[0], &versions[1], DiffSettings::default())
+        .unwrap();
     assert_eq!(diff.conflicts, ["a.txt"]);
     let a = &diff.files[0];
     assert_eq!(a.old_text.as_deref(), Some("1\nmine\n3\n"));
     assert!(a.note.as_deref().unwrap().starts_with("Rebase conflict"));
+}
+
+#[test]
+fn whitespace_only_changes_can_be_ignored() {
+    let mut fx = Fixture::new();
+    let a = fx.commit(
+        "refs/heads/main",
+        &[],
+        &[("a.txt", "if x {\n  y\n}\n")],
+        "first",
+    );
+    let b = fx.commit(
+        "refs/heads/main",
+        &[a],
+        &[("a.txt", "if x {\n    y\n}\n")],
+        "indent",
+    );
+    let repo = fx.open();
+    let shown = repo.commit_diff(b, DiffSettings::default()).unwrap();
+    assert_eq!((shown[0].added, shown[0].removed), (1, 1));
+    let hidden = DiffSettings {
+        ignore_whitespace: true,
+    };
+    let quiet = repo.commit_diff(b, hidden).unwrap();
+    assert!(quiet.iter().all(|f| f.added + f.removed == 0));
 }

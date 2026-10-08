@@ -1,20 +1,27 @@
 //! The GitLance window: branches, versions and commits on the left, the diff on the right.
 
+mod diff_view;
 mod format;
 mod rows;
 mod theme;
 
-use crate::git::{BranchRef, ChangeKind, CommitInfo, FileDiff, LineKind, RefKind, Repo, Version};
-use crate::storage::{self, Layout};
-use gpui::{
-    App, ClickEvent, Context, CursorStyle, FocusHandle, FontStyle, FontWeight, HighlightStyle,
-    KeyBinding, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent, PathPromptOptions,
-    Point, Rgba, ScrollStrategy, SharedString, StyledText, Task, TitlebarOptions,
-    UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px,
-    size, uniform_list,
+use crate::git::{
+    BranchRef, ChangeKind, CommitInfo, DiffSettings, FileDiff, RefKind, Repo, Version,
 };
-use rows::{Cell, FileView, Row};
+use crate::storage::{self, Layout, ViewOptions};
+use diff_view::{RowStyle, chip};
+use gpui::{
+    App, ClickEvent, Context, CursorStyle, FocusHandle, FontWeight, KeyBinding, ListAlignment,
+    ListState, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent, PathPromptOptions,
+    Point, Rgba, ScrollStrategy, ScrollWheelEvent, SharedString, Task, TitlebarOptions,
+    UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas, div, font, list,
+    prelude::*, px, size, uniform_list,
+};
+use rows::{FileData, Row};
+use std::cell::Cell as Shared;
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 actions!(
@@ -26,6 +33,11 @@ actions!(
         NextCommit,
         PreviousFile,
         NextFile,
+        ToggleUnified,
+        ToggleStructural,
+        ToggleWrap,
+        ToggleFullContext,
+        ToggleWhitespace,
         Quit
     ]
 );
@@ -33,8 +45,8 @@ actions!(
 /// How much history a branch shows.
 const COMMIT_LIMIT: usize = 5000;
 const DIFF_ROW: f32 = 20.;
+const CODE_SIZE: f32 = 12.;
 const TITLE_BAR: f32 = 38.;
-const TAB_WIDTH: usize = 4;
 /// Space between islands; the resize handles live in it.
 const GAP: f32 = 8.;
 const ISLAND_RADIUS: f32 = 10.;
@@ -52,18 +64,22 @@ pub fn run(path: Option<PathBuf>) {
             KeyBinding::new("j", NextCommit, Some("Workspace")),
             KeyBinding::new("left", PreviousFile, Some("Workspace")),
             KeyBinding::new("right", NextFile, Some("Workspace")),
+            KeyBinding::new("alt-u", ToggleUnified, Some("Workspace")),
+            KeyBinding::new("alt-d", ToggleStructural, Some("Workspace")),
+            KeyBinding::new("alt-z", ToggleWrap, Some("Workspace")),
+            KeyBinding::new("alt-e", ToggleFullContext, Some("Workspace")),
+            KeyBinding::new("alt-w", ToggleWhitespace, Some("Workspace")),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.set_menus([
-            Menu::new("GitLance").items([MenuItem::action("Quit GitLance", Quit)]),
-            Menu::new("File").items([
-                MenuItem::action("Open Repository…", Open),
-                MenuItem::action("Refresh", Refresh),
-            ]),
-        ]);
+        cx.set_menus(menus(&ViewOptions::load()));
 
         let bounds = gpui::Bounds::centered(None, size(px(1480.), px(920.)), cx);
+        // A snapshot renders offscreen: no window shown, no focus taken.
+        let offscreen =
+            cfg!(feature = "snapshot") && std::env::var_os("GITLANCE_SNAPSHOT").is_some();
         let options = WindowOptions {
+            show: !offscreen,
+            focus: !offscreen,
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
                 title: Some("GitLance".into()),
@@ -78,7 +94,9 @@ pub fn run(path: Option<PathBuf>) {
                 cx.new(|cx| Workspace::new(path, window, cx))
             })
             .expect("open the window");
-        cx.activate(true);
+        if !offscreen {
+            cx.activate(true);
+        }
         #[cfg(feature = "snapshot")]
         snapshot(window, cx);
         #[cfg(not(feature = "snapshot"))]
@@ -86,9 +104,42 @@ pub fn run(path: Option<PathBuf>) {
     });
 }
 
-/// Waits for loading (`GITLANCE_SNAPSHOT_DELAY_MS`, 2500 by default), optionally compares the first
-/// and last versions (`GITLANCE_SNAPSHOT_VERSIONS=1`), then writes the frame to `GITLANCE_SNAPSHOT`
-/// and quits.
+/// The menu bar; View items carry a check mark for the options in effect.
+fn menus(options: &ViewOptions) -> Vec<Menu> {
+    vec![
+        Menu::new("GitLance").items([MenuItem::action("Quit GitLance", Quit)]),
+        Menu::new("File").items([
+            MenuItem::action("Open Repository…", Open),
+            MenuItem::action("Refresh", Refresh),
+        ]),
+        Menu::new("View").items([
+            MenuItem::action("Unified Diff", ToggleUnified).checked(options.unified),
+            MenuItem::action("Structural Diff (difftastic)", ToggleStructural)
+                .checked(options.structural),
+            MenuItem::separator(),
+            MenuItem::action("Wrap Long Lines", ToggleWrap).checked(options.wrap),
+            MenuItem::action("Show All Lines", ToggleFullContext).checked(options.full_context),
+            MenuItem::action("Hide Whitespace Changes", ToggleWhitespace)
+                .checked(options.ignore_whitespace),
+        ]),
+    ]
+}
+
+/// A view option, for the toolbar and the View menu.
+#[derive(Clone, Copy)]
+enum Opt {
+    Unified,
+    Structural,
+    Wrap,
+    FullContext,
+    Whitespace,
+}
+
+/// Waits for loading (`GITLANCE_SNAPSHOT_DELAY_MS`, 2500 by default), selects a commit by SHA
+/// prefix (`GITLANCE_SNAPSHOT_COMMIT`) and a file by path (`GITLANCE_SNAPSHOT_FILE`), turns on view options
+/// (`GITLANCE_SNAPSHOT_VIEW=unified,structural,wrap,all-lines,whitespace`, not saved), optionally
+/// compares the first and last versions (`GITLANCE_SNAPSHOT_VERSIONS=1`), then writes the frame to
+/// `GITLANCE_SNAPSHOT` and quits.
 #[cfg(feature = "snapshot")]
 fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
     use std::time::Duration;
@@ -104,6 +155,53 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
             .and_then(|d| d.parse().ok())
             .unwrap_or(2500);
         wait(delay).await;
+        if let Ok(prefix) = std::env::var("GITLANCE_SNAPSHOT_COMMIT") {
+            window
+                .update(cx, |this, _, cx| {
+                    let found = this
+                        .commits
+                        .iter()
+                        .position(|c| c.id.to_string().starts_with(&prefix));
+                    if let Some(ix) = found {
+                        this.select_commit(ix, cx);
+                    }
+                })
+                .ok();
+            wait(1500).await;
+        }
+        if let Ok(path) = std::env::var("GITLANCE_SNAPSHOT_FILE") {
+            window
+                .update(cx, |this, _, cx| {
+                    let found = this
+                        .diff
+                        .as_ref()
+                        .and_then(|d| d.files.iter().position(|f| f.path() == path));
+                    if let Some(ix) = found {
+                        this.select_file(ix, cx);
+                    }
+                })
+                .ok();
+            wait(1500).await;
+        }
+        if let Ok(view) = std::env::var("GITLANCE_SNAPSHOT_VIEW") {
+            window
+                .update(cx, |this, _, cx| {
+                    for name in view.split(',') {
+                        let opt = match name.trim() {
+                            "unified" => Opt::Unified,
+                            "structural" => Opt::Structural,
+                            "wrap" => Opt::Wrap,
+                            "all-lines" => Opt::FullContext,
+                            "whitespace" => Opt::Whitespace,
+                            _ => continue,
+                        };
+                        // Not saved: a snapshot must not change the user's settings.
+                        this.set_option_unsaved(opt, true, cx);
+                    }
+                })
+                .ok();
+            wait(1500).await;
+        }
         if versions {
             window
                 .update(cx, |this, _, cx| {
@@ -114,13 +212,10 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                 .ok();
             wait(1500).await;
         }
-        window
-            .update(cx, |_, window, _| {
-                window.refresh();
-            })
-            .ok();
-        wait(300).await;
-        let saved = window.update(cx, |_, window, _| {
+        // A hidden window gets no display-link frames: draw one by hand.
+        // `update_window` leaves the root view free for the draw to render.
+        let saved = cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
             window
                 .render_to_image()
                 .and_then(|image| Ok(image.save(&out)?))
@@ -201,10 +296,22 @@ pub struct Workspace {
     selection: Selection,
     diff: Option<Diff>,
     file: usize,
-    view: Option<FileView>,
+    options: ViewOptions,
+    /// The selected file, built in the background.
+    data: Option<Arc<FileData>>,
+    /// `data` laid out for `options`.
+    rows: Vec<Row>,
+    /// Unchanged runs of the selected file the user opened.
+    expanded: HashSet<usize>,
+    diff_list: ListState,
+    /// Horizontal scroll of the diff, in pixels.
+    offset: f32,
+    /// Width of the diff body at the last paint.
+    body_width: Rc<Shared<f32>>,
+    /// Advance of one code character, measured on the first render.
+    char_width: f32,
     commit_scroll: UniformListScrollHandle,
     file_scroll: UniformListScrollHandle,
-    diff_scroll: UniformListScrollHandle,
     // Replacing a task drops, and so cancels, the one it replaces.
     repo_task: Option<Task<()>>,
     branch_task: Option<Task<()>>,
@@ -233,10 +340,16 @@ impl Workspace {
             selection: Selection::None,
             diff: None,
             file: 0,
-            view: None,
+            options: ViewOptions::load(),
+            data: None,
+            rows: Vec::new(),
+            expanded: HashSet::new(),
+            diff_list: ListState::new(0, ListAlignment::Top, px(400.)),
+            offset: 0.,
+            body_width: Rc::new(Shared::new(0.)),
+            char_width: 0.,
             commit_scroll: UniformListScrollHandle::new(),
             file_scroll: UniformListScrollHandle::new(),
-            diff_scroll: UniformListScrollHandle::new(),
             repo_task: None,
             branch_task: None,
             diff_task: None,
@@ -301,9 +414,17 @@ impl Workspace {
         self.selection = Selection::None;
         self.diff = None;
         self.diff_task = None;
-        self.view = None;
-        self.view_task = None;
+        self.clear_file();
         self.file = 0;
+    }
+
+    fn clear_file(&mut self) {
+        self.data = None;
+        self.view_task = None;
+        self.rows.clear();
+        self.expanded.clear();
+        self.offset = 0.;
+        self.diff_list.reset(0);
     }
 
     fn select_branch(&mut self, ix: usize, keep: Option<git2::Oid>, cx: &mut Context<Self>) {
@@ -345,6 +466,11 @@ impl Workspace {
     }
 
     fn select_commit(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.load_commit(ix, None, cx);
+    }
+
+    /// Shows commit `ix`; `keep` re-selects a file by path.
+    fn load_commit(&mut self, ix: usize, keep: Option<String>, cx: &mut Context<Self>) {
         let (Some(root), Some(commit)) = (self.root.clone(), self.commits.get(ix).cloned()) else {
             return;
         };
@@ -353,8 +479,9 @@ impl Workspace {
         self.commit_scroll
             .scroll_to_item(ix, ScrollStrategy::Nearest);
         let id = commit.id;
-        self.load_diff(cx, move || {
-            let files = Repo::open(&root)?.commit_diff(id)?;
+        let settings = self.settings();
+        self.load_diff(keep, cx, move || {
+            let files = Repo::open(&root)?.commit_diff(id, settings)?;
             Ok(Diff {
                 header: Header::Commit(commit),
                 files: Arc::new(files),
@@ -363,6 +490,16 @@ impl Workspace {
     }
 
     fn select_versions(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        self.load_versions(from, to, None, cx);
+    }
+
+    fn load_versions(
+        &mut self,
+        from: usize,
+        to: usize,
+        keep: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         let (Some(root), Some(a), Some(b)) = (
             self.root.clone(),
             self.versions.get(from).cloned(),
@@ -372,8 +509,9 @@ impl Workspace {
         };
         self.clear_diff();
         self.selection = Selection::Versions { from, to };
-        self.load_diff(cx, move || {
-            let diff = Repo::open(&root)?.version_diff(&a, &b)?;
+        let settings = self.settings();
+        self.load_diff(keep, cx, move || {
+            let diff = Repo::open(&root)?.version_diff(&a, &b, settings)?;
             Ok(Diff {
                 header: Header::Versions {
                     from: a,
@@ -386,8 +524,15 @@ impl Workspace {
         });
     }
 
+    fn settings(&self) -> DiffSettings {
+        DiffSettings {
+            ignore_whitespace: self.options.ignore_whitespace,
+        }
+    }
+
     fn load_diff(
         &mut self,
+        keep: Option<String>,
         cx: &mut Context<Self>,
         load: impl FnOnce() -> anyhow::Result<Diff> + Send + 'static,
     ) {
@@ -396,11 +541,14 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 match loaded {
                     Ok(diff) => {
+                        let ix = keep
+                            .and_then(|path| diff.files.iter().position(|f| f.path() == path))
+                            .unwrap_or(0);
                         let empty = diff.files.is_empty();
                         this.diff = Some(diff);
                         this.file_scroll.scroll_to_item(0, ScrollStrategy::Top);
                         if !empty {
-                            this.select_file(0, cx);
+                            this.select_file(ix, cx);
                         }
                     }
                     Err(err) => this.error = Some(format!("{err:#}").into()),
@@ -417,21 +565,145 @@ impl Workspace {
             return;
         };
         self.file = ix;
-        self.view = None;
+        self.clear_file();
         self.file_scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
-        self.diff_scroll.scroll_to_item(0, ScrollStrategy::Top);
+        let structural = self.options.structural;
         self.view_task = Some(cx.spawn(async move |this, cx| {
-            let view = cx
+            let data = cx
                 .background_executor()
-                .spawn(async move { FileView::build(&file) })
+                .spawn(async move { FileData::build(&file, structural) })
                 .await;
             this.update(cx, |this, cx| {
-                this.view = Some(view);
+                this.data = Some(Arc::new(data));
+                this.relayout();
                 cx.notify();
             })
             .ok();
         }));
         cx.notify();
+    }
+
+    /// Lays the selected file out again for the current options; the diff scrolls to the top.
+    fn relayout(&mut self) {
+        self.rows = self
+            .data
+            .as_ref()
+            .map(|data| rows::layout(data, &self.options, &self.expanded))
+            .unwrap_or_default();
+        self.diff_list.reset(self.rows.len());
+        self.offset = self.offset.min(self.max_offset());
+    }
+
+    /// Shows the hidden lines of an unchanged run in place, keeping the scroll position.
+    fn expand_gap(&mut self, segment: usize, cx: &mut Context<Self>) {
+        let Some(data) = self.data.clone() else {
+            return;
+        };
+        let Some(at) = self
+            .rows
+            .iter()
+            .position(|r| matches!(r, Row::Gap { segment: s, .. } if *s == segment))
+        else {
+            return;
+        };
+        self.expanded.insert(segment);
+        let rows = rows::layout(&data, &self.options, &self.expanded);
+        let inserted = rows.len() + 1 - self.rows.len();
+        self.rows = rows;
+        self.diff_list.splice(at..at + 1, inserted);
+        cx.notify();
+    }
+
+    fn option(&self, opt: Opt) -> bool {
+        match opt {
+            Opt::Unified => self.options.unified,
+            Opt::Structural => self.options.structural,
+            Opt::Wrap => self.options.wrap,
+            Opt::FullContext => self.options.full_context,
+            Opt::Whitespace => self.options.ignore_whitespace,
+        }
+    }
+
+    fn set_option(&mut self, opt: Opt, value: bool, cx: &mut Context<Self>) {
+        if self.option(opt) != value {
+            self.set_option_unsaved(opt, value, cx);
+            self.options.save();
+        }
+    }
+
+    fn set_option_unsaved(&mut self, opt: Opt, value: bool, cx: &mut Context<Self>) {
+        if self.option(opt) == value {
+            return;
+        }
+        match opt {
+            Opt::Unified => self.options.unified = value,
+            Opt::Structural => self.options.structural = value,
+            Opt::Wrap => self.options.wrap = value,
+            Opt::FullContext => self.options.full_context = value,
+            Opt::Whitespace => self.options.ignore_whitespace = value,
+        }
+        cx.set_menus(menus(&self.options));
+        match opt {
+            Opt::Unified | Opt::FullContext => self.relayout(),
+            // Same rows, new heights.
+            Opt::Wrap => self.diff_list.remeasure(),
+            Opt::Structural => self.select_file(self.file, cx),
+            Opt::Whitespace => self.reload_diff(cx),
+        }
+        cx.notify();
+    }
+
+    fn toggle(&mut self, opt: Opt, cx: &mut Context<Self>) {
+        self.set_option(opt, !self.option(opt), cx);
+    }
+
+    /// Recomputes the selected commit's or versions' diff, staying on the same file.
+    fn reload_diff(&mut self, cx: &mut Context<Self>) {
+        let keep = self
+            .diff
+            .as_ref()
+            .and_then(|d| d.files.get(self.file))
+            .map(|f| f.path().to_owned());
+        match self.selection {
+            Selection::Commit(ix) => self.load_commit(ix, keep, cx),
+            Selection::Versions { from, to } => self.load_versions(from, to, keep, cx),
+            Selection::None => {}
+        }
+    }
+
+    fn row_style(&self) -> RowStyle {
+        let digits = self.data.as_ref().map_or(3, |d| d.gutter_digits);
+        RowStyle {
+            wrap: self.options.wrap,
+            offset: self.offset,
+            gutter: digits as f32 * self.char_width + 16.,
+        }
+    }
+
+    /// How far the longest line can scroll before its end reaches the right edge.
+    fn max_offset(&self) -> f32 {
+        let Some(data) = &self.data else {
+            return 0.;
+        };
+        let style = self.row_style();
+        let sides = if self.options.unified { 1. } else { 2. };
+        let visible = (self.body_width.get() - style.chrome(self.options.unified)) / sides;
+        (data.widest as f32 * self.char_width + 24. - visible).max(0.)
+    }
+
+    fn scroll_horizontally(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        if self.options.wrap {
+            return;
+        }
+        let delta = f32::from(event.delta.pixel_delta(px(DIFF_ROW)).x);
+        if delta == 0. {
+            return;
+        }
+        let offset = (self.offset - delta).clamp(0., self.max_offset());
+        if offset != self.offset {
+            self.offset = offset;
+            cx.notify();
+        }
     }
 
     // ---- actions -------------------------------------------------------------------------
@@ -495,6 +767,31 @@ impl Workspace {
         if self.file + 1 < count {
             self.select_file(self.file + 1, cx);
         }
+    }
+
+    fn toggle_unified(&mut self, _: &ToggleUnified, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle(Opt::Unified, cx);
+    }
+
+    fn toggle_structural(&mut self, _: &ToggleStructural, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle(Opt::Structural, cx);
+    }
+
+    fn toggle_wrap(&mut self, _: &ToggleWrap, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle(Opt::Wrap, cx);
+    }
+
+    fn toggle_full_context(
+        &mut self,
+        _: &ToggleFullContext,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle(Opt::FullContext, cx);
+    }
+
+    fn toggle_whitespace(&mut self, _: &ToggleWhitespace, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle(Opt::Whitespace, cx);
     }
 
     /// A click compares that version with the latest; ⌘-click makes it the newer side instead.
@@ -875,7 +1172,7 @@ impl Workspace {
             .min_w_0()
             .flex()
             .flex_col()
-            .child(self.render_header(diff))
+            .child(self.render_header(diff, cx))
             .child(div().h(px(GAP)).flex_none())
             .child(
                 div()
@@ -889,7 +1186,66 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn render_header(&self, diff: &Diff) -> impl IntoElement {
+    fn render_header(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
+        island()
+            .flex_none()
+            .flex_row()
+            .items_start()
+            .gap_4()
+            .px_4()
+            .py_3()
+            .child(self.render_summary(diff))
+            .child(self.render_toolbar(cx))
+    }
+
+    /// The diff options, as chips; the same toggles live in the View menu.
+    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let set = |opt: Opt, value: bool| {
+            cx.listener(move |this: &mut Self, _: &ClickEvent, _: &mut Window, cx| {
+                this.set_option(opt, value, cx)
+            })
+        };
+        let toggle = |opt: Opt| {
+            cx.listener(move |this: &mut Self, _: &ClickEvent, _: &mut Window, cx| {
+                this.toggle(opt, cx)
+            })
+        };
+        let o = self.options;
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                diff_view::group()
+                    .child(chip("split", "Split", !o.unified).on_click(set(Opt::Unified, false)))
+                    .child(chip("unified", "Unified", o.unified).on_click(set(Opt::Unified, true))),
+            )
+            .child(
+                diff_view::group()
+                    .child(
+                        chip("line", "Line", !o.structural).on_click(set(Opt::Structural, false)),
+                    )
+                    .child(
+                        chip("structural", "Structural", o.structural)
+                            .on_click(set(Opt::Structural, true)),
+                    ),
+            )
+            .child(
+                diff_view::group()
+                    .child(chip("wrap", "Wrap", o.wrap).on_click(toggle(Opt::Wrap)))
+                    .child(
+                        chip("all-lines", "All lines", o.full_context)
+                            .on_click(toggle(Opt::FullContext)),
+                    )
+                    .child(
+                        chip("whitespace", "Hide whitespace", o.ignore_whitespace)
+                            .on_click(toggle(Opt::Whitespace)),
+                    ),
+            )
+    }
+
+    fn render_summary(&self, diff: &Diff) -> impl IntoElement {
         let (added, removed) = diff
             .files
             .iter()
@@ -909,7 +1265,7 @@ impl Workspace {
                     .text_color(theme::removed())
                     .child(format!("−{removed}")),
             );
-        let header = island().flex_none().gap_1().px_4().py_3();
+        let header = div().flex_1().min_w_0().flex().flex_col().gap_1();
         match &diff.header {
             Header::Commit(commit) => {
                 let body = commit
@@ -1015,7 +1371,7 @@ impl Workspace {
 
     fn render_file(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
         let file = diff.files.get(self.file);
-        let body = match (file, &self.view) {
+        let body = match (file, &self.data) {
             (None, _) => div()
                 .flex_1()
                 .flex()
@@ -1037,24 +1393,9 @@ impl Workspace {
                 )
                 .into_any_element(),
             (Some(_), None) => div().flex_1().into_any_element(),
-            (Some(_), Some(view)) => uniform_list(
-                "diff",
-                view.rows.len(),
-                cx.processor(|this, range: std::ops::Range<usize>, _, _| {
-                    let Some(view) = &this.view else {
-                        return Vec::new();
-                    };
-                    range
-                        .map(|ix| render_row(view, view.rows[ix]))
-                        .collect::<Vec<_>>()
-                }),
-            )
-            .track_scroll(&self.diff_scroll)
-            .flex_1()
-            .font_family(theme::CODE_FONT)
-            .text_size(px(12.))
-            .into_any_element(),
+            (Some(_), Some(_)) => self.render_rows(cx).into_any_element(),
         };
+        let mode_note = self.data.as_ref().and_then(|d| d.mode_note.clone());
         island()
             .flex_1()
             .min_w_0()
@@ -1081,6 +1422,18 @@ impl Workspace {
                             .flatten()
                             .map(|n| div().text_color(theme::warning()).child(n)),
                     )
+                    .children(mode_note.clone().map(|n| {
+                        let unavailable = n.starts_with("Structural diff");
+                        div()
+                            .flex_none()
+                            .text_size(px(12.))
+                            .text_color(if unavailable {
+                                theme::warning()
+                            } else {
+                                theme::faint()
+                            })
+                            .child(n)
+                    }))
             }))
             .child(
                 div()
@@ -1096,6 +1449,66 @@ impl Workspace {
     }
 }
 
+impl Workspace {
+    /// The selected file's rows, scrolled vertically by the list and horizontally by `offset`.
+    fn render_rows(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.entity().downgrade();
+        let rows = list(self.diff_list.clone(), move |ix, _, cx| {
+            let Some(workspace) = this.upgrade() else {
+                return div().into_any_element();
+            };
+            let workspace = workspace.read(cx);
+            let (Some(data), Some(&row)) = (workspace.data.clone(), workspace.rows.get(ix)) else {
+                return div().into_any_element();
+            };
+            let style = workspace.row_style();
+            let this = this.clone();
+            diff_view::row(&data, row, style, move |segment, cx| {
+                this.update(cx, |this, cx| this.expand_gap(segment, cx))
+                    .ok();
+            })
+        })
+        .flex_1();
+
+        let width = self.body_width.clone();
+        let max = self.max_offset();
+        let thumb = (!self.options.wrap && max > 0.).then(|| {
+            let track = self.body_width.get();
+            let share = track / (track + max);
+            let thumb = (track * share).max(32.);
+            div()
+                .absolute()
+                .bottom(px(2.))
+                .h(px(4.))
+                .w(px(thumb))
+                .left(px((track - thumb) * self.offset / max))
+                .rounded_full()
+                .bg(theme::scrollbar())
+        });
+        div()
+            .id("diff-body")
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.scroll_horizontally(event, cx)))
+            .font_family(theme::CODE_FONT)
+            .text_size(px(CODE_SIZE))
+            .line_height(px(DIFF_ROW))
+            .child(rows)
+            .child(
+                canvas(
+                    move |bounds, _, _| width.set(f32::from(bounds.size.width)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .children(thumb)
+    }
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let title = match &self.root {
@@ -1105,6 +1518,13 @@ impl Render for Workspace {
         if title != self.title {
             window.set_window_title(&title);
             self.title = title;
+        }
+        if self.char_width == 0. {
+            let text = window.text_system();
+            let id = text.resolve_font(&font(theme::CODE_FONT));
+            self.char_width = text
+                .advance(id, px(CODE_SIZE), 'm')
+                .map_or(7.2, |size| f32::from(size.width));
         }
 
         div()
@@ -1117,6 +1537,11 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::next_commit))
             .on_action(cx.listener(Self::previous_file))
             .on_action(cx.listener(Self::next_file))
+            .on_action(cx.listener(Self::toggle_unified))
+            .on_action(cx.listener(Self::toggle_structural))
+            .on_action(cx.listener(Self::toggle_wrap))
+            .on_action(cx.listener(Self::toggle_full_context))
+            .on_action(cx.listener(Self::toggle_whitespace))
             .on_mouse_move(cx.listener(|this, event, _, cx| this.drag_move(event, cx)))
             .on_mouse_up(
                 MouseButton::Left,
@@ -1226,84 +1651,6 @@ fn render_file_row(
         )
         .on_click(cx.listener(move |this, _, _, cx| this.select_file(ix, cx)));
     div().w_full().h(px(42.)).px(px(6.)).py(px(1.)).child(item)
-}
-
-fn render_row(view: &FileView, row: Row) -> impl IntoElement + use<> {
-    let line = div().h(px(DIFF_ROW)).w_full().flex();
-    match row {
-        Row::Hunk {
-            old_start,
-            new_start,
-        } => line
-            .items_center()
-            .px_3()
-            .rounded(px(ROW_RADIUS))
-            .bg(theme::hover())
-            .text_color(theme::faint())
-            .child(format!("@@ −{old_start} +{new_start} @@"))
-            .into_any_element(),
-        Row::Lines { left, right } => line
-            .child(render_cell(view, left, true))
-            .child(div().w(px(1.)).h_full().bg(theme::border()))
-            .child(render_cell(view, right, false))
-            .into_any_element(),
-    }
-}
-
-fn render_cell(view: &FileView, cell: Option<Cell>, old: bool) -> impl IntoElement + use<> {
-    let half = div().flex_1().min_w_0().h_full().flex().overflow_hidden();
-    let gutter_width = px(view.gutter_digits as f32 * 7.5 + 16.);
-    let Some(cell) = cell else {
-        return half.bg(theme::panel());
-    };
-    let (text, spans) = if old {
-        view.old.line(cell.line)
-    } else {
-        view.new.line(cell.line)
-    };
-    let (text, spans) = rows::expand_tabs(text, spans, TAB_WIDTH);
-    let highlights: Vec<_> = spans
-        .into_iter()
-        .map(|s| {
-            (
-                s.range,
-                HighlightStyle {
-                    color: Some(theme::code(s.color)),
-                    font_style: s.italic.then_some(FontStyle::Italic),
-                    ..Default::default()
-                },
-            )
-        })
-        .collect();
-    let (line_bg, gutter_bg): (Option<Rgba>, Option<Rgba>) = match cell.kind {
-        LineKind::Context => (None, None),
-        LineKind::Added => (Some(theme::added_line()), Some(theme::added_gutter())),
-        LineKind::Removed => (Some(theme::removed_line()), Some(theme::removed_gutter())),
-    };
-    half.when_some(line_bg, |s, bg| s.bg(bg))
-        .child(
-            div()
-                .w(gutter_width)
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_end()
-                .pr_2()
-                .when_some(gutter_bg, |s, bg| s.bg(bg))
-                .text_color(theme::faint())
-                .child(cell.line.to_string()),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .pl_2()
-                .whitespace_nowrap()
-                .overflow_hidden()
-                .child(StyledText::new(text).with_highlights(highlights)),
-        )
 }
 
 fn change_badge(change: ChangeKind) -> impl IntoElement {

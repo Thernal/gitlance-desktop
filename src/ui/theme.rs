@@ -80,6 +80,20 @@ pub fn removed_line() -> Rgba {
     rgba(0xe06c751f)
 }
 
+pub fn scrollbar() -> Rgba {
+    rgba(0xabb2bf40)
+}
+
+/// A changed token inside an added line.
+pub fn added_word() -> Rgba {
+    rgba(0x98c3795c)
+}
+
+/// A changed token inside a removed line.
+pub fn removed_word() -> Rgba {
+    rgba(0xe06c755c)
+}
+
 pub fn added_gutter() -> Rgba {
     rgba(0x98c37933)
 }

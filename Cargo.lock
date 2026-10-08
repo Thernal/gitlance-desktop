@@ -1867,6 +1867,8 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
  "image",
+ "serde",
+ "serde_json",
  "syntect",
  "tempfile",
  "two-face",
