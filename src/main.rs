@@ -1,5 +1,6 @@
 //! GitLance — review commits and force-pushed branch versions without an IDE. See README.md.
 
+mod editor;
 mod git;
 mod highlight;
 mod review;

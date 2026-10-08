@@ -3,7 +3,8 @@
 
 use super::diff_view::{self, chip};
 use super::{GAP, ISLAND_RADIUS, Workspace, button, island, theme};
-use crate::storage::{DiffMode, MarkStyle};
+use crate::editor::{self, Editor};
+use crate::storage::{Appearance, DiffMode, MarkStyle};
 use gpui::{ClickEvent, Context, FontWeight, SharedString, div, prelude::*, px};
 
 impl Workspace {
@@ -35,6 +36,22 @@ impl Workspace {
                     this.change_settings(|this| this.settings.default_mode = mode, cx);
                     // The page's choice is what the open diff shows too.
                     this.set_mode(mode, cx);
+                },
+            ))
+        }));
+        let installed: Vec<Editor> = Editor::ALL.into_iter().filter(|e| e.installed()).collect();
+        let current = editor::pick(s.editor);
+        let editors = diff_view::group().children(installed.iter().map(|&e| {
+            chip(e.key(), e.label(), current == Some(e)).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    this.change_settings(|this| this.settings.editor = Some(e), cx)
+                },
+            ))
+        }));
+        let appearance = diff_view::group().children(Appearance::ALL.map(|a| {
+            chip(a.label(), a.label(), s.appearance == a).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    this.change_settings(|this| this.settings.appearance = a, cx)
                 },
             ))
         }));
@@ -100,6 +117,25 @@ impl Workspace {
                                 "Default mode",
                                 "What a diff opens in. Lines, Words and Structural are also in the toolbar and the View menu.",
                                 modes,
+                            ))
+                            .child(heading("General"))
+                            .child(item(
+                                "Appearance",
+                                "Follow the system, or stay dark. Only the dark theme exists so far, so both look the same until a light one is designed.",
+                                appearance,
+                            ))
+                            .child(item(
+                                "Open files in",
+                                "The editor behind “Open in …” on a file or a line. It opens the file in the working tree.",
+                                if installed.is_empty() {
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(theme::faint())
+                                        .child("Android Studio, Zed or VS Code not found")
+                                        .into_any_element()
+                                } else {
+                                    editors.into_any_element()
+                                },
                             ))
                             .child(heading("Repository"))
                             .child(item(

@@ -6,6 +6,7 @@ mod find;
 mod format;
 mod icons;
 mod input;
+mod menu;
 mod rows;
 mod settings;
 mod theme;
@@ -23,6 +24,7 @@ use gpui::{
     TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas,
     div, font, list, prelude::*, px, size, uniform_list,
 };
+use menu::{Act, CtxMenu, Entry};
 use rows::{FileData, Row};
 use std::cell::Cell as Shared;
 use std::collections::HashSet;
@@ -47,6 +49,7 @@ actions!(
         NextMatch,
         PreviousMatch,
         FindCommits,
+        CopySelection,
         NextChange,
         PreviousChange,
         OpenSettings,
@@ -79,6 +82,7 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("cmd-,", OpenSettings, None),
                 KeyBinding::new("cmd-f", Find, Some("Workspace")),
                 KeyBinding::new("cmd-shift-f", FindCommits, Some("Workspace")),
+                KeyBinding::new("cmd-c", CopySelection, Some("Workspace && !Typing")),
                 KeyBinding::new("f7", NextChange, Some("Workspace")),
                 KeyBinding::new("shift-f7", PreviousChange, Some("Workspace")),
                 KeyBinding::new("n", NextChange, Some("Workspace && !Typing")),
@@ -171,8 +175,8 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
 }
 
 /// A view option, for the toolbar and the View menu.
-#[derive(Clone, Copy)]
-enum Opt {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Opt {
     Unified,
     Wrap,
     FullContext,
@@ -297,6 +301,20 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                                 });
                                 continue;
                             }
+                            "viewmenu" => {
+                                let groups = this.view_menu();
+                                this.open_menu(Point::new(px(1090.), px(78.)), groups, cx);
+                                continue;
+                            }
+                            "linemenu" => {
+                                this.select_press(false, 66, false, cx);
+                                this.select_drag(false, 66, cx);
+                                if let Some(sel) = this.sel.as_mut() {
+                                    sel.head = 68;
+                                }
+                                this.line_context(false, 67, Point::new(px(900.), px(520.)), cx);
+                                continue;
+                            }
                             "menu" => {
                                 this.repo_menu = true;
                                 continue;
@@ -381,6 +399,14 @@ enum Header {
     },
 }
 
+/// Selected lines on one side of the open diff: pressed at `anchor`, dragged to `head`.
+#[derive(Clone, Copy)]
+struct Sel {
+    old: bool,
+    anchor: u32,
+    head: u32,
+}
+
 /// A change the user did not ask for, with the way back.
 struct Notice {
     text: String,
@@ -453,6 +479,11 @@ pub struct Workspace {
     jump: Option<u64>,
     /// "Copied ✓" on the Copy button until something changes.
     copied: bool,
+    /// A context menu open at the pointer, and the repository's address on the web.
+    ctx_menu: Option<CtxMenu>,
+    web: Option<crate::git::WebRemote>,
+    /// The selected lines of the open diff.
+    sel: Option<Sel>,
     /// The find bar's text over the open diff, and what it looks for.
     dfind: Option<String>,
     dterms: Arc<[String]>,
@@ -523,6 +554,9 @@ impl Workspace {
             review_open: false,
             jump: None,
             copied: false,
+            ctx_menu: None,
+            web: None,
+            sel: None,
             dfind: None,
             dterms: Arc::default(),
             changes: Vec::new(),
@@ -570,12 +604,14 @@ impl Workspace {
                     let repo = Repo::open(&path)?;
                     let git_dir = repo.git_dir();
                     let fingerprint = crate::git::fingerprint(&git_dir);
-                    anyhow::Ok((repo.root(), repo.branches()?, git_dir, fingerprint))
+                    let web = repo.web_remote();
+                    anyhow::Ok((repo.root(), repo.branches()?, git_dir, fingerprint, web))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 match loaded {
-                    Ok((root, branches, git_dir, fingerprint)) => {
+                    Ok((root, branches, git_dir, fingerprint, web)) => {
+                        this.web = web;
                         this.recent = storage::remember(&root);
                         if this.root.as_ref() != Some(&root) {
                             this.find.reset();
@@ -628,6 +664,7 @@ impl Workspace {
         self.view_task = None;
         self.rows.clear();
         self.expanded.clear();
+        self.sel = None;
         self.matches.clear();
         self.match_at = 0;
         self.changes.clear();
@@ -888,6 +925,179 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The View menu: the diff mode, then the options that are on or off.
+    fn view_menu(&self) -> Vec<Vec<Entry>> {
+        let o = self.options;
+        vec![
+            DiffMode::ALL
+                .iter()
+                .map(|&mode| {
+                    Entry::new(format!("{} diff", mode.label()), Act::SetMode(mode))
+                        .checked(o.mode == mode)
+                })
+                .collect(),
+            vec![
+                Entry::new("Wrap long lines", Act::Toggle(Opt::Wrap))
+                    .key("⌥Z")
+                    .checked(o.wrap),
+                Entry::new("Show all lines", Act::Toggle(Opt::FullContext))
+                    .key("⌥E")
+                    .checked(o.full_context),
+                Entry::new("Hide whitespace changes", Act::Toggle(Opt::Whitespace))
+                    .key("⌥W")
+                    .checked(o.ignore_whitespace),
+            ],
+        ]
+    }
+
+    // ---- selecting and context menus ---------------------------------------------------
+
+    fn select_press(&mut self, old: bool, line: u32, shift: bool, cx: &mut Context<Self>) {
+        self.ctx_menu = None;
+        match (&mut self.sel, shift) {
+            (Some(sel), true) if sel.old == old => sel.head = line,
+            _ => {
+                self.sel = Some(Sel {
+                    old,
+                    anchor: line,
+                    head: line,
+                })
+            }
+        }
+        cx.notify();
+    }
+
+    fn select_drag(&mut self, old: bool, line: u32, cx: &mut Context<Self>) {
+        if let Some(sel) = &mut self.sel
+            && sel.old == old
+            && sel.head != line
+        {
+            sel.head = line;
+            cx.notify();
+        }
+    }
+
+    /// The new-side line shown at `row`, to open the editor where the reader is.
+    fn new_line_of_row(&self, row: usize) -> Option<u32> {
+        match *self.rows.get(row)? {
+            rows::Row::Split { right, .. } => right.map(|c| c.line),
+            rows::Row::Unified { new_line, .. } => new_line,
+            _ => None,
+        }
+    }
+
+    /// The text of the selected lines.
+    fn selected_text(&self) -> Option<(String, usize)> {
+        let (sel, data) = (self.sel?, self.data.as_ref()?);
+        let (lo, hi) = (sel.anchor.min(sel.head), sel.anchor.max(sel.head));
+        let side = data.side(sel.old);
+        let lines: Vec<&str> = (lo..=hi).map(|n| side.line(n).0).collect();
+        Some((lines.join("\n"), lines.len()))
+    }
+
+    fn copy_selection(&mut self, _: &CopySelection, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some((text, _)) = self.selected_text() {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        }
+    }
+
+    /// A right click on a diff line: copy it (or the selection), comment on it, open it.
+    fn line_context(
+        &mut self,
+        old: bool,
+        line: u32,
+        at: Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(data) = &self.data else {
+            return;
+        };
+        let in_selection = self.sel.is_some_and(|s| {
+            s.old == old && (s.anchor.min(s.head)..=s.anchor.max(s.head)).contains(&line)
+        });
+        let copy = match self.selected_text() {
+            Some((text, n)) if in_selection && n > 1 => {
+                Entry::new(format!("Copy {n} lines"), Act::Copy(text)).key("⌘C")
+            }
+            _ => Entry::new(
+                "Copy line",
+                Act::Copy(data.side(old).line(line).0.to_owned()),
+            ),
+        };
+        let mut second = vec![Entry::new(
+            "Comment on this line",
+            Act::Comment { old, line },
+        )];
+        if let (false, Some(path), Some(editor)) = (
+            old,
+            self.current_path(),
+            crate::editor::pick(self.settings.editor),
+        ) {
+            second.push(Entry::new(
+                format!("Open in {} at line {line}", editor.label()),
+                Act::OpenEditor { path, line },
+            ));
+        }
+        self.open_menu(at, vec![vec![copy], second], cx);
+    }
+
+    fn commit_context(&mut self, ix: usize, at: Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        let Some(commit) = self.commits.get(ix) else {
+            return;
+        };
+        let mut groups = vec![vec![
+            Entry::new("Copy SHA", Act::Copy(commit.id.to_string())),
+            Entry::new("Copy message", Act::Copy(commit.message.clone())),
+        ]];
+        if let Some(web) = &self.web {
+            groups.push(vec![Entry::new(
+                format!("Open in {} ↗", web.name()),
+                Act::OpenUrl(web.commit(&commit.id.to_string())),
+            )]);
+        }
+        self.open_menu(at, groups, cx);
+    }
+
+    fn file_context(&mut self, ix: usize, at: Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        let Some(path) = self
+            .diff
+            .as_ref()
+            .and_then(|d| d.files.get(ix))
+            .map(|f| f.path().to_owned())
+        else {
+            return;
+        };
+        let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+        let mut groups = vec![vec![
+            Entry::new("Copy path", Act::Copy(path.clone())),
+            Entry::new("Copy file name", Act::Copy(name)),
+        ]];
+        if let Some(editor) = crate::editor::pick(self.settings.editor) {
+            groups.push(vec![Entry::new(
+                format!("Open in {}", editor.label()),
+                Act::OpenEditor { path, line: 1 },
+            )]);
+        }
+        self.open_menu(at, groups, cx);
+    }
+
+    fn branch_context(&mut self, ix: usize, at: Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        let Some(branch) = self.branches.get(ix) else {
+            return;
+        };
+        let mut groups = vec![vec![Entry::new(
+            "Copy branch name",
+            Act::Copy(branch.name.clone()),
+        )]];
+        if let Some(web) = &self.web {
+            groups.push(vec![Entry::new(
+                format!("Open in {} ↗", web.name()),
+                Act::OpenUrl(web.branch(&branch.name)),
+            )]);
+        }
+        self.open_menu(at, groups, cx);
+    }
+
     fn toggle(&mut self, opt: Opt, cx: &mut Context<Self>) {
         self.set_option(opt, !self.option(opt), cx);
     }
@@ -914,6 +1124,9 @@ impl Workspace {
             marks: self.settings.mark_style,
             terms: &self.dterms,
             strong: false,
+            sel: self
+                .sel
+                .map(|s| (s.old, s.anchor.min(s.head), s.anchor.max(s.head))),
             gutter: digits as f32 * self.char_width + 16.,
         }
     }
@@ -1427,6 +1640,12 @@ impl Workspace {
                         })
                         .child(b.name.clone()),
                 )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        this.branch_context(ix, event.position, cx)
+                    }),
+                )
                 .on_click(cx.listener(move |this, _, _, cx| this.select_branch(ix, None, cx)))
         });
 
@@ -1582,6 +1801,12 @@ impl Workspace {
                     )
                     .child(format::ago(commit.time)),
             )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.commit_context(ix, event.position, cx)
+                }),
+            )
             .on_click(cx.listener(move |this, _, _, cx| this.select_commit(ix, cx)));
         div().w_full().h(px(48.)).px(px(6.)).py(px(1.)).child(item)
     }
@@ -1641,11 +1866,6 @@ impl Workspace {
                 this.set_option(opt, value, cx)
             })
         };
-        let toggle = |opt: Opt| {
-            cx.listener(move |this: &mut Self, _: &ClickEvent, _: &mut Window, cx| {
-                this.toggle(opt, cx)
-            })
-        };
         let o = self.options;
         div()
             .flex_none()
@@ -1657,13 +1877,6 @@ impl Workspace {
                     .child(chip("split", "Split", !o.unified).on_click(set(Opt::Unified, false)))
                     .child(chip("unified", "Unified", o.unified).on_click(set(Opt::Unified, true))),
             )
-            .child(diff_view::group().children(DiffMode::ALL.map(|mode| {
-                chip(mode.label(), mode.label(), o.mode == mode).on_click(cx.listener(
-                    move |this: &mut Self, _: &ClickEvent, _: &mut Window, cx| {
-                        this.set_mode(mode, cx)
-                    },
-                ))
-            })))
             .child(
                 diff_view::group().child(
                     chip(
@@ -1677,18 +1890,19 @@ impl Workspace {
                     })),
                 ),
             )
-            .child(
-                diff_view::group()
-                    .child(chip("wrap", "Wrap", o.wrap).on_click(toggle(Opt::Wrap)))
-                    .child(
-                        chip("all-lines", "All lines", o.full_context)
-                            .on_click(toggle(Opt::FullContext)),
-                    )
-                    .child(
-                        chip("whitespace", "Hide whitespace", o.ignore_whitespace)
-                            .on_click(toggle(Opt::Whitespace)),
-                    ),
-            )
+            .child(diff_view::group().child(
+                chip("view", "View ▾", self.ctx_menu.is_some()).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                        let groups = this.view_menu();
+                        this.open_menu(
+                            Point::new(event.position.x - px(60.), event.position.y + px(16.)),
+                            groups,
+                            cx,
+                        );
+                    }),
+                ),
+            ))
     }
 
     fn render_summary(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1779,7 +1993,19 @@ impl Workspace {
                             )
                             .child(format!("{} <{}>", commit.author, commit.email))
                             .child(format::date(commit.time))
-                            .child(stats),
+                            .child(stats)
+                            .children(self.web.as_ref().map(|web| {
+                                let url = web.commit(&commit.id.to_string());
+                                div()
+                                    .id("open-web")
+                                    .text_color(theme::accent())
+                                    .cursor_pointer()
+                                    .hover(|s| s.text_color(theme::text()))
+                                    .child(format!("Open in {} ↗", web.name()))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.run_act(Act::OpenUrl(url.clone()), cx)
+                                    }))
+                            })),
                     )
             }
             Header::Versions {
@@ -1925,6 +2151,30 @@ impl Workspace {
                                     ))),
                             )
                     }))
+                    .children(crate::editor::pick(self.settings.editor).map(|editor| {
+                        let path = f.path().to_owned();
+                        let line = self
+                            .changes
+                            .get(self.change_at.unwrap_or(0))
+                            .and_then(|&row| self.new_line_of_row(row))
+                            .unwrap_or(1);
+                        chip(
+                            "open-editor",
+                            format!("Open in {} ↗", editor.label()),
+                            false,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| {
+                                this.run_act(
+                                    Act::OpenEditor {
+                                        path: path.clone(),
+                                        line,
+                                    },
+                                    cx,
+                                )
+                            },
+                        ))
+                    }))
                     .children(mode_note.clone().map(|n| {
                         let unavailable = n.starts_with("Structural diff");
                         div()
@@ -2013,7 +2263,34 @@ impl Workspace {
                 Row::Composer => return workspace.render_composer(indent, this.clone()),
                 _ => {}
             }
-            let (expand, comment) = (this.clone(), this.clone());
+            let (expand, comment, press, drag, context) = (
+                this.clone(),
+                this.clone(),
+                this.clone(),
+                this.clone(),
+                this.clone(),
+            );
+            let events = diff_view::Events {
+                comment: Box::new(move |old, line, cx| {
+                    comment
+                        .update(cx, |this, cx| this.start_comment(old, line, cx))
+                        .ok();
+                }),
+                press: Box::new(move |old, line, shift, cx| {
+                    press
+                        .update(cx, |this, cx| this.select_press(old, line, shift, cx))
+                        .ok();
+                }),
+                drag: Box::new(move |old, line, cx| {
+                    drag.update(cx, |this, cx| this.select_drag(old, line, cx))
+                        .ok();
+                }),
+                context: Box::new(move |old, line, at, cx| {
+                    context
+                        .update(cx, |this, cx| this.line_context(old, line, at, cx))
+                        .ok();
+                }),
+            };
             diff_view::row(
                 &data,
                 row,
@@ -2023,11 +2300,7 @@ impl Workspace {
                         .update(cx, |this, cx| this.expand_gap(segment, cx))
                         .ok();
                 },
-                std::rc::Rc::new(move |old, line, cx| {
-                    comment
-                        .update(cx, |this, cx| this.start_comment(old, line, cx))
-                        .ok();
-                }),
+                std::rc::Rc::new(events),
             )
         })
         .flex_1();
@@ -2113,6 +2386,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::open_settings_action))
             .on_action(cx.listener(Self::find_action))
             .on_action(cx.listener(Self::find_commits_action))
+            .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::next_change))
             .on_action(cx.listener(Self::previous_change))
             .on_action(cx.listener(Self::next_match))
@@ -2175,6 +2449,7 @@ impl Render for Workspace {
             })
             // Last, so it paints over everything.
             .children(self.repo_menu.then(|| self.render_repo_menu(cx)))
+            .children(self.render_ctx_menu(window.viewport_size(), cx))
     }
 }
 
@@ -2236,6 +2511,12 @@ fn render_file_row(
                             .child(format!("−{}", file.removed)),
                     )
                 }),
+        )
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                this.file_context(ix, event.position, cx)
+            }),
         )
         .on_click(cx.listener(move |this, _, _, cx| this.select_file(ix, cx)));
     div().w_full().h(px(42.)).px(px(6.)).py(px(1.)).child(item)

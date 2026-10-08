@@ -176,9 +176,43 @@ impl MarkStyle {
     }
 }
 
+/// How the window follows the system appearance. Only the dark theme exists so far, so both
+/// choices look the same until a light palette is designed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Appearance {
+    #[default]
+    System,
+    Dark,
+}
+
+impl Appearance {
+    pub const ALL: [Appearance; 2] = [Appearance::System, Appearance::Dark];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Appearance::System => "System",
+            Appearance::Dark => "Dark",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Appearance::System => "system",
+            Appearance::Dark => "dark",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.key() == key)
+    }
+}
+
 /// Preferences from the Settings page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Settings {
+    /// The editor files open in; `None` takes the first one installed.
+    pub editor: Option<crate::editor::Editor>,
+    pub appearance: Appearance,
     /// How changed words are drawn, in Words and Structural modes.
     pub mark_style: MarkStyle,
     /// The mode a diff opens in.
@@ -190,6 +224,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            editor: None,
+            appearance: Appearance::default(),
             mark_style: MarkStyle::default(),
             default_mode: DiffMode::default(),
             auto_refresh: true,
@@ -217,6 +253,10 @@ impl Settings {
                     settings.default_mode = DiffMode::from_key(value).unwrap_or_default()
                 }
                 "auto_refresh" => settings.auto_refresh = value != "false",
+                "editor" => settings.editor = crate::editor::Editor::from_key(value),
+                "appearance" => {
+                    settings.appearance = Appearance::from_key(value).unwrap_or_default()
+                }
                 _ => {}
             }
         }
@@ -228,7 +268,12 @@ impl std::fmt::Display for Settings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "mark_style={}", self.mark_style.key())?;
         writeln!(f, "default_mode={}", self.default_mode.key())?;
-        writeln!(f, "auto_refresh={}", self.auto_refresh)
+        writeln!(f, "auto_refresh={}", self.auto_refresh)?;
+        writeln!(f, "appearance={}", self.appearance.key())?;
+        if let Some(editor) = self.editor {
+            writeln!(f, "editor={}", editor.key())?;
+        }
+        Ok(())
     }
 }
 
@@ -300,6 +345,8 @@ mod tests {
         assert_eq!(Settings::default().default_mode, DiffMode::Words);
         assert_eq!(Settings::default().mark_style, MarkStyle::Tinted);
         let settings = Settings {
+            editor: Some(crate::editor::Editor::Zed),
+            appearance: Appearance::Dark,
             mark_style: MarkStyle::Underlined,
             default_mode: DiffMode::Structural,
             auto_refresh: false,

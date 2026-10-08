@@ -16,6 +16,70 @@ use anyhow::{Context as _, Result};
 use git2::{BranchType, Oid, Repository, Sort};
 use std::path::{Path, PathBuf};
 
+/// Where a repository lives on the web: GitLab, GitHub or similar, from its clone URL.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebRemote {
+    /// `https://host/group/project`, without a trailing `.git`.
+    pub base: String,
+    pub github: bool,
+}
+
+impl WebRemote {
+    /// `git@host:group/project.git`, `ssh://git@host:port/group/project.git` and
+    /// `https://[user@]host/group/project.git` all give `https://host/group/project`.
+    pub fn parse(url: &str) -> Option<Self> {
+        let url = url.trim();
+        let (host, path) = if let Some(rest) = url.split_once("://").map(|(_, r)| r) {
+            let rest = rest.rsplit_once('@').map_or(rest, |(_, r)| r);
+            let (host, path) = rest.split_once('/')?;
+            (host.split(':').next()?, path)
+        } else {
+            // scp-like: user@host:path
+            let rest = url.rsplit_once('@').map_or(url, |(_, r)| r);
+            rest.split_once(':')?
+        };
+        let path = path.trim_matches('/').trim_end_matches(".git");
+        if host.is_empty() || !path.contains('/') {
+            return None;
+        }
+        Some(Self {
+            base: format!("https://{host}/{path}"),
+            github: host.contains("github"),
+        })
+    }
+
+    pub fn name(&self) -> &'static str {
+        if self.github { "GitHub" } else { "GitLab" }
+    }
+
+    pub fn commit(&self, sha: &str) -> String {
+        if self.github {
+            format!("{}/commit/{sha}", self.base)
+        } else {
+            format!("{}/-/commit/{sha}", self.base)
+        }
+    }
+
+    /// `branch` as `main` or `origin/main`; a remote prefix is dropped.
+    pub fn branch(&self, branch: &str) -> String {
+        let name = branch.split_once('/').map_or(branch, |(_, rest)| rest);
+        let name = if self.is_remote_prefix(branch) {
+            name
+        } else {
+            branch
+        };
+        if self.github {
+            format!("{}/tree/{name}", self.base)
+        } else {
+            format!("{}/-/tree/{name}", self.base)
+        }
+    }
+
+    fn is_remote_prefix(&self, branch: &str) -> bool {
+        branch.starts_with("origin/") || branch.starts_with("upstream/")
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RefKind {
     Local,
@@ -67,6 +131,19 @@ impl Repo {
     /// The git directory, where refs and reflogs live.
     pub fn git_dir(&self) -> PathBuf {
         self.inner.path().to_path_buf()
+    }
+
+    /// The web address of the repository's remote (`origin`, else the first one), when it has one.
+    pub fn web_remote(&self) -> Option<WebRemote> {
+        let remotes = self.inner.remotes().ok()?;
+        let names: Vec<&str> = remotes.iter().flatten().flatten().collect();
+        let name = names
+            .iter()
+            .copied()
+            .find(|n| *n == "origin")
+            .or_else(|| names.first().copied())?;
+        let remote = self.inner.find_remote(name).ok()?;
+        WebRemote::parse(remote.url().ok()?)
     }
 
     /// Local branches first, the checked-out one at the top; remote-tracking refs after them.

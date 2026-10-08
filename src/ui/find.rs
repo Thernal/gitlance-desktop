@@ -198,7 +198,9 @@ impl Workspace {
         }
         let key = &event.keystroke;
         if key.key == "escape" {
-            if self.repo_menu {
+            if self.ctx_menu.is_some() {
+                self.close_menu(cx);
+            } else if self.repo_menu {
                 self.repo_menu = false;
                 cx.notify();
             } else if self.dfind.is_some() {
@@ -207,6 +209,8 @@ impl Workspace {
                 self.close_find(cx);
             } else if self.settings_open {
                 self.settings_open = false;
+                cx.notify();
+            } else if self.sel.take().is_some() {
                 cx.notify();
             }
             return;

@@ -6,8 +6,8 @@ use crate::git::LineKind;
 use crate::search;
 use crate::storage::MarkStyle;
 use gpui::{
-    AnyElement, App, FontStyle, HighlightStyle, Rgba, SharedString, StyledText, UnderlineStyle,
-    div, prelude::*, px,
+    AnyElement, App, FontStyle, HighlightStyle, MouseButton, Pixels, Point, Rgba, SharedString,
+    StyledText, UnderlineStyle, div, prelude::*, px,
 };
 use std::rc::Rc;
 
@@ -29,6 +29,8 @@ pub struct RowStyle<'a> {
     pub terms: &'a [String],
     /// This row is the one the find bar is on: its matches are drawn solid, not tinted.
     pub strong: bool,
+    /// The selected lines: (on the removed side, first line, last line).
+    pub sel: Option<(bool, u32, u32)>,
 }
 
 impl RowStyle<'_> {
@@ -42,15 +44,33 @@ impl RowStyle<'_> {
     }
 }
 
-/// Called with (on the removed side, line number) when a gutter's + is clicked.
-pub type OnComment = Rc<dyn Fn(bool, u32, &mut App)>;
+/// A callback about a diff line: (on the removed side, line number, …).
+type OnLine = Box<dyn Fn(bool, u32, &mut App)>;
+/// … with whether ⇧ was held.
+type OnPress = Box<dyn Fn(bool, u32, bool, &mut App)>;
+/// … with a window position.
+type OnContext = Box<dyn Fn(bool, u32, Point<Pixels>, &mut App)>;
+
+/// What a row reports back.
+pub struct Events {
+    /// A gutter's + was clicked.
+    pub comment: OnLine,
+    /// The mouse went down on a line; whether ⇧ was held.
+    pub press: OnPress,
+    /// The pointer moved over a line with the button down.
+    pub drag: OnLine,
+    /// A right click on a line, at a window position.
+    pub context: OnContext,
+}
+
+pub type OnEvents = Rc<Events>;
 
 pub fn row(
     data: &FileData,
     row: Row,
     style: RowStyle<'_>,
     on_expand: impl Fn(usize, &mut App) + 'static,
-    on_comment: OnComment,
+    events: OnEvents,
 ) -> AnyElement {
     match row {
         Row::Gap { segment, count } => div()
@@ -78,9 +98,9 @@ pub fn row(
             .min_h(px(DIFF_ROW))
             .flex()
             .group("diff-row")
-            .child(half(&data.old, left, true, style, on_comment.clone()))
+            .child(half(&data.old, left, true, style, events.clone()))
             .child(div().w(px(1.)).flex_none().bg(theme::border()))
-            .child(half(&data.new, right, false, style, on_comment))
+            .child(half(&data.new, right, false, style, events))
             .into_any_element(),
         // Drawn by the workspace, which owns the comments.
         Row::Thread(_) | Row::Composer => div().into_any_element(),
@@ -107,7 +127,7 @@ pub fn row(
                     new_line,
                     gutter_bg,
                     style,
-                    Some((old, cell.line, on_comment)),
+                    Some((old, cell.line, events.clone())),
                 ))
                 .child(
                     div()
@@ -116,7 +136,7 @@ pub fn row(
                         .text_color(theme::faint())
                         .child(sign),
                 )
-                .child(code(data.side(old), cell, old, style))
+                .child(code(data.side(old), cell, old, style, events))
                 .into_any_element()
         }
     }
@@ -128,7 +148,7 @@ fn half(
     cell: Option<Cell>,
     old: bool,
     style: RowStyle<'_>,
-    on_comment: OnComment,
+    events: OnEvents,
 ) -> impl IntoElement + use<> {
     let half = div().flex_1().min_w_0().flex();
     let Some(cell) = cell else {
@@ -140,9 +160,9 @@ fn half(
             Some(cell.line),
             gutter_bg,
             style,
-            Some((old, cell.line, on_comment)),
+            Some((old, cell.line, events.clone())),
         ))
-        .child(code(side, cell, old, style))
+        .child(code(side, cell, old, style, events))
 }
 
 /// A line-number column; `comment` adds a + that appears on hover and starts a comment on that line.
@@ -150,7 +170,7 @@ fn gutter(
     line: Option<u32>,
     bg: Option<Rgba>,
     style: RowStyle<'_>,
-    comment: Option<(bool, u32, OnComment)>,
+    comment: Option<(bool, u32, OnEvents)>,
 ) -> impl IntoElement + use<> {
     div()
         .w(px(style.gutter))
@@ -162,7 +182,7 @@ fn gutter(
         .when_some(bg, |s, bg| s.bg(bg))
         .text_color(theme::faint())
         .children(line.map(|l| l.to_string()))
-        .children(comment.map(|(old, line, on_comment)| {
+        .children(comment.map(|(old, line, events)| {
             div()
                 .id(("comment-plus", u64::from(line) * 2 + u64::from(old)))
                 .absolute()
@@ -179,11 +199,17 @@ fn gutter(
                 .invisible()
                 .group_hover("diff-row", |s| s.visible())
                 .child("+")
-                .on_click(move |_, _, cx| on_comment(old, line, cx))
+                .on_click(move |_, _, cx| (events.comment)(old, line, cx))
         }))
 }
 
-fn code(side: &Side, cell: Cell, old: bool, style: RowStyle<'_>) -> impl IntoElement + use<> {
+fn code(
+    side: &Side,
+    cell: Cell,
+    old: bool,
+    style: RowStyle<'_>,
+    events: OnEvents,
+) -> impl IntoElement + use<> {
     let (text, spans, marks) = side.line(cell.line);
     let found = search::highlights(text, style.terms);
     let runs = rows::runs(text, spans, marks, &found);
@@ -226,7 +252,30 @@ fn code(side: &Side, cell: Cell, old: bool, style: RowStyle<'_>) -> impl IntoEle
             .whitespace_nowrap()
             .child(text)
     };
-    div().flex_1().min_w_0().overflow_hidden().child(line)
+    let selected = style
+        .sel
+        .is_some_and(|(o, lo, hi)| o == old && (lo..=hi).contains(&cell.line));
+    let line_no = cell.line;
+    let (press, drag, context) = (events.clone(), events.clone(), events);
+    div()
+        .id("code")
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .when(selected, |s| s.bg(theme::selection()))
+        .child(line)
+        // A press selects the line, a drag extends the selection, a right click opens the menu.
+        .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+            (press.press)(old, line_no, event.modifiers.shift, cx)
+        })
+        .on_mouse_move(move |event, _, cx| {
+            if event.pressed_button == Some(MouseButton::Left) {
+                (drag.drag)(old, line_no, cx)
+            }
+        })
+        .on_mouse_down(MouseButton::Right, move |event, _, cx| {
+            (context.context)(old, line_no, event.position, cx)
+        })
 }
 
 /// How a changed word is drawn: a stronger tint, or an underline in the line's own hue.

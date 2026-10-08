@@ -316,3 +316,35 @@ fn the_fingerprint_changes_with_refs_and_not_without_them() {
     fx.commit("refs/heads/main", &[a], &[("a.txt", "2\n")], "amend");
     assert_ne!(fingerprint(&dir), before);
 }
+
+#[test]
+fn clone_urls_become_web_addresses() {
+    let gitlab = WebRemote::parse("git@gitlab.digigo.example:mobile/payments-service.git").unwrap();
+    assert_eq!(
+        gitlab.base,
+        "https://gitlab.digigo.example/mobile/payments-service"
+    );
+    assert_eq!(
+        gitlab.commit("abc"),
+        "https://gitlab.digigo.example/mobile/payments-service/-/commit/abc"
+    );
+    let ssh = WebRemote::parse("ssh://git@host.example:2222/group/sub/proj.git").unwrap();
+    assert_eq!(ssh.base, "https://host.example/group/sub/proj");
+    let https =
+        WebRemote::parse("https://user:token@github.com/Thernal/gitlance-desktop.git").unwrap();
+    assert!(https.github);
+    assert_eq!(
+        https.commit("abc"),
+        "https://github.com/Thernal/gitlance-desktop/commit/abc"
+    );
+    assert_eq!(
+        https.branch("origin/feature/x"),
+        "https://github.com/Thernal/gitlance-desktop/tree/feature/x"
+    );
+    assert_eq!(
+        gitlab.branch("main"),
+        "https://gitlab.digigo.example/mobile/payments-service/-/tree/main"
+    );
+    assert!(WebRemote::parse("/local/path/repo").is_none());
+    assert!(WebRemote::parse("").is_none());
+}

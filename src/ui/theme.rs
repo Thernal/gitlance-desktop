@@ -82,6 +82,11 @@ pub fn info_bg() -> Rgba {
     rgba(0x61afef24)
 }
 
+/// The tint behind selected lines of a diff.
+pub fn selection() -> Rgba {
+    rgba(0x61afef38)
+}
+
 /// A pane splitter under the pointer or being dragged.
 pub fn splitter() -> Rgba {
     rgba(0x61afef99)
