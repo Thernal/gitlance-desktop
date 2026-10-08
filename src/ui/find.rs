@@ -1,7 +1,7 @@
 //! Commit search: the field above the commit list, its keyboard handling, and the filtered view of
 //! `Workspace::commits`. The matching itself is `crate::search`.
 
-use super::{COMMIT_LIMIT, Workspace, theme};
+use super::{COMMIT_LIMIT, Workspace, rows, theme};
 use crate::git::Repo;
 use crate::search::{self, Query};
 use git2::Oid;
@@ -10,6 +10,7 @@ use gpui::{
     prelude::*, px,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Qualifiers offered as tags under the field.
@@ -22,6 +23,8 @@ pub struct Find {
     /// The text in the field; `None` while the field is not active.
     pub text: Option<String>,
     pub query: Query,
+    /// The query's free words, shared with the rows that highlight them.
+    pub terms: Arc<[String]>,
     /// Indices into `Workspace::commits` of the commits that match; `None` shows every commit.
     pub shown: Option<Vec<usize>>,
     /// Paths each commit touched, read in the background after a branch loads.
@@ -73,6 +76,7 @@ impl Workspace {
     pub(super) fn refilter(&mut self) {
         let text = self.find.text.clone().unwrap_or_default();
         self.find.query = Query::parse(&text, now());
+        self.find.terms = self.find.query.words().into();
         self.find.shown = (!self.find.query.is_empty()).then(|| {
             self.commits
                 .iter()
@@ -98,6 +102,7 @@ impl Workspace {
     pub(super) fn close_find(&mut self, cx: &mut Context<Self>) {
         self.find.text = None;
         self.refilter();
+        self.recompute_matches();
         if let Selection::Commit(ix) = self.selection
             && let Some(row) = self.row_of(ix)
         {
@@ -110,12 +115,38 @@ impl Workspace {
     fn set_find_text(&mut self, text: String, cx: &mut Context<Self>) {
         self.find.text = Some(text);
         self.refilter();
+        self.recompute_matches();
         if let Selection::Commit(ix) = self.selection
             && let Some(row) = self.row_of(ix)
         {
             self.commit_scroll
                 .scroll_to_item(row, gpui::ScrollStrategy::Nearest);
         }
+        cx.notify();
+    }
+
+    /// The rows of the open diff that contain the search words.
+    pub(super) fn recompute_matches(&mut self) {
+        self.matches = match &self.data {
+            Some(data) => rows::matching_rows(data, &self.rows, &self.find.terms),
+            None => Vec::new(),
+        };
+        self.match_at = self.match_at.min(self.matches.len().saturating_sub(1));
+    }
+
+    /// Steps to the next (or previous) match in the open diff and scrolls it into view.
+    pub(super) fn step_match(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.matches.is_empty() {
+            return;
+        }
+        let n = self.matches.len();
+        self.match_at = if forward {
+            (self.match_at + 1) % n
+        } else {
+            (self.match_at + n - 1) % n
+        };
+        self.diff_list
+            .scroll_to_reveal_item(self.matches[self.match_at]);
         cx.notify();
     }
 

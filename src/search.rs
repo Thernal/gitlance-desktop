@@ -98,10 +98,7 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 
 /// Case-insensitive byte ranges of `words` in `text`, sorted and merged.
 pub fn highlights(text: &str, words: &[String]) -> Vec<std::ops::Range<usize>> {
-    // Lowercasing can change byte lengths for a few scripts: only trust ASCII-stable text.
-    if !text.is_ascii() {
-        return Vec::new();
-    }
+    // ASCII lowercasing keeps every byte offset, whatever else the text holds.
     let lower = text.to_ascii_lowercase();
     let mut ranges: Vec<std::ops::Range<usize>> = words
         .iter()
@@ -169,6 +166,12 @@ mod tests {
     fn dates_parse() {
         assert_eq!(since("1970-01-02", 0), Some(86_400));
         assert_eq!(since("2026-09-01", 0), Some(1_788_220_800));
+    }
+
+    #[test]
+    fn highlights_keep_offsets_in_text_with_non_ascii() {
+        let found = highlights("héllo World", &["world".into()]);
+        assert_eq!((found[0].start, found[0].end), (7, 12));
     }
 
     #[test]

@@ -437,10 +437,17 @@ pub struct Run {
     pub italic: bool,
     /// Inside a changed token.
     pub marked: bool,
+    /// Inside a word the search is looking for.
+    pub found: bool,
 }
 
 /// Syntax spans and changed-token marks folded into non-overlapping runs over `text`.
-pub fn runs(text: &str, spans: &[Span], marks: &[Range<usize>]) -> Vec<Run> {
+pub fn runs(
+    text: &str,
+    spans: &[Span],
+    marks: &[Range<usize>],
+    found: &[Range<usize>],
+) -> Vec<Run> {
     let len = text.len();
     let valid = |r: &Range<usize>| r.start < r.end && r.end <= len;
     let marks: Vec<&Range<usize>> = marks
@@ -452,6 +459,12 @@ pub fn runs(text: &str, spans: &[Span], marks: &[Range<usize>]) -> Vec<Run> {
         .filter(|s| valid(&s.range))
         .flat_map(|s| [s.range.start, s.range.end])
         .chain(marks.iter().flat_map(|r| [r.start, r.end]))
+        .chain(
+            found
+                .iter()
+                .filter(|r| valid(r))
+                .flat_map(|r| [r.start, r.end]),
+        )
         .chain([0, len])
         .collect();
     cuts.sort_unstable();
@@ -468,15 +481,16 @@ pub fn runs(text: &str, spans: &[Span], marks: &[Range<usize>]) -> Vec<Run> {
             color: span.map(|s| s.color),
             italic: span.is_some_and(|s| s.italic),
             marked: marks.iter().any(|r| r.start <= start && end <= r.end),
+            found: found.iter().any(|r| r.start <= start && end <= r.end),
         };
-        if run.color.is_none() && !run.italic && !run.marked {
+        if run.color.is_none() && !run.italic && !run.marked && !run.found {
             continue;
         }
         match out.last_mut() {
             Some(last)
                 if last.range.end == start
-                    && (last.color, last.italic, last.marked)
-                        == (run.color, run.italic, run.marked) =>
+                    && (last.color, last.italic, last.marked, last.found)
+                        == (run.color, run.italic, run.marked, run.found) =>
             {
                 last.range.end = end
             }
@@ -508,6 +522,28 @@ pub fn expand_tabs(text: &str, width: usize) -> (String, Vec<usize>) {
         map.push(out.len());
     }
     (out, map)
+}
+
+/// The rows whose text contains any of `words` (case-insensitive), for stepping through matches.
+pub fn matching_rows(data: &FileData, rows: &[Row], words: &[String]) -> Vec<usize> {
+    if words.is_empty() {
+        return Vec::new();
+    }
+    let hit = |old: bool, cell: Option<Cell>| {
+        cell.is_some_and(|cell| {
+            let text = data.side(old).line(cell.line).0.to_lowercase();
+            words.iter().any(|w| text.contains(w.as_str()))
+        })
+    };
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| match **row {
+            Row::Gap { .. } => false,
+            Row::Split { left, right } => hit(true, left) || hit(false, right),
+            Row::Unified { cell, old, .. } => hit(old, Some(cell)),
+        })
+        .map(|(ix, _)| ix)
+        .collect()
 }
 
 #[cfg(test)]
@@ -747,7 +783,12 @@ mod tests {
             color,
             italic: false,
         };
-        let runs = runs("let x = 10;", &[span(0..3, 1), span(8..10, 2)], &[4..10]);
+        let runs = runs(
+            "let x = 10;",
+            &[span(0..3, 1), span(8..10, 2)],
+            &[4..10],
+            &[],
+        );
         let shape: Vec<_> = runs
             .iter()
             .map(|r| (r.range.clone(), r.color, r.marked))
@@ -760,6 +801,35 @@ mod tests {
                 (8..10, Some(2), true)
             ]
         );
+    }
+
+    #[test]
+    fn found_words_split_runs_and_rows_are_listed() {
+        let runs = runs("let x = 10;", &[], &[], &[4..5]);
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].found && runs[0].range == (4..5));
+
+        let file = FileDiff {
+            old_path: Some("a.txt".into()),
+            new_path: Some("a.txt".into()),
+            change: ChangeKind::Modified,
+            added: 1,
+            removed: 1,
+            hunks: vec![Hunk {
+                lines: vec![
+                    line(LineKind::Removed, Some(1), None),
+                    line(LineKind::Added, None, Some(1)),
+                ],
+            }],
+            old_text: Some("hello old\n".into()),
+            new_text: Some("Hello NEW\n".into()),
+            note: None,
+        };
+        let data = FileData::build(&file, DiffMode::Lines);
+        let rows = layout(&data, &ViewOptions::default(), &HashSet::new());
+        assert_eq!(matching_rows(&data, &rows, &["new".into()]), [0]);
+        assert!(matching_rows(&data, &rows, &["zzz".into()]).is_empty());
+        assert!(matching_rows(&data, &rows, &[]).is_empty());
     }
 
     #[test]

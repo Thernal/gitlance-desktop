@@ -42,6 +42,8 @@ actions!(
         SetLines,
         SetWords,
         SetStructural,
+        NextMatch,
+        PreviousMatch,
         OpenSettings,
         Find,
         ToggleWrap,
@@ -71,6 +73,8 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("cmd-q", Quit, None),
                 KeyBinding::new("cmd-,", OpenSettings, None),
                 KeyBinding::new("cmd-f", Find, Some("Workspace")),
+                KeyBinding::new("cmd-g", NextMatch, Some("Workspace")),
+                KeyBinding::new("cmd-shift-g", PreviousMatch, Some("Workspace")),
                 KeyBinding::new("up", PreviousCommit, Some("Workspace")),
                 KeyBinding::new("down", NextCommit, Some("Workspace")),
                 // Bare letters and arrows are typing while the search field is active.
@@ -132,6 +136,8 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
             MenuItem::action("Refresh", Refresh),
             MenuItem::separator(),
             MenuItem::action("Find Commits…", Find),
+            MenuItem::action("Find Next in Diff", NextMatch),
+            MenuItem::action("Find Previous in Diff", PreviousMatch),
         ]),
         Menu::new("View").items([
             MenuItem::action("Unified Diff", ToggleUnified).checked(options.unified),
@@ -229,6 +235,13 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                                 this.settings.mark_style = crate::storage::MarkStyle::Underlined;
                                 continue;
                             }
+                            "notice" => {
+                                this.notice = Some(Notice {
+                                    text: "v3 arrived — this comparison now ends at v3.".into(),
+                                    undo: Selection::None,
+                                });
+                                continue;
+                            }
                             "menu" => {
                                 this.repo_menu = true;
                                 continue;
@@ -254,6 +267,7 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                 .update(cx, |this, _, cx| {
                     this.find.text = Some(text);
                     this.refilter();
+                    this.recompute_matches();
                     cx.notify();
                 })
                 .ok();
@@ -300,6 +314,12 @@ enum Header {
         rebased: bool,
         conflicts: usize,
     },
+}
+
+/// A change the user did not ask for, with the way back.
+struct Notice {
+    text: String,
+    undo: Selection,
 }
 
 struct Diff {
@@ -360,6 +380,13 @@ pub struct Workspace {
     repo_menu: bool,
     find: find::Find,
     watch: watch::Watch,
+    /// Rows of the open diff that hold a search word, and the one stepped to.
+    matches: Vec<usize>,
+    match_at: usize,
+    /// Said above the diff when it changed under the user.
+    notice: Option<Notice>,
+    /// Scroll position (file path, offset) to put back once the reloaded file is laid out.
+    restore_scroll: Option<(String, gpui::ListOffset)>,
     /// The selected file, built in the background.
     data: Option<Arc<FileData>>,
     /// `data` laid out for `options`.
@@ -410,6 +437,10 @@ impl Workspace {
             repo_menu: false,
             find: find::Find::default(),
             watch: watch::Watch::default(),
+            matches: Vec::new(),
+            match_at: 0,
+            notice: None,
+            restore_scroll: None,
             data: None,
             rows: Vec::new(),
             expanded: HashSet::new(),
@@ -488,6 +519,7 @@ impl Workspace {
     }
 
     fn clear_diff(&mut self) {
+        self.notice = None;
         self.selection = Selection::None;
         self.diff = None;
         self.diff_task = None;
@@ -500,6 +532,8 @@ impl Workspace {
         self.view_task = None;
         self.rows.clear();
         self.expanded.clear();
+        self.matches.clear();
+        self.match_at = 0;
         self.offset = 0.;
         self.diff_list.reset(0);
     }
@@ -657,6 +691,16 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 this.data = Some(Arc::new(data));
                 this.relayout();
+                if let Some((path, offset)) = this.restore_scroll.take()
+                    && this
+                        .diff
+                        .as_ref()
+                        .and_then(|d| d.files.get(this.file))
+                        .map(|f| f.path())
+                        == Some(path.as_str())
+                {
+                    this.diff_list.scroll_to(offset);
+                }
                 cx.notify();
             })
             .ok();
@@ -673,6 +717,7 @@ impl Workspace {
             .unwrap_or_default();
         self.diff_list.reset(self.rows.len());
         self.offset = self.offset.min(self.max_offset());
+        self.recompute_matches();
     }
 
     /// Shows the hidden lines of an unchanged run in place, keeping the scroll position.
@@ -692,6 +737,7 @@ impl Workspace {
         let inserted = rows.len() + 1 - self.rows.len();
         self.rows = rows;
         self.diff_list.splice(at..at + 1, inserted);
+        self.recompute_matches();
         cx.notify();
     }
 
@@ -760,12 +806,13 @@ impl Workspace {
         }
     }
 
-    fn row_style(&self) -> RowStyle {
+    fn row_style(&self) -> RowStyle<'_> {
         let digits = self.data.as_ref().map_or(3, |d| d.gutter_digits);
         RowStyle {
             wrap: self.options.wrap,
             offset: self.offset,
             marks: self.settings.mark_style,
+            terms: &self.find.terms,
             gutter: digits as f32 * self.char_width + 16.,
         }
     }
@@ -889,6 +936,14 @@ impl Workspace {
 
     fn open_settings_action(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
         self.open_settings(cx);
+    }
+
+    fn next_match(&mut self, _: &NextMatch, _: &mut Window, cx: &mut Context<Self>) {
+        self.step_match(true, cx);
+    }
+
+    fn previous_match(&mut self, _: &PreviousMatch, _: &mut Window, cx: &mut Context<Self>) {
+        self.step_match(false, cx);
     }
 
     fn find_action(&mut self, _: &Find, _: &mut Window, cx: &mut Context<Self>) {
@@ -1681,6 +1736,17 @@ impl Workspace {
                             .flatten()
                             .map(|n| div().text_color(theme::warning()).child(n)),
                     )
+                    .children((!self.matches.is_empty()).then(|| {
+                        div()
+                            .flex_none()
+                            .text_size(px(12.))
+                            .text_color(theme::warning())
+                            .child(format!(
+                                "{} of {} matching lines · ⌘G",
+                                self.match_at + 1,
+                                self.matches.len()
+                            ))
+                    }))
                     .children(mode_note.clone().map(|n| {
                         let unavailable = n.starts_with("Structural diff");
                         div()
@@ -1693,6 +1759,46 @@ impl Workspace {
                             })
                             .child(n)
                     }))
+            }))
+            .children(self.notice.as_ref().map(|notice| {
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .mx(px(8.))
+                    .mt(px(6.))
+                    .px_3()
+                    .py(px(6.))
+                    .rounded(px(ROW_RADIUS))
+                    .bg(theme::warning_bg())
+                    .text_size(px(12.))
+                    .text_color(theme::warning())
+                    .child(div().flex_1().child(notice.text.clone()))
+                    .child(
+                        div()
+                            .id("notice-undo")
+                            .px_2()
+                            .rounded(px(ROW_RADIUS))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::hover()))
+                            .child("Undo")
+                            .on_click(cx.listener(|this, _, _, cx| this.undo_notice(cx))),
+                    )
+                    .child(
+                        div()
+                            .id("notice-dismiss")
+                            .px_2()
+                            .rounded(px(ROW_RADIUS))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::hover()))
+                            .child("✕")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.notice = None;
+                                cx.notify();
+                            })),
+                    )
             }))
             .child(
                 div()
@@ -1807,6 +1913,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::set_structural))
             .on_action(cx.listener(Self::open_settings_action))
             .on_action(cx.listener(Self::find_action))
+            .on_action(cx.listener(Self::next_match))
+            .on_action(cx.listener(Self::previous_match))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| this.find_key(event, cx)))
             .on_action(cx.listener(Self::toggle_wrap))
             .on_action(cx.listener(Self::toggle_full_context))

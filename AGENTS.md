@@ -16,7 +16,7 @@ Feature specs, UI mockups and design decisions: the sibling repo `../Design` —
   change. It builds with `runtime_shaders`, so full Xcode is not needed.
 - **One Dark** is the only theme, for the UI and for code.
 - **Checking the UI** needs no screen access: `GITLANCE_SNAPSHOT=<file.png> cargo run --features snapshot -- <repo>`
-  renders the window offscreen to a PNG and quits, without taking focus. `GITLANCE_SNAPSHOT_VIEW=unified,lines,words,structural,underlined,wrap,all-lines,whitespace,settings,menu`
+  renders the window offscreen to a PNG and quits, without taking focus. `GITLANCE_SNAPSHOT_VIEW=unified,lines,words,structural,underlined,wrap,all-lines,whitespace,settings,menu,notice`
   turns view options (or the Settings page) on, unsaved; `GITLANCE_SNAPSHOT_SEARCH=<text>` fills the commit search; `GITLANCE_SNAPSHOT_VERSIONS=1` compares the first and last versions.
   Never drive the real mouse or keyboard for a check: the developer is using the machine.
 - Layout: `src/git/` (read-only git layer, tested on temp repos), `src/highlight.rs` (syntect, One Dark), `src/structural.rs` (difftastic), `src/worddiff.rs` (changed words), `src/search.rs` (commit search),

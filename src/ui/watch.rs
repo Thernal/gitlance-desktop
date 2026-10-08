@@ -229,8 +229,10 @@ impl Workspace {
         let new = old_first.and_then(|id| commits.iter().position(|c| c.id == id));
         if first_same {
             // Only the reflog moved: a new version of the same history.
+            let seen = self.versions.len();
             self.mark_new_versions(versions.len());
             self.versions = versions;
+            self.follow_latest_version(seen, cx);
             return self.set_status(Status::Reloaded, cx);
         }
         self.watch.pending = Some(Pending {
@@ -256,6 +258,7 @@ impl Workspace {
             Selection::Commit(ix) => self.commits.get(ix).map(|c| c.id),
             _ => None,
         };
+        let seen = self.versions.len();
         self.mark_new_versions(pending.versions.len());
         self.versions = pending.versions;
         self.commits = pending.commits;
@@ -274,7 +277,58 @@ impl Workspace {
             }
             _ => self.clear_diff(),
         }
+        self.follow_latest_version(seen, cx);
         self.set_status(Status::Reloaded, cx);
+    }
+
+    /// A version comparison that ended at the latest version moves on to a newer one, in place:
+    /// same file, same scroll position, and a notice that can undo it. Commits never need this —
+    /// a commit's diff cannot change.
+    fn follow_latest_version(&mut self, seen: usize, cx: &mut Context<Self>) {
+        let Selection::Versions { from, to } = self.selection else {
+            return;
+        };
+        let latest = self.versions.len().saturating_sub(1);
+        if seen == 0 || to + 1 != seen || latest <= to {
+            return;
+        }
+        let file = self
+            .diff
+            .as_ref()
+            .and_then(|d| d.files.get(self.file))
+            .map(|f| f.path().to_owned());
+        if let Some(path) = file.clone() {
+            self.restore_scroll = Some((path, self.diff_list.logical_scroll_top()));
+        }
+        let undo = self.selection;
+        self.load_versions(from, latest, file, cx);
+        // `load_versions` clears the notice of the diff it replaces; this one belongs to the new.
+        self.notice = Some(super::Notice {
+            text: format!(
+                "v{} arrived — this comparison now ends at v{}.",
+                self.versions[latest].number, self.versions[latest].number
+            ),
+            undo,
+        });
+    }
+
+    /// Goes back to the comparison a notice replaced, at the same place in the file.
+    pub(super) fn undo_notice(&mut self, cx: &mut Context<Self>) {
+        let Some(notice) = self.notice.take() else {
+            return;
+        };
+        let Selection::Versions { from, to } = notice.undo else {
+            return;
+        };
+        let file = self
+            .diff
+            .as_ref()
+            .and_then(|d| d.files.get(self.file))
+            .map(|f| f.path().to_owned());
+        if let Some(path) = file.clone() {
+            self.restore_scroll = Some((path, self.diff_list.logical_scroll_top()));
+        }
+        self.load_versions(from, to, file, cx);
     }
 
     /// The title bar's quiet status.

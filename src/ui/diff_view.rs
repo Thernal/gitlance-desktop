@@ -3,6 +3,7 @@
 use super::rows::{self, Cell, FileData, Row, Side};
 use super::{DIFF_ROW, ROW_RADIUS, theme};
 use crate::git::LineKind;
+use crate::search;
 use crate::storage::MarkStyle;
 use gpui::{
     AnyElement, App, FontStyle, HighlightStyle, Rgba, SharedString, StyledText, UnderlineStyle,
@@ -15,7 +16,7 @@ const SIGN_WIDTH: f32 = 16.;
 
 /// How rows are drawn right now.
 #[derive(Clone, Copy)]
-pub struct RowStyle {
+pub struct RowStyle<'a> {
     pub wrap: bool,
     /// Horizontal scroll, in pixels, when not wrapping.
     pub offset: f32,
@@ -23,9 +24,11 @@ pub struct RowStyle {
     pub gutter: f32,
     /// How changed words are drawn.
     pub marks: MarkStyle,
+    /// Words the commit search is looking for; highlighted wherever they appear.
+    pub terms: &'a [String],
 }
 
-impl RowStyle {
+impl RowStyle<'_> {
     /// The width taken by line numbers (and signs) in one row.
     pub fn chrome(&self, unified: bool) -> f32 {
         if unified {
@@ -39,7 +42,7 @@ impl RowStyle {
 pub fn row(
     data: &FileData,
     row: Row,
-    style: RowStyle,
+    style: RowStyle<'_>,
     on_expand: impl Fn(usize, &mut App) + 'static,
 ) -> AnyElement {
     match row {
@@ -104,7 +107,12 @@ pub fn row(
 }
 
 /// One side of a split row; an empty side is shaded.
-fn half(side: &Side, cell: Option<Cell>, old: bool, style: RowStyle) -> impl IntoElement {
+fn half(
+    side: &Side,
+    cell: Option<Cell>,
+    old: bool,
+    style: RowStyle<'_>,
+) -> impl IntoElement + use<> {
     let half = div().flex_1().min_w_0().flex();
     let Some(cell) = cell else {
         return half.bg(theme::panel());
@@ -115,7 +123,7 @@ fn half(side: &Side, cell: Option<Cell>, old: bool, style: RowStyle) -> impl Int
         .child(code(side, cell, old, style))
 }
 
-fn gutter(line: Option<u32>, bg: Option<Rgba>, style: RowStyle) -> impl IntoElement {
+fn gutter(line: Option<u32>, bg: Option<Rgba>, style: RowStyle<'_>) -> impl IntoElement + use<> {
     div()
         .w(px(style.gutter))
         .flex_none()
@@ -127,9 +135,10 @@ fn gutter(line: Option<u32>, bg: Option<Rgba>, style: RowStyle) -> impl IntoElem
         .children(line.map(|l| l.to_string()))
 }
 
-fn code(side: &Side, cell: Cell, old: bool, style: RowStyle) -> impl IntoElement {
+fn code(side: &Side, cell: Cell, old: bool, style: RowStyle<'_>) -> impl IntoElement + use<> {
     let (text, spans, marks) = side.line(cell.line);
-    let runs = rows::runs(text, spans, marks);
+    let found = search::highlights(text, style.terms);
+    let runs = rows::runs(text, spans, marks, &found);
     let (text, map) = rows::expand_tabs(text, TAB_WIDTH);
     let highlights: Vec<_> = runs
         .into_iter()
@@ -139,7 +148,12 @@ fn code(side: &Side, cell: Cell, old: bool, style: RowStyle) -> impl IntoElement
                 HighlightStyle {
                     color: run.color.map(theme::code),
                     font_style: run.italic.then_some(FontStyle::Italic),
-                    ..if run.marked {
+                    ..if run.found {
+                        HighlightStyle {
+                            background_color: Some(theme::warning_bg().into()),
+                            ..Default::default()
+                        }
+                    } else if run.marked {
                         word_mark(style.marks, old)
                     } else {
                         HighlightStyle::default()
