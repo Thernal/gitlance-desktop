@@ -4,8 +4,9 @@
 
 use crate::git::{FileDiff, LineKind};
 use crate::highlight::{self, Span};
-use crate::storage::ViewOptions;
+use crate::storage::{DiffMode, ViewOptions};
 use crate::structural::{self, Alignment};
+use crate::worddiff;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
@@ -127,7 +128,8 @@ pub struct FileData {
 }
 
 impl FileData {
-    pub fn build(file: &FileDiff, structural: bool) -> Self {
+    pub fn build(file: &FileDiff, mode: DiffMode) -> Self {
+        let structural = mode == DiffMode::Structural;
         let old_path = file.old_path.as_deref().unwrap_or(file.path());
         let mut old = Side::new(old_path, file.old_text.clone());
         let mut new = Side::new(file.path(), file.new_text.clone());
@@ -166,6 +168,9 @@ impl FileData {
                 Ok(None) => line_segments(file, old.count()),
             };
         }
+        if mode == DiffMode::Words {
+            word_marks(&mut old, &mut new, &segments);
+        }
         let gutter_digits = old.count().max(new.count()).to_string().len().max(3);
         let widest = old.widest().max(new.widest());
         Self {
@@ -180,6 +185,28 @@ impl FileData {
 
     pub fn side(&self, old: bool) -> &Side {
         if old { &self.old } else { &self.new }
+    }
+}
+
+/// Marks the words that changed in each removed line and the added line it is paired with.
+fn word_marks(old: &mut Side, new: &mut Side, segments: &[Segment]) {
+    for segment in segments {
+        let Segment::Change(pairs) = segment else {
+            continue;
+        };
+        for &(left, right) in pairs {
+            let (Some(left), Some(right)) = (left, right) else {
+                continue;
+            };
+            if !left.changed() || !right.changed() {
+                continue;
+            }
+            let (a, b) = (old.line(left.line).0, new.line(right.line).0);
+            if let Some((a, b)) = worddiff::marks(a, b) {
+                old.marks.insert(left.line, a);
+                new.marks.insert(right.line, b);
+            }
+        }
     }
 }
 
@@ -620,18 +647,45 @@ mod tests {
             new_text: Some("fn a() {}\nfn b() {}\nfn c() {}\n".into()),
             note: None,
         };
-        for structural in [false, true] {
-            let data = FileData::build(&file, structural);
+        for mode in DiffMode::ALL {
+            let data = FileData::build(&file, mode);
             for unified in [false, true] {
                 let options = ViewOptions {
                     unified,
-                    structural,
+                    mode,
                     ..ViewOptions::default()
                 };
                 let rows = layout(&data, &options, &HashSet::new());
-                assert_eq!(rows.len(), 3, "structural={structural} unified={unified}");
+                assert_eq!(rows.len(), 3, "mode={mode:?} unified={unified}");
             }
         }
+    }
+
+    #[test]
+    fn words_mode_marks_changed_words_only_in_paired_lines() {
+        let file = FileDiff {
+            old_path: Some("a.txt".into()),
+            new_path: Some("a.txt".into()),
+            change: ChangeKind::Modified,
+            added: 2,
+            removed: 1,
+            hunks: vec![Hunk {
+                lines: vec![
+                    line(LineKind::Removed, Some(1), None),
+                    line(LineKind::Added, None, Some(1)),
+                    line(LineKind::Added, None, Some(2)),
+                ],
+            }],
+            old_text: Some("if a > b {\n".into()),
+            new_text: Some("if a >= b {\nbrand new line\n".into()),
+            note: None,
+        };
+        let lines = FileData::build(&file, DiffMode::Lines);
+        assert!(lines.old.marks.is_empty() && lines.new.marks.is_empty());
+        let words = FileData::build(&file, DiffMode::Words);
+        assert_eq!(words.old.marks.get(&1), Some(&vec![5..6]));
+        assert_eq!(words.new.marks.get(&1), Some(&vec![5..7]));
+        assert!(!words.new.marks.contains_key(&2));
     }
 
     #[test]

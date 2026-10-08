@@ -57,6 +57,15 @@ pub fn reason(reason: &str) -> &str {
     }
 }
 
+/// `path` with the home directory written as `~`.
+pub fn home_relative(path: &std::path::Path) -> String {
+    match std::env::home_dir().and_then(|home| path.strip_prefix(home).ok().map(|p| p.to_owned())) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

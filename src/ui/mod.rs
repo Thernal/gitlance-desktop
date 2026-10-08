@@ -1,21 +1,25 @@
 //! The GitLance window: branches, versions and commits on the left, the diff on the right.
 
 mod diff_view;
+mod find;
 mod format;
+mod icons;
 mod rows;
+mod settings;
 mod theme;
+mod watch;
 
 use crate::git::{
     BranchRef, ChangeKind, CommitInfo, DiffSettings, FileDiff, RefKind, Repo, Version,
 };
-use crate::storage::{self, Layout, ViewOptions};
+use crate::storage::{self, DiffMode, Layout, Settings, ViewOptions};
 use diff_view::{RowStyle, chip};
 use gpui::{
-    App, ClickEvent, Context, CursorStyle, FocusHandle, FontWeight, KeyBinding, ListAlignment,
-    ListState, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent, PathPromptOptions,
-    Point, Rgba, ScrollStrategy, ScrollWheelEvent, SharedString, Task, TitlebarOptions,
-    UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas, div, font, list,
-    prelude::*, px, size, uniform_list,
+    App, ClickEvent, Context, CursorStyle, FocusHandle, FontWeight, KeyBinding, KeyDownEvent,
+    ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent,
+    PathPromptOptions, Point, Rgba, ScrollStrategy, ScrollWheelEvent, SharedString, Task,
+    TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas,
+    div, font, list, prelude::*, px, size, uniform_list,
 };
 use rows::{FileData, Row};
 use std::cell::Cell as Shared;
@@ -34,7 +38,12 @@ actions!(
         PreviousFile,
         NextFile,
         ToggleUnified,
-        ToggleStructural,
+        CycleMode,
+        SetLines,
+        SetWords,
+        SetStructural,
+        OpenSettings,
+        Find,
         ToggleWrap,
         ToggleFullContext,
         ToggleWhitespace,
@@ -53,69 +62,84 @@ const ISLAND_RADIUS: f32 = 10.;
 const ROW_RADIUS: f32 = 6.;
 
 pub fn run(path: Option<PathBuf>) {
-    gpui_platform::application().run(move |cx: &mut App| {
-        cx.bind_keys([
-            KeyBinding::new("cmd-o", Open, None),
-            KeyBinding::new("cmd-r", Refresh, None),
-            KeyBinding::new("cmd-q", Quit, None),
-            KeyBinding::new("up", PreviousCommit, Some("Workspace")),
-            KeyBinding::new("down", NextCommit, Some("Workspace")),
-            KeyBinding::new("k", PreviousCommit, Some("Workspace")),
-            KeyBinding::new("j", NextCommit, Some("Workspace")),
-            KeyBinding::new("left", PreviousFile, Some("Workspace")),
-            KeyBinding::new("right", NextFile, Some("Workspace")),
-            KeyBinding::new("alt-u", ToggleUnified, Some("Workspace")),
-            KeyBinding::new("alt-d", ToggleStructural, Some("Workspace")),
-            KeyBinding::new("alt-z", ToggleWrap, Some("Workspace")),
-            KeyBinding::new("alt-e", ToggleFullContext, Some("Workspace")),
-            KeyBinding::new("alt-w", ToggleWhitespace, Some("Workspace")),
-        ]);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.set_menus(menus(&ViewOptions::load()));
+    gpui_platform::application()
+        .with_assets(icons::Icons)
+        .run(move |cx: &mut App| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-o", Open, None),
+                KeyBinding::new("cmd-r", Refresh, None),
+                KeyBinding::new("cmd-q", Quit, None),
+                KeyBinding::new("cmd-,", OpenSettings, None),
+                KeyBinding::new("cmd-f", Find, Some("Workspace")),
+                KeyBinding::new("up", PreviousCommit, Some("Workspace")),
+                KeyBinding::new("down", NextCommit, Some("Workspace")),
+                // Bare letters and arrows are typing while the search field is active.
+                KeyBinding::new("k", PreviousCommit, Some("Workspace && !Typing")),
+                KeyBinding::new("j", NextCommit, Some("Workspace && !Typing")),
+                KeyBinding::new("left", PreviousFile, Some("Workspace && !Typing")),
+                KeyBinding::new("right", NextFile, Some("Workspace && !Typing")),
+                KeyBinding::new("w", CycleMode, Some("Workspace && !Typing")),
+                KeyBinding::new("alt-u", ToggleUnified, Some("Workspace")),
+                KeyBinding::new("alt-d", CycleMode, Some("Workspace")),
+                KeyBinding::new("alt-z", ToggleWrap, Some("Workspace")),
+                KeyBinding::new("alt-e", ToggleFullContext, Some("Workspace")),
+                KeyBinding::new("alt-w", ToggleWhitespace, Some("Workspace")),
+            ]);
+            cx.on_action(|_: &Quit, cx| cx.quit());
+            cx.set_menus(menus(&ViewOptions::load(&Settings::load())));
 
-        let bounds = gpui::Bounds::centered(None, size(px(1480.), px(920.)), cx);
-        // A snapshot renders offscreen: no window shown, no focus taken.
-        let offscreen =
-            cfg!(feature = "snapshot") && std::env::var_os("GITLANCE_SNAPSHOT").is_some();
-        let options = WindowOptions {
-            show: !offscreen,
-            focus: !offscreen,
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions {
-                title: Some("GitLance".into()),
-                appears_transparent: true,
-                traffic_light_position: Some(Point::new(px(12.), px(12.))),
-            }),
-            window_min_size: Some(size(px(900.), px(500.))),
-            ..Default::default()
-        };
-        let window = cx
-            .open_window(options, |window, cx| {
-                cx.new(|cx| Workspace::new(path, window, cx))
-            })
-            .expect("open the window");
-        if !offscreen {
-            cx.activate(true);
-        }
-        #[cfg(feature = "snapshot")]
-        snapshot(window, cx);
-        #[cfg(not(feature = "snapshot"))]
-        let _ = window;
-    });
+            let bounds = gpui::Bounds::centered(None, size(px(1480.), px(920.)), cx);
+            // A snapshot renders offscreen: no window shown, no focus taken.
+            let offscreen =
+                cfg!(feature = "snapshot") && std::env::var_os("GITLANCE_SNAPSHOT").is_some();
+            let options = WindowOptions {
+                show: !offscreen,
+                focus: !offscreen,
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("GitLance".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(Point::new(px(12.), px(12.))),
+                }),
+                window_min_size: Some(size(px(900.), px(500.))),
+                ..Default::default()
+            };
+            let window = cx
+                .open_window(options, |window, cx| {
+                    cx.new(|cx| Workspace::new(path, window, cx))
+                })
+                .expect("open the window");
+            if !offscreen {
+                cx.activate(true);
+            }
+            #[cfg(feature = "snapshot")]
+            snapshot(window, cx);
+            #[cfg(not(feature = "snapshot"))]
+            let _ = window;
+        });
 }
 
 /// The menu bar; View items carry a check mark for the options in effect.
 fn menus(options: &ViewOptions) -> Vec<Menu> {
     vec![
-        Menu::new("GitLance").items([MenuItem::action("Quit GitLance", Quit)]),
+        Menu::new("GitLance").items([
+            MenuItem::action("Settings…", OpenSettings),
+            MenuItem::separator(),
+            MenuItem::action("Quit GitLance", Quit),
+        ]),
         Menu::new("File").items([
             MenuItem::action("Open Repository…", Open),
             MenuItem::action("Refresh", Refresh),
+            MenuItem::separator(),
+            MenuItem::action("Find Commits…", Find),
         ]),
         Menu::new("View").items([
             MenuItem::action("Unified Diff", ToggleUnified).checked(options.unified),
-            MenuItem::action("Structural Diff (difftastic)", ToggleStructural)
-                .checked(options.structural),
+            MenuItem::action("Line Diff", SetLines).checked(options.mode == DiffMode::Lines),
+            MenuItem::action("Word Diff", SetWords).checked(options.mode == DiffMode::Words),
+            MenuItem::action("Structural Diff (difftastic)", SetStructural)
+                .checked(options.mode == DiffMode::Structural),
+            MenuItem::separator(),
             MenuItem::separator(),
             MenuItem::action("Wrap Long Lines", ToggleWrap).checked(options.wrap),
             MenuItem::action("Show All Lines", ToggleFullContext).checked(options.full_context),
@@ -129,7 +153,6 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
 #[derive(Clone, Copy)]
 enum Opt {
     Unified,
-    Structural,
     Wrap,
     FullContext,
     Whitespace,
@@ -189,7 +212,31 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                     for name in view.split(',') {
                         let opt = match name.trim() {
                             "unified" => Opt::Unified,
-                            "structural" => Opt::Structural,
+                            "lines" => {
+                                this.set_mode(DiffMode::Lines, cx);
+                                continue;
+                            }
+                            "words" => {
+                                this.set_mode(DiffMode::Words, cx);
+                                continue;
+                            }
+                            "structural" => {
+                                this.set_mode(DiffMode::Structural, cx);
+                                continue;
+                            }
+                            "underlined" => {
+                                // Not saved either: only this frame.
+                                this.settings.mark_style = crate::storage::MarkStyle::Underlined;
+                                continue;
+                            }
+                            "menu" => {
+                                this.repo_menu = true;
+                                continue;
+                            }
+                            "settings" => {
+                                this.open_settings(cx);
+                                continue;
+                            }
                             "wrap" => Opt::Wrap,
                             "all-lines" => Opt::FullContext,
                             "whitespace" => Opt::Whitespace,
@@ -201,6 +248,16 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                 })
                 .ok();
             wait(1500).await;
+        }
+        if let Ok(text) = std::env::var("GITLANCE_SNAPSHOT_SEARCH") {
+            window
+                .update(cx, |this, _, cx| {
+                    this.find.text = Some(text);
+                    this.refilter();
+                    cx.notify();
+                })
+                .ok();
+            wait(800).await;
         }
         if versions {
             window
@@ -297,6 +354,12 @@ pub struct Workspace {
     diff: Option<Diff>,
     file: usize,
     options: ViewOptions,
+    settings: Settings,
+    settings_open: bool,
+    /// The repository menu in the title bar is open.
+    repo_menu: bool,
+    find: find::Find,
+    watch: watch::Watch,
     /// The selected file, built in the background.
     data: Option<Arc<FileData>>,
     /// `data` laid out for `options`.
@@ -324,6 +387,7 @@ impl Workspace {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let recent = storage::recent();
+        let settings = Settings::load();
         let start = path.or_else(|| recent.first().cloned());
         let mut this = Self {
             focus,
@@ -340,7 +404,12 @@ impl Workspace {
             selection: Selection::None,
             diff: None,
             file: 0,
-            options: ViewOptions::load(),
+            options: ViewOptions::load(&settings),
+            settings,
+            settings_open: false,
+            repo_menu: false,
+            find: find::Find::default(),
+            watch: watch::Watch::default(),
             data: None,
             rows: Vec::new(),
             expanded: HashSet::new(),
@@ -358,6 +427,7 @@ impl Workspace {
         if let Some(path) = start {
             this.open_repo(path, None, cx);
         }
+        Self::start_watching(cx);
         this
     }
 
@@ -376,13 +446,19 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move {
                     let repo = Repo::open(&path)?;
-                    anyhow::Ok((repo.root(), repo.branches()?))
+                    let git_dir = repo.git_dir();
+                    let fingerprint = crate::git::fingerprint(&git_dir);
+                    anyhow::Ok((repo.root(), repo.branches()?, git_dir, fingerprint))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 match loaded {
-                    Ok((root, branches)) => {
+                    Ok((root, branches, git_dir, fingerprint)) => {
                         this.recent = storage::remember(&root);
+                        if this.root.as_ref() != Some(&root) {
+                            this.find.reset();
+                        }
+                        this.watch.watch(git_dir, fingerprint);
                         this.root = Some(root);
                         this.branches = branches;
                         let (refname, commit) = keep.unzip();
@@ -404,6 +480,7 @@ impl Workspace {
     }
 
     fn clear_branch(&mut self) {
+        self.watch.forget();
         self.branch = None;
         self.versions.clear();
         self.commits.clear();
@@ -449,6 +526,8 @@ impl Workspace {
                     Ok((versions, commits)) => {
                         this.versions = versions;
                         this.commits = commits;
+                        this.refilter();
+                        this.index_paths(cx);
                         let ix = keep
                             .and_then(|id| this.commits.iter().position(|c| c.id == id))
                             .unwrap_or(0);
@@ -476,8 +555,10 @@ impl Workspace {
         };
         self.clear_diff();
         self.selection = Selection::Commit(ix);
-        self.commit_scroll
-            .scroll_to_item(ix, ScrollStrategy::Nearest);
+        if let Some(row) = self.row_of(ix) {
+            self.commit_scroll
+                .scroll_to_item(row, ScrollStrategy::Nearest);
+        }
         let id = commit.id;
         let settings = self.settings();
         self.load_diff(keep, cx, move || {
@@ -567,11 +648,11 @@ impl Workspace {
         self.file = ix;
         self.clear_file();
         self.file_scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
-        let structural = self.options.structural;
+        let mode = self.options.mode;
         self.view_task = Some(cx.spawn(async move |this, cx| {
             let data = cx
                 .background_executor()
-                .spawn(async move { FileData::build(&file, structural) })
+                .spawn(async move { FileData::build(&file, mode) })
                 .await;
             this.update(cx, |this, cx| {
                 this.data = Some(Arc::new(data));
@@ -617,7 +698,6 @@ impl Workspace {
     fn option(&self, opt: Opt) -> bool {
         match opt {
             Opt::Unified => self.options.unified,
-            Opt::Structural => self.options.structural,
             Opt::Wrap => self.options.wrap,
             Opt::FullContext => self.options.full_context,
             Opt::Whitespace => self.options.ignore_whitespace,
@@ -637,7 +717,6 @@ impl Workspace {
         }
         match opt {
             Opt::Unified => self.options.unified = value,
-            Opt::Structural => self.options.structural = value,
             Opt::Wrap => self.options.wrap = value,
             Opt::FullContext => self.options.full_context = value,
             Opt::Whitespace => self.options.ignore_whitespace = value,
@@ -647,9 +726,19 @@ impl Workspace {
             Opt::Unified | Opt::FullContext => self.relayout(),
             // Same rows, new heights.
             Opt::Wrap => self.diff_list.remeasure(),
-            Opt::Structural => self.select_file(self.file, cx),
             Opt::Whitespace => self.reload_diff(cx),
         }
+        cx.notify();
+    }
+
+    /// Changes what a diff marks inside changed lines. Not remembered: Settings holds the default.
+    fn set_mode(&mut self, mode: DiffMode, cx: &mut Context<Self>) {
+        if self.options.mode == mode {
+            return;
+        }
+        self.options.mode = mode;
+        cx.set_menus(menus(&self.options));
+        self.select_file(self.file, cx);
         cx.notify();
     }
 
@@ -676,6 +765,7 @@ impl Workspace {
         RowStyle {
             wrap: self.options.wrap,
             offset: self.offset,
+            marks: self.settings.mark_style,
             gutter: digits as f32 * self.char_width + 16.,
         }
     }
@@ -737,21 +827,29 @@ impl Workspace {
             _ => None,
         };
         let keep = branch.map(|b| (b.refname.clone(), commit));
+        self.watch.forget();
         self.open_repo(root, keep, cx);
     }
 
     fn previous_commit(&mut self, _: &PreviousCommit, _: &mut Window, cx: &mut Context<Self>) {
         if let Selection::Commit(ix) = self.selection
-            && ix > 0
+            && let Some(row) = self.row_of(ix)
+            && row > 0
         {
-            self.select_commit(ix - 1, cx);
+            self.select_commit(self.commit_at(row - 1), cx);
         }
     }
 
     fn next_commit(&mut self, _: &NextCommit, _: &mut Window, cx: &mut Context<Self>) {
         match self.selection {
-            Selection::Commit(ix) if ix + 1 < self.commits.len() => self.select_commit(ix + 1, cx),
-            Selection::None if !self.commits.is_empty() => self.select_commit(0, cx),
+            Selection::Commit(ix) => {
+                if let Some(row) = self.row_of(ix)
+                    && row + 1 < self.commit_rows()
+                {
+                    self.select_commit(self.commit_at(row + 1), cx);
+                }
+            }
+            Selection::None if self.commit_rows() > 0 => self.select_commit(self.commit_at(0), cx),
             _ => {}
         }
     }
@@ -773,8 +871,28 @@ impl Workspace {
         self.toggle(Opt::Unified, cx);
     }
 
-    fn toggle_structural(&mut self, _: &ToggleStructural, _: &mut Window, cx: &mut Context<Self>) {
-        self.toggle(Opt::Structural, cx);
+    fn cycle_mode(&mut self, _: &CycleMode, _: &mut Window, cx: &mut Context<Self>) {
+        self.set_mode(self.options.mode.next(), cx);
+    }
+
+    fn set_lines(&mut self, _: &SetLines, _: &mut Window, cx: &mut Context<Self>) {
+        self.set_mode(DiffMode::Lines, cx);
+    }
+
+    fn set_words(&mut self, _: &SetWords, _: &mut Window, cx: &mut Context<Self>) {
+        self.set_mode(DiffMode::Words, cx);
+    }
+
+    fn set_structural(&mut self, _: &SetStructural, _: &mut Window, cx: &mut Context<Self>) {
+        self.set_mode(DiffMode::Structural, cx);
+    }
+
+    fn open_settings_action(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(cx);
+    }
+
+    fn find_action(&mut self, _: &Find, _: &mut Window, cx: &mut Context<Self>) {
+        self.start_find(cx);
     }
 
     fn toggle_wrap(&mut self, _: &ToggleWrap, _: &mut Window, cx: &mut Context<Self>) {
@@ -896,11 +1014,10 @@ impl Workspace {
     // ---- rendering -----------------------------------------------------------------------
 
     fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let repo = self
-            .root
-            .as_ref()
-            .and_then(|r| r.file_name())
-            .map(|n| n.to_string_lossy().into_owned());
+        let repo = self.root.as_ref().and_then(|r| r.file_name()).map_or_else(
+            || "GitLance".to_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        );
         let branch = self
             .branch
             .and_then(|ix| self.branches.get(ix))
@@ -911,8 +1028,29 @@ impl Workspace {
             .flex()
             .items_center()
             .gap_3()
-            .pl(px(84.))
+            .pl(px(78.))
             .pr(px(GAP))
+            .child(
+                // The repository is a menu: open, refresh and the recent repositories.
+                div()
+                    .id("repo-menu")
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .h(px(28.))
+                    .px_2()
+                    .rounded(px(ROW_RADIUS))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .cursor_pointer()
+                    .when(self.repo_menu, |s| s.bg(theme::hover()))
+                    .hover(|s| s.bg(theme::hover()))
+                    .child(repo)
+                    .child(icons::icon("chevron").text_color(theme::muted()))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.repo_menu = !this.repo_menu;
+                        cx.notify();
+                    })),
+            )
             .child(
                 // The empty part of the bar: a double click zooms the window, as in other apps.
                 div()
@@ -927,21 +1065,118 @@ impl Workspace {
                             window.titlebar_double_click();
                         }
                     })
+                    .children(branch.map(|b| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .text_color(theme::muted())
+                            .child(icons::icon("branch").text_color(theme::muted()))
+                            .child(b)
+                    })),
+            )
+            .children(self.render_status(cx))
+            .child(
+                icon_button("settings-open", "settings", "Settings  ⌘,")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
+            )
+    }
+
+    /// The menu under the repository name, over a backdrop that closes it.
+    fn render_repo_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let item =
+            |id: &'static str, icon: &'static str, label: &'static str, key: &'static str| {
+                row(id, false)
+                    .h(px(30.))
+                    .gap_2()
+                    .child(icons::icon(icon).text_color(theme::muted()))
+                    .child(div().flex_1().child(label))
                     .child(
                         div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(repo.unwrap_or_else(|| "GitLance".to_owned())),
+                            .text_size(px(11.))
+                            .text_color(theme::faint())
+                            .child(key),
                     )
-                    .children(branch.map(|b| div().text_color(theme::muted()).child(b))),
-            )
-            .when(self.root.is_some(), |s| {
-                s.child(button("refresh", "Refresh", "⌘R").on_click(
-                    cx.listener(|this, _, window, cx| this.refresh(&Refresh, window, cx)),
-                ))
-            })
+            };
+        div()
+            .absolute()
+            .size_full()
             .child(
-                button("open", "Open…", "⌘O")
-                    .on_click(cx.listener(|this, _, window, cx| this.open(&Open, window, cx))),
+                div()
+                    .id("repo-menu-backdrop")
+                    .absolute()
+                    .size_full()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.repo_menu = false;
+                            cx.notify();
+                        }),
+                    ),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(TITLE_BAR - 4.))
+                    .left(px(78.))
+                    .w(px(340.))
+                    .p(px(6.))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(ISLAND_RADIUS))
+                    .border_1()
+                    .border_color(theme::island_border())
+                    .bg(theme::panel())
+                    .shadow_lg()
+                    .child(
+                        item("menu-open", "open", "Open repository…", "⌘O").on_click(cx.listener(
+                            |this, _, window, cx| {
+                                this.repo_menu = false;
+                                this.open(&Open, window, cx);
+                            },
+                        )),
+                    )
+                    .when(self.root.is_some(), |s| {
+                        s.child(item("menu-refresh", "refresh", "Refresh", "⌘R").on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.repo_menu = false;
+                                this.refresh(&Refresh, window, cx);
+                            }),
+                        ))
+                    })
+                    .children((!self.recent.is_empty()).then(|| {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(div().h(px(1.)).my(px(4.)).bg(theme::island_border()))
+                            .child(island_label("Recent"))
+                            .children(self.recent.iter().enumerate().map(|(ix, path)| {
+                                let target = path.clone();
+                                let name = path
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                                let parent =
+                                    path.parent().map(format::home_relative).unwrap_or_default();
+                                row(("menu-recent", ix), self.root.as_ref() == Some(path))
+                                    .h(px(30.))
+                                    .gap_2()
+                                    .child(div().child(name))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(11.))
+                                            .text_color(theme::faint())
+                                            .child(parent),
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.repo_menu = false;
+                                        this.open_repo(target.clone(), None, cx);
+                                    }))
+                            }))
+                    })),
             )
     }
 
@@ -1056,20 +1291,25 @@ impl Workspace {
                     .flex_1()
                     .min_h_0()
                     .child(island_label(format!("Commits · {}", self.commits.len())))
-                    .child(
+                    .child(self.render_find(cx))
+                    .children(self.render_pill(cx))
+                    .child(if self.find.shown.as_ref().is_some_and(Vec::is_empty) {
+                        self.render_no_match().into_any_element()
+                    } else {
                         uniform_list(
                             "commits",
-                            self.commits.len(),
+                            self.commit_rows(),
                             cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
                                 range
-                                    .map(|ix| this.render_commit_row(ix, cx))
+                                    .map(|row| this.render_commit_row(this.commit_at(row), cx))
                                     .collect::<Vec<_>>()
                             }),
                         )
                         .track_scroll(&self.commit_scroll)
                         .flex_1()
-                        .pb(px(6.)),
-                    ),
+                        .pb(px(6.))
+                        .into_any_element()
+                    }),
             )
     }
 
@@ -1124,6 +1364,9 @@ impl Workspace {
                     .when(ix == latest && role.is_none(), |s| {
                         s.child(tag("latest", theme::faint()))
                     })
+                    .when(self.watch.new_from.is_some_and(|from| ix >= from), |s| {
+                        s.child(tag("new", theme::accent()))
+                    })
                     .on_click(
                         cx.listener(move |this, event, _, cx| this.click_version(ix, event, cx)),
                     );
@@ -1139,7 +1382,12 @@ impl Workspace {
             .flex_col()
             .items_start()
             .justify_center()
-            .child(div().w_full().truncate().child(commit.summary.clone()))
+            .child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .child(self.summary_text(&commit.summary.clone().into())),
+            )
             .child(
                 div()
                     .w_full()
@@ -1235,16 +1483,13 @@ impl Workspace {
                     .child(chip("split", "Split", !o.unified).on_click(set(Opt::Unified, false)))
                     .child(chip("unified", "Unified", o.unified).on_click(set(Opt::Unified, true))),
             )
-            .child(
-                diff_view::group()
-                    .child(
-                        chip("line", "Line", !o.structural).on_click(set(Opt::Structural, false)),
-                    )
-                    .child(
-                        chip("structural", "Structural", o.structural)
-                            .on_click(set(Opt::Structural, true)),
-                    ),
-            )
+            .child(diff_view::group().children(DiffMode::ALL.map(|mode| {
+                chip(mode.label(), mode.label(), o.mode == mode).on_click(cx.listener(
+                    move |this: &mut Self, _: &ClickEvent, _: &mut Window, cx| {
+                        this.set_mode(mode, cx)
+                    },
+                ))
+            })))
             .child(
                 diff_view::group()
                     .child(chip("wrap", "Wrap", o.wrap).on_click(toggle(Opt::Wrap)))
@@ -1543,7 +1788,11 @@ impl Render for Workspace {
 
         div()
             .id("workspace")
-            .key_context("Workspace")
+            .key_context(if self.find.text.is_some() {
+                "Workspace Typing"
+            } else {
+                "Workspace"
+            })
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::open))
             .on_action(cx.listener(Self::refresh))
@@ -1552,7 +1801,13 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::previous_file))
             .on_action(cx.listener(Self::next_file))
             .on_action(cx.listener(Self::toggle_unified))
-            .on_action(cx.listener(Self::toggle_structural))
+            .on_action(cx.listener(Self::cycle_mode))
+            .on_action(cx.listener(Self::set_lines))
+            .on_action(cx.listener(Self::set_words))
+            .on_action(cx.listener(Self::set_structural))
+            .on_action(cx.listener(Self::open_settings_action))
+            .on_action(cx.listener(Self::find_action))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| this.find_key(event, cx)))
             .on_action(cx.listener(Self::toggle_wrap))
             .on_action(cx.listener(Self::toggle_full_context))
             .on_action(cx.listener(Self::toggle_whitespace))
@@ -1569,6 +1824,7 @@ impl Render for Workspace {
                 })
             })
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(theme::base())
@@ -1589,6 +1845,7 @@ impl Render for Workspace {
                     .child(e)
             }))
             .child(match self.root {
+                _ if self.settings_open => self.render_settings(cx).into_any_element(),
                 None => self.render_welcome(cx).into_any_element(),
                 Some(_) => div()
                     .flex_1()
@@ -1601,6 +1858,8 @@ impl Render for Workspace {
                     .child(self.render_diff(cx))
                     .into_any_element(),
             })
+            // Last, so it paints over everything.
+            .children(self.repo_menu.then(|| self.render_repo_menu(cx)))
     }
 }
 
@@ -1734,6 +1993,50 @@ fn tag(text: &'static str, color: Rgba) -> impl IntoElement {
         .text_size(px(10.))
         .text_color(color)
         .child(text)
+}
+
+/// A square icon button for the title bar; the tooltip names it and its shortcut.
+fn icon_button(
+    id: &'static str,
+    icon: &'static str,
+    tip: &'static str,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .size(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(ROW_RADIUS))
+        .group(id)
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::hover()))
+        // An svg takes its colour from itself, not from its parent.
+        .child(
+            icons::icon(icon)
+                .text_color(theme::muted())
+                .group_hover(id, |s| s.text_color(theme::text())),
+        )
+        .tooltip(move |_, cx| cx.new(|_| Tip(tip)).into())
+}
+
+/// A tooltip: a small panel with a line of text.
+struct Tip(&'static str);
+
+impl Render for Tip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .mt(px(6.))
+            .px_2()
+            .py_1()
+            .rounded(px(ROW_RADIUS))
+            .border_1()
+            .border_color(theme::island_border())
+            .bg(theme::hover())
+            .text_size(px(11.))
+            .text_color(theme::text())
+            .child(self.0)
+    }
 }
 
 fn button(

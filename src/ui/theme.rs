@@ -67,6 +67,21 @@ pub fn warning() -> Rgba {
     rgb(crate::highlight::palette::ORANGE)
 }
 
+/// The tint behind a search match.
+pub fn warning_bg() -> Rgba {
+    rgba(0xd19a6633)
+}
+
+/// The focus ring of a text field.
+pub fn focus() -> Rgba {
+    rgb(crate::highlight::palette::PURPLE)
+}
+
+/// The tint behind the new-commits pill.
+pub fn info_bg() -> Rgba {
+    rgba(0x61afef24)
+}
+
 /// A pane splitter under the pointer or being dragged.
 pub fn splitter() -> Rgba {
     rgba(0x61afef99)

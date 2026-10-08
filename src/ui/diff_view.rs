@@ -3,8 +3,10 @@
 use super::rows::{self, Cell, FileData, Row, Side};
 use super::{DIFF_ROW, ROW_RADIUS, theme};
 use crate::git::LineKind;
+use crate::storage::MarkStyle;
 use gpui::{
-    AnyElement, App, FontStyle, HighlightStyle, Rgba, SharedString, StyledText, div, prelude::*, px,
+    AnyElement, App, FontStyle, HighlightStyle, Rgba, SharedString, StyledText, UnderlineStyle,
+    div, prelude::*, px,
 };
 
 const TAB_WIDTH: usize = 4;
@@ -19,6 +21,8 @@ pub struct RowStyle {
     pub offset: f32,
     /// Width of one line-number column.
     pub gutter: f32,
+    /// How changed words are drawn.
+    pub marks: MarkStyle,
 }
 
 impl RowStyle {
@@ -127,11 +131,6 @@ fn code(side: &Side, cell: Cell, old: bool, style: RowStyle) -> impl IntoElement
     let (text, spans, marks) = side.line(cell.line);
     let runs = rows::runs(text, spans, marks);
     let (text, map) = rows::expand_tabs(text, TAB_WIDTH);
-    let mark = if old {
-        theme::removed_word()
-    } else {
-        theme::added_word()
-    };
     let highlights: Vec<_> = runs
         .into_iter()
         .map(|run| {
@@ -140,8 +139,11 @@ fn code(side: &Side, cell: Cell, old: bool, style: RowStyle) -> impl IntoElement
                 HighlightStyle {
                     color: run.color.map(theme::code),
                     font_style: run.italic.then_some(FontStyle::Italic),
-                    background_color: run.marked.then(|| mark.into()),
-                    ..Default::default()
+                    ..if run.marked {
+                        word_mark(style.marks, old)
+                    } else {
+                        HighlightStyle::default()
+                    }
                 },
             )
         })
@@ -157,6 +159,57 @@ fn code(side: &Side, cell: Cell, old: bool, style: RowStyle) -> impl IntoElement
             .child(text)
     };
     div().flex_1().min_w_0().overflow_hidden().child(line)
+}
+
+/// How a changed word is drawn: a stronger tint, or an underline in the line's own hue.
+fn word_mark(marks: MarkStyle, removed: bool) -> HighlightStyle {
+    let (tint, ink) = if removed {
+        (theme::removed_word(), theme::removed())
+    } else {
+        (theme::added_word(), theme::added())
+    };
+    match marks {
+        MarkStyle::Tinted => HighlightStyle {
+            background_color: Some(tint.into()),
+            ..Default::default()
+        },
+        MarkStyle::Underlined => HighlightStyle {
+            underline: Some(UnderlineStyle {
+                thickness: px(2.),
+                color: Some(ink.into()),
+                wavy: false,
+            }),
+            ..Default::default()
+        },
+    }
+}
+
+/// Two sample lines, for the Settings page: what a changed word looks like in `marks`.
+pub fn mark_preview(marks: MarkStyle) -> impl IntoElement {
+    let line = |text: &'static str, removed: bool, changed: &'static str| {
+        let at = text.find(changed).unwrap_or(0);
+        let (line_bg, _) = tints(if removed {
+            LineKind::Removed
+        } else {
+            LineKind::Added
+        });
+        div()
+            .w_full()
+            .h(px(DIFF_ROW))
+            .px_3()
+            .when_some(line_bg, |s, bg| s.bg(bg))
+            .font_family(theme::CODE_FONT)
+            .text_size(px(super::CODE_SIZE))
+            .line_height(px(DIFF_ROW))
+            .child(
+                StyledText::new(text)
+                    .with_highlights([(at..at + changed.len(), word_mark(marks, removed))]),
+            )
+    };
+    div()
+        .py(px(4.))
+        .child(line("    if commits.len() > MAX_COMMITS {", true, ">"))
+        .child(line("    if commits.len() >= MAX_COMMITS {", false, ">="))
 }
 
 fn tints(kind: LineKind) -> (Option<Rgba>, Option<Rgba>) {
