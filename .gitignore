@@ -1,0 +1,10 @@
+# Rust
+/target/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Agent scratch
+.misc/

@@ -1,0 +1,9 @@
+[package]
+name = "gitlance"
+version = "0.1.0"
+edition = "2024"
+description = "Review uncommitted work and branches on macOS, without an IDE and without worktrees."
+license = "MIT"
+publish = false
+
+[dependencies]
