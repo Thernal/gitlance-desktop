@@ -2,8 +2,23 @@
 name = "gitlance"
 version = "0.1.0"
 edition = "2024"
-description = "Review uncommitted work and branches on macOS, without an IDE and without worktrees."
+description = "Review commits and force-pushed branch versions on macOS, without an IDE and without worktrees."
 license = "MIT"
 publish = false
 
 [dependencies]
+anyhow = "1"
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
+# GPUI is pre-1.0: pinned to the gpui-pre snapshot of zed@279fe07. An upgrade is its own change.
+gpui = { package = "gpui-pre", version = "=0.3.8" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = ["runtime_shaders", "font-kit"] }
+syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-onig"] }
+two-face = "0.5"
+
+[features]
+# `GITLANCE_SNAPSHOT=<file.png>` renders the window to a PNG and quits — UI checks without screen access.
+snapshot = ["dep:image", "gpui/test-support", "gpui_platform/test-support"]
+
+[dev-dependencies]
+tempfile = "3"
