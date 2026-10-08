@@ -83,12 +83,12 @@ impl AssetSource for Icons {
     }
 }
 
-/// A 16 px icon in the current text colour.
+/// An 18 px icon; set its colour on the icon itself (an svg takes none from its parent).
 pub fn icon(name: &'static str) -> Svg {
     debug_assert!(ICONS.iter().any(|(n, _)| *n == name), "unknown icon {name}");
     svg()
         .path(format!("icons/{name}.svg"))
-        .size(px(16.))
+        .size(px(18.))
         .flex_none()
 }
 

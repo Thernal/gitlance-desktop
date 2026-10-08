@@ -38,8 +38,8 @@ pub fn marks(old: &str, new: &str) -> Option<LineMarks> {
     Some((changed(old, &a, &keep_a), changed(new, &b, &keep_b)))
 }
 
-/// Runs of word characters, runs of whitespace, and single other characters.
-fn words(text: &str) -> Vec<Range<usize>> {
+/// Runs of word characters, runs of whitespace, runs of operator characters and single others.
+pub fn words(text: &str) -> Vec<Range<usize>> {
     #[derive(PartialEq)]
     enum Class {
         Word,

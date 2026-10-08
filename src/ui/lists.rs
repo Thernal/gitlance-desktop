@@ -299,7 +299,7 @@ impl Workspace {
             .px_2()
             .h(px(26.))
             .rounded(px(super::ROW_RADIUS))
-            .border_1()
+            .border_2()
             .border_color(if active {
                 theme::focus()
             } else {
@@ -309,14 +309,16 @@ impl Workspace {
             .cursor_text()
             .on_click(on_click)
             .child(div().text_color(theme::faint()).child("⌕"))
-            .child(if text.is_empty() {
-                div().flex_1().text_color(theme::faint()).child(placeholder)
-            } else {
-                div().flex_1().min_w_0().truncate().child(text)
-            })
+            .child(input::field_text(
+                &text,
+                active,
+                self.field_all,
+                placeholder,
+            ))
     }
 
     pub(super) fn start_field(&mut self, field: Field, cx: &mut Context<Self>) {
+        self.field_all = false;
         self.find.text = None;
         self.dfind = None;
         self.dterms = Default::default();
@@ -338,12 +340,12 @@ impl Workspace {
             Field::Branches => &mut self.bfilter,
             Field::Files => &mut self.pfilter,
         };
-        match input::edit(text, &event.keystroke, cx) {
+        match input::edit(text, &mut self.field_all, &event.keystroke, cx) {
             Edit::Escape => {
                 text.clear();
                 self.field = None;
             }
-            Edit::Changed | Edit::Enter { .. } | Edit::Ignored => {}
+            Edit::Changed | Edit::Selected | Edit::Enter { .. } | Edit::Ignored => {}
         }
         cx.notify();
         true

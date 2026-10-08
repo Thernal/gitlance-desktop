@@ -1,6 +1,7 @@
 //! Drawing one row of a file diff, and the small controls above it.
 
 use super::rows::{self, Cell, FileData, Row, Side};
+use super::select::Sel;
 use super::{DIFF_ROW, ROW_RADIUS, theme};
 use crate::git::LineKind;
 use crate::search;
@@ -29,8 +30,8 @@ pub struct RowStyle<'a> {
     pub terms: &'a [String],
     /// This row is the one the find bar is on: its matches are drawn solid, not tinted.
     pub strong: bool,
-    /// The selected lines: (on the removed side, first line, last line).
-    pub sel: Option<(bool, u32, u32)>,
+    /// The selected text.
+    pub sel: Option<Sel>,
 }
 
 impl RowStyle<'_> {
@@ -46,8 +47,10 @@ impl RowStyle<'_> {
 
 /// A callback about a diff line: (on the removed side, line number, …).
 type OnLine = Box<dyn Fn(bool, u32, &mut App)>;
-/// … with whether ⇧ was held.
-type OnPress = Box<dyn Fn(bool, u32, bool, &mut App)>;
+/// … with the byte under the pointer, the click count and whether ⇧ was held.
+type OnPress = Box<dyn Fn(bool, u32, usize, usize, bool, &mut App)>;
+/// … with the byte under the pointer.
+type OnDrag = Box<dyn Fn(bool, u32, usize, &mut App)>;
 /// … with a window position.
 type OnContext = Box<dyn Fn(bool, u32, Point<Pixels>, &mut App)>;
 
@@ -55,10 +58,10 @@ type OnContext = Box<dyn Fn(bool, u32, Point<Pixels>, &mut App)>;
 pub struct Events {
     /// A gutter's + was clicked.
     pub comment: OnLine,
-    /// The mouse went down on a line; whether ⇧ was held.
+    /// The mouse went down on a line.
     pub press: OnPress,
     /// The pointer moved over a line with the button down.
-    pub drag: OnLine,
+    pub drag: OnDrag,
     /// A right click on a line, at a window position.
     pub context: OnContext,
 }
@@ -212,7 +215,12 @@ fn code(
 ) -> impl IntoElement + use<> {
     let (text, spans, marks) = side.line(cell.line);
     let found = search::highlights(text, style.terms);
-    let runs = rows::runs(text, spans, marks, &found);
+    let picked = style
+        .sel
+        .filter(|s| s.old == old)
+        .and_then(|s| s.in_line(cell.line, text.len()));
+    let runs = rows::runs(text, spans, marks, &found, picked);
+    let original = text.to_owned();
     let (text, map) = rows::expand_tabs(text, TAB_WIDTH);
     let highlights: Vec<_> = runs
         .into_iter()
@@ -222,7 +230,12 @@ fn code(
                 HighlightStyle {
                     color: run.color.map(theme::code),
                     font_style: run.italic.then_some(FontStyle::Italic),
-                    ..if run.found && style.strong {
+                    ..if run.selected {
+                        HighlightStyle {
+                            background_color: Some(theme::selection().into()),
+                            ..Default::default()
+                        }
+                    } else if run.found && style.strong {
                         HighlightStyle {
                             color: Some(theme::base().into()),
                             background_color: Some(theme::warning().into()),
@@ -243,6 +256,16 @@ fn code(
         })
         .collect();
     let text = StyledText::new(text).with_highlights(highlights);
+    // Where a pointer position falls in the line's own text: the shaped text knows its columns, the
+    // map undoes the tab expansion.
+    let layout = text.layout().clone();
+    let at: Rc<dyn Fn(Point<Pixels>) -> usize> = {
+        let map = Rc::new((map, original));
+        Rc::new(move |position| {
+            let expanded = layout.index_for_position(position).unwrap_or_else(|e| e);
+            to_original(&map.0, &map.1, expanded)
+        })
+    };
     let line = div().pl_2();
     let line = if style.wrap {
         line.child(text)
@@ -252,30 +275,48 @@ fn code(
             .whitespace_nowrap()
             .child(text)
     };
-    let selected = style
-        .sel
-        .is_some_and(|(o, lo, hi)| o == old && (lo..=hi).contains(&cell.line));
     let line_no = cell.line;
     let (press, drag, context) = (events.clone(), events.clone(), events);
+    let (at_press, at_drag) = (at.clone(), at);
     div()
         .id("code")
         .flex_1()
         .min_w_0()
         .overflow_hidden()
-        .when(selected, |s| s.bg(theme::selection()))
+        .cursor_text()
         .child(line)
-        // A press selects the line, a drag extends the selection, a right click opens the menu.
+        // A press puts the caret (or takes a word, or the line), a drag selects, a right click
+        // opens the menu.
         .on_mouse_down(MouseButton::Left, move |event, _, cx| {
-            (press.press)(old, line_no, event.modifiers.shift, cx)
+            (press.press)(
+                old,
+                line_no,
+                at_press(event.position),
+                event.click_count,
+                event.modifiers.shift,
+                cx,
+            )
         })
         .on_mouse_move(move |event, _, cx| {
             if event.pressed_button == Some(MouseButton::Left) {
-                (drag.drag)(old, line_no, cx)
+                (drag.drag)(old, line_no, at_drag(event.position), cx)
             }
         })
         .on_mouse_down(MouseButton::Right, move |event, _, cx| {
             (context.context)(old, line_no, event.position, cx)
         })
+}
+
+/// The byte of the original text that tab-expanded byte `expanded` came from.
+fn to_original(map: &[usize], text: &str, expanded: usize) -> usize {
+    if expanded >= map[text.len()] {
+        return text.len();
+    }
+    text.char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| map[i] <= expanded)
+        .last()
+        .unwrap_or(0)
 }
 
 /// How a changed word is drawn: a stronger tint, or an underline in the line's own hue.
@@ -369,4 +410,20 @@ pub fn group() -> gpui::Div {
         .p(px(2.))
         .rounded(px(ROW_RADIUS + 2.))
         .bg(theme::base())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_position_in_expanded_text_maps_back_to_the_original_byte() {
+        let (_, map) = rows::expand_tabs("\tab\tc", 4);
+        // "    ab  c": the tab is columns 0..4, a=4, b=5, tab=6..8, c=8.
+        assert_eq!(to_original(&map, "\tab\tc", 0), 0);
+        assert_eq!(to_original(&map, "\tab\tc", 3), 0);
+        assert_eq!(to_original(&map, "\tab\tc", 4), 1);
+        assert_eq!(to_original(&map, "\tab\tc", 6), 3);
+        assert_eq!(to_original(&map, "\tab\tc", 99), 5);
+    }
 }

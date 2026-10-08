@@ -92,6 +92,8 @@ impl Workspace {
     }
 
     pub(super) fn start_find(&mut self, cx: &mut Context<Self>) {
+        self.field_all = false;
+        self.field = None;
         self.settings_open = false;
         self.dfind = None;
         self.dterms = Arc::default();
@@ -222,16 +224,18 @@ impl Workspace {
             return;
         }
         if let Some(mut text) = self.dfind.clone() {
-            match input::edit(&mut text, key, cx) {
+            match input::edit(&mut text, &mut self.field_all, key, cx) {
                 Edit::Changed => self.set_dfind(text, cx),
+                Edit::Selected => cx.notify(),
                 Edit::Enter { shift } => self.step_match(!shift, cx),
                 Edit::Escape | Edit::Ignored => {}
             }
             return;
         }
         if let Some(mut text) = self.find.text.clone() {
-            match input::edit(&mut text, key, cx) {
+            match input::edit(&mut text, &mut self.field_all, key, cx) {
                 Edit::Changed => self.set_find_text(text, cx),
+                Edit::Selected => cx.notify(),
                 Edit::Enter { .. } => {
                     if self.commit_rows() > 0 {
                         self.select_commit(self.commit_at(0), cx);
@@ -246,6 +250,8 @@ impl Workspace {
 
     /// ⌘F: a find bar over the open diff, like the page find of a browser or an IDE.
     pub(super) fn start_dfind(&mut self, cx: &mut Context<Self>) {
+        self.field_all = false;
+        self.field = None;
         self.settings_open = false;
         self.find.text = None;
         self.refilter();
@@ -311,15 +317,16 @@ impl Workspace {
                         .h(px(26.))
                         .px_2()
                         .rounded(px(super::ROW_RADIUS))
-                        .border_1()
+                        .border_2()
                         .border_color(theme::focus())
                         .bg(theme::base())
                         .child(div().text_color(theme::faint()).child("⌕"))
-                        .child(if text.is_empty() {
-                            div().text_color(theme::faint()).child("Find in this diff")
-                        } else {
-                            div().child(text)
-                        }),
+                        .child(input::field_text(
+                            &text,
+                            true,
+                            self.field_all,
+                            "Find in this diff",
+                        )),
                 )
                 .child(
                     div()
@@ -402,7 +409,7 @@ impl Workspace {
             .px_2()
             .h(px(28.))
             .rounded(px(super::ROW_RADIUS))
-            .border_1()
+            .border_2()
             .border_color(if active {
                 theme::focus()
             } else {
@@ -412,19 +419,17 @@ impl Workspace {
             .cursor_text()
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.start_find(cx)))
             .child(div().text_color(theme::faint()).child("⌕"))
-            .child(if text.is_empty() {
-                div()
-                    .flex_1()
-                    .text_color(theme::faint())
-                    .child("Search commits")
-            } else {
-                div().flex_1().min_w_0().truncate().child(text.clone())
-            })
+            .child(input::field_text(
+                &text,
+                active,
+                self.field_all,
+                "Search commits",
+            ))
             .child(
                 div()
                     .text_size(px(11.))
                     .text_color(theme::faint())
-                    .child(if text.is_empty() { "⌘F" } else { "esc" }),
+                    .child(if text.is_empty() { "⌘⇧F" } else { "esc" }),
             );
         let tags = active.then(|| {
             div()

@@ -443,6 +443,8 @@ pub struct Run {
     pub marked: bool,
     /// Inside a word the search is looking for.
     pub found: bool,
+    /// Inside the selected text.
+    pub selected: bool,
 }
 
 /// Syntax spans and changed-token marks folded into non-overlapping runs over `text`.
@@ -451,6 +453,7 @@ pub fn runs(
     spans: &[Span],
     marks: &[Range<usize>],
     found: &[Range<usize>],
+    selected: Option<Range<usize>>,
 ) -> Vec<Run> {
     let len = text.len();
     let valid = |r: &Range<usize>| r.start < r.end && r.end <= len;
@@ -465,6 +468,12 @@ pub fn runs(
         .chain(marks.iter().flat_map(|r| [r.start, r.end]))
         .chain(
             found
+                .iter()
+                .filter(|r| valid(r))
+                .flat_map(|r| [r.start, r.end]),
+        )
+        .chain(
+            selected
                 .iter()
                 .filter(|r| valid(r))
                 .flat_map(|r| [r.start, r.end]),
@@ -486,15 +495,23 @@ pub fn runs(
             italic: span.is_some_and(|s| s.italic),
             marked: marks.iter().any(|r| r.start <= start && end <= r.end),
             found: found.iter().any(|r| r.start <= start && end <= r.end),
+            selected: selected
+                .as_ref()
+                .is_some_and(|r| r.start <= start && end <= r.end),
         };
-        if run.color.is_none() && !run.italic && !run.marked && !run.found {
+        if run.color.is_none() && !run.italic && !run.marked && !run.found && !run.selected {
             continue;
         }
         match out.last_mut() {
             Some(last)
                 if last.range.end == start
-                    && (last.color, last.italic, last.marked, last.found)
-                        == (run.color, run.italic, run.marked, run.found) =>
+                    && (
+                        last.color,
+                        last.italic,
+                        last.marked,
+                        last.found,
+                        last.selected,
+                    ) == (run.color, run.italic, run.marked, run.found, run.selected) =>
             {
                 last.range.end = end
             }
@@ -803,6 +820,7 @@ mod tests {
             &[span(0..3, 1), span(8..10, 2)],
             &[4..10],
             &[],
+            None,
         );
         let shape: Vec<_> = runs
             .iter()
@@ -820,7 +838,7 @@ mod tests {
 
     #[test]
     fn found_words_split_runs_and_rows_are_listed() {
-        let runs = runs("let x = 10;", &[], &[], &[4..5]);
+        let runs = runs("let x = 10;", &[], &[], &[4..5], None);
         assert_eq!(runs.len(), 1);
         assert!(runs[0].found && runs[0].range == (4..5));
 

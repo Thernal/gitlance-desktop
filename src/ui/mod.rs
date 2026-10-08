@@ -9,6 +9,7 @@ mod input;
 mod lists;
 mod menu;
 mod rows;
+mod select;
 mod settings;
 mod theme;
 mod watch;
@@ -26,6 +27,7 @@ use gpui::{
 use lists::{Field, History};
 use menu::{Act, CtxMenu, Entry};
 use rows::{FileData, Row};
+use select::{Pos, Sel};
 use std::cell::Cell as Shared;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -56,6 +58,7 @@ actions!(
         ToggleFiles,
         FocusDiff,
         CopySelection,
+        SelectAll,
         NextChange,
         PreviousChange,
         OpenSettings,
@@ -95,6 +98,7 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("cmd-2", ToggleFiles, Some("Workspace")),
                 KeyBinding::new("cmd-.", FocusDiff, Some("Workspace")),
                 KeyBinding::new("cmd-c", CopySelection, Some("Workspace && !Typing")),
+                KeyBinding::new("cmd-a", SelectAll, Some("Workspace && !Typing")),
                 KeyBinding::new("f7", NextChange, Some("Workspace")),
                 KeyBinding::new("shift-f7", PreviousChange, Some("Workspace")),
                 KeyBinding::new("n", NextChange, Some("Workspace && !Typing")),
@@ -328,11 +332,11 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                                 continue;
                             }
                             "linemenu" => {
-                                this.select_press(false, 66, false, cx);
-                                this.select_drag(false, 66, cx);
-                                if let Some(sel) = this.sel.as_mut() {
-                                    sel.head = 68;
-                                }
+                                this.sel = Some(Sel {
+                                    old: false,
+                                    anchor: Pos { line: 66, byte: 4 },
+                                    head: Pos { line: 68, byte: 12 },
+                                });
                                 this.line_context(false, 67, Point::new(px(900.), px(520.)), cx);
                                 continue;
                             }
@@ -420,14 +424,6 @@ enum Header {
     },
 }
 
-/// Selected lines on one side of the open diff: pressed at `anchor`, dragged to `head`.
-#[derive(Clone, Copy)]
-struct Sel {
-    old: bool,
-    anchor: u32,
-    head: u32,
-}
-
 /// A change the user did not ask for, with the way back.
 struct Notice {
     text: String,
@@ -500,8 +496,12 @@ pub struct Workspace {
     jump: Option<u64>,
     /// "Copied ✓" on the Copy button until something changes.
     copied: bool,
+    /// Everything in the field that has the keyboard is selected (⌘A).
+    field_all: bool,
     /// Back / forward through what was looked at.
     history: History,
+    /// Where the View button was painted, so its menu hangs from it.
+    view_bounds: Rc<Shared<Option<gpui::Bounds<gpui::Pixels>>>>,
     /// The branch and path filters, and which of them (if any) takes the keyboard.
     bfilter: String,
     pfilter: String,
@@ -513,8 +513,9 @@ pub struct Workspace {
     /// A context menu open at the pointer, and the repository's address on the web.
     ctx_menu: Option<CtxMenu>,
     web: Option<crate::git::WebRemote>,
-    /// The selected lines of the open diff.
+    /// The selected text of the open diff, and whether the button is down (a drag extends it).
     sel: Option<Sel>,
+    selecting: bool,
     /// The find bar's text over the open diff, and what it looks for.
     dfind: Option<String>,
     dterms: Arc<[String]>,
@@ -585,7 +586,9 @@ impl Workspace {
             review_open: false,
             jump: None,
             copied: false,
+            field_all: false,
             history: History::default(),
+            view_bounds: Rc::new(Shared::new(None)),
             bfilter: String::new(),
             pfilter: String::new(),
             field: None,
@@ -594,6 +597,7 @@ impl Workspace {
             ctx_menu: None,
             web: None,
             sel: None,
+            selecting: false,
             dfind: None,
             dterms: Arc::default(),
             changes: Vec::new(),
@@ -1000,52 +1004,12 @@ impl Workspace {
 
     // ---- selecting and context menus ---------------------------------------------------
 
-    fn select_press(&mut self, old: bool, line: u32, shift: bool, cx: &mut Context<Self>) {
-        self.ctx_menu = None;
-        match (&mut self.sel, shift) {
-            (Some(sel), true) if sel.old == old => sel.head = line,
-            _ => {
-                self.sel = Some(Sel {
-                    old,
-                    anchor: line,
-                    head: line,
-                })
-            }
-        }
-        cx.notify();
-    }
-
-    fn select_drag(&mut self, old: bool, line: u32, cx: &mut Context<Self>) {
-        if let Some(sel) = &mut self.sel
-            && sel.old == old
-            && sel.head != line
-        {
-            sel.head = line;
-            cx.notify();
-        }
-    }
-
     /// The new-side line shown at `row`, to open the editor where the reader is.
     fn new_line_of_row(&self, row: usize) -> Option<u32> {
         match *self.rows.get(row)? {
             rows::Row::Split { right, .. } => right.map(|c| c.line),
             rows::Row::Unified { new_line, .. } => new_line,
             _ => None,
-        }
-    }
-
-    /// The text of the selected lines.
-    fn selected_text(&self) -> Option<(String, usize)> {
-        let (sel, data) = (self.sel?, self.data.as_ref()?);
-        let (lo, hi) = (sel.anchor.min(sel.head), sel.anchor.max(sel.head));
-        let side = data.side(sel.old);
-        let lines: Vec<&str> = (lo..=hi).map(|n| side.line(n).0).collect();
-        Some((lines.join("\n"), lines.len()))
-    }
-
-    fn copy_selection(&mut self, _: &CopySelection, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some((text, _)) = self.selected_text() {
-            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
         }
     }
 
@@ -1061,12 +1025,11 @@ impl Workspace {
             return;
         };
         let in_selection = self.sel.is_some_and(|s| {
-            s.old == old && (s.anchor.min(s.head)..=s.anchor.max(s.head)).contains(&line)
+            let (start, end) = s.ends();
+            !s.is_empty() && s.old == old && (start.line..=end.line).contains(&line)
         });
         let copy = match self.selected_text() {
-            Some((text, n)) if in_selection && n > 1 => {
-                Entry::new(format!("Copy {n} lines"), Act::Copy(text)).key("⌘C")
-            }
+            Some(text) if in_selection => Entry::new("Copy selection", Act::Copy(text)).key("⌘C"),
             _ => Entry::new(
                 "Copy line",
                 Act::Copy(data.side(old).line(line).0.to_owned()),
@@ -1172,9 +1135,7 @@ impl Workspace {
             marks: self.settings.mark_style,
             terms: &self.dterms,
             strong: false,
-            sel: self
-                .sel
-                .map(|s| (s.old, s.anchor.min(s.head), s.anchor.max(s.head))),
+            sel: self.sel,
             gutter: digits as f32 * self.char_width + 16.,
         }
     }
@@ -1607,6 +1568,7 @@ impl Workspace {
             .child(
                 div()
                     .absolute()
+                    .occlude()
                     .top(px(TITLE_BAR - 4.))
                     .left(px(78.))
                     .w(px(340.))
@@ -1675,29 +1637,29 @@ impl Workspace {
         let button = |id: &'static str, icon: &'static str, on: bool, tip: &'static str| {
             div()
                 .id(id)
-                .size(px(26.))
+                .size(px(34.))
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(ROW_RADIUS))
+                .rounded(px(ROW_RADIUS + 2.))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme::hover()))
                 .when(on, |s| s.bg(theme::hover()))
                 .tooltip(move |_, cx| cx.new(|_| Tip(tip)).into())
-                .child(icons::icon(icon).text_color(if on {
+                .child(icons::icon(icon).size(px(22.)).text_color(if on {
                     theme::accent()
                 } else {
                     theme::muted()
                 }))
         };
         div()
-            .w(px(30.))
+            .w(px(42.))
             .flex_none()
             .flex()
             .flex_col()
             .items_center()
-            .gap(px(4.))
-            .pt(px(2.))
+            .gap(px(8.))
+            .pt(px(4.))
             .child(
                 button(
                     "rail-sidebar",
@@ -2011,19 +1973,31 @@ impl Workspace {
                     })),
                 ),
             )
-            .child(diff_view::group().child(
-                chip("view", "View ▾", self.ctx_menu.is_some()).on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                        let groups = this.view_menu();
-                        this.open_menu(
-                            Point::new(event.position.x - px(60.), event.position.y + px(16.)),
-                            groups,
-                            cx,
-                        );
-                    }),
+            .child(
+                diff_view::group().child(
+                    chip("view", "View ▾", self.ctx_menu.is_some())
+                        .relative()
+                        .child({
+                            let bounds = self.view_bounds.clone();
+                            canvas(move |b, _, _| bounds.set(Some(b)), |_, _, _, _| {})
+                                .absolute()
+                                .size_full()
+                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                // The menu hangs from the button, its right edge on the button's.
+                                let Some(b) = this.view_bounds.get() else {
+                                    return;
+                                };
+                                let at =
+                                    Point::new(b.right() - px(menu::WIDTH), b.bottom() + px(6.));
+                                let groups = this.view_menu();
+                                this.open_menu(at, groups, cx);
+                            }),
+                        ),
                 ),
-            ))
+            )
     }
 
     fn render_summary(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2373,13 +2347,15 @@ impl Workspace {
                         .update(cx, |this, cx| this.start_comment(old, line, cx))
                         .ok();
                 }),
-                press: Box::new(move |old, line, shift, cx| {
+                press: Box::new(move |old, line, byte, clicks, shift, cx| {
                     press
-                        .update(cx, |this, cx| this.select_press(old, line, shift, cx))
+                        .update(cx, |this, cx| {
+                            this.select_press(old, line, byte, clicks, shift, cx)
+                        })
                         .ok();
                 }),
-                drag: Box::new(move |old, line, cx| {
-                    drag.update(cx, |this, cx| this.select_drag(old, line, cx))
+                drag: Box::new(move |old, line, byte, cx| {
+                    drag.update(cx, |this, cx| this.select_drag(old, line, byte, cx))
                         .ok();
                 }),
                 context: Box::new(move |old, line, at, cx| {
@@ -2494,6 +2470,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_files))
             .on_action(cx.listener(Self::focus_diff))
             .on_action(cx.listener(Self::copy_selection))
+            .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::next_change))
             .on_action(cx.listener(Self::previous_change))
             .on_action(cx.listener(Self::next_match))
@@ -2510,7 +2487,10 @@ impl Render for Workspace {
             .on_mouse_move(cx.listener(|this, event, _, cx| this.drag_move(event, cx)))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| this.end_drag(cx)),
+                cx.listener(|this, _, _, cx| {
+                    this.selecting = false;
+                    this.end_drag(cx)
+                }),
             )
             .when_some(self.drag, |s, drag| {
                 s.cursor(if drag.split.vertical() {
@@ -2712,7 +2692,7 @@ fn icon_button(
 ) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
-        .size(px(28.))
+        .size(px(30.))
         .flex()
         .items_center()
         .justify_center()
@@ -2738,7 +2718,7 @@ fn nav_button(
 ) -> gpui::Stateful<gpui::Div> {
     let button = div()
         .id(id)
-        .size(px(28.))
+        .size(px(30.))
         .flex()
         .items_center()
         .justify_center()

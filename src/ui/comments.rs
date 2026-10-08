@@ -3,6 +3,7 @@
 //! kept on this Mac (`crate::review`), never in the reviewed repository. Designed in
 //! `../Design/mockups/line-comments/a-agent-comments.html`.
 
+use super::input::{self, Edit};
 use super::rows::Row;
 use super::{GAP, ROW_RADIUS, Selection, Workspace, format, island, island_label, theme};
 use crate::review::{self, Comment, Place};
@@ -163,38 +164,25 @@ impl Workspace {
         }
     }
 
-    /// Typing into the composer: text, backspace, enter for a new line, ⌘↵ to add, esc to cancel.
+    /// Typing into the composer: text, ⌘A, backspace, return for a new line, ⌘↵ to add, esc to cancel.
     pub(super) fn compose_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = &event.keystroke;
         let Some(compose) = self.compose.as_mut() else {
             return;
         };
-        if key.key == "escape" {
-            return self.cancel_comment(cx);
+        if key.key == "enter" && key.modifiers.platform {
+            return self.add_comment(cx);
         }
-        if key.modifiers.platform {
-            match key.key.as_str() {
-                "enter" => return self.add_comment(cx),
-                "v" => {
-                    if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                        compose.body.push_str(&text);
-                    }
-                }
-                "backspace" => compose.body.clear(),
-                _ => return,
+        if key.key == "enter" {
+            if std::mem::take(&mut self.field_all) {
+                compose.body.clear();
             }
+            compose.body.push('\n');
         } else {
-            match key.key.as_str() {
-                "backspace" => {
-                    compose.body.pop();
-                }
-                "enter" => compose.body.push('\n'),
-                _ => match &key.key_char {
-                    Some(ch) if !key.modifiers.control && !ch.chars().any(char::is_control) => {
-                        compose.body.push_str(ch)
-                    }
-                    _ => return,
-                },
+            match input::edit(&mut compose.body, &mut self.field_all, key, cx) {
+                Edit::Escape => return self.cancel_comment(cx),
+                Edit::Ignored => return,
+                Edit::Changed | Edit::Selected | Edit::Enter { .. } => {}
             }
         }
         // The box grows with its text.
@@ -312,7 +300,24 @@ impl Workspace {
                             .text_color(theme::faint())
                             .child("Comment for your agent…  ⌘↵ adds it")
                     } else {
-                        div().child(format!("{}▏", compose.body))
+                        div()
+                            .flex()
+                            .items_end()
+                            .child(
+                                div()
+                                    .when(self.field_all, |s| {
+                                        s.bg(theme::selection()).rounded(px(3.))
+                                    })
+                                    .child(compose.body.clone()),
+                            )
+                            .children((!self.field_all).then(|| {
+                                div()
+                                    .flex_none()
+                                    .w(px(2.))
+                                    .h(px(15.))
+                                    .rounded_full()
+                                    .bg(theme::accent())
+                            }))
                     })
                     .child(
                         div()

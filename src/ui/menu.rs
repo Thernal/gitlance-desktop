@@ -53,7 +53,7 @@ pub struct CtxMenu {
 }
 
 const ROW: f32 = 28.;
-const WIDTH: f32 = 260.;
+pub(super) const WIDTH: f32 = 260.;
 
 impl Workspace {
     pub(super) fn open_menu(
@@ -165,6 +165,9 @@ impl Workspace {
                 .child(
                     div()
                         .absolute()
+                        // The panel takes the mouse: otherwise the backdrop behind it sees the press
+                        // first, closes the menu, and the click never reaches an entry.
+                        .occlude()
                         .left(px(x))
                         .top(px(y))
                         .w(px(WIDTH))
