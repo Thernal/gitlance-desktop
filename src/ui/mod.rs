@@ -5,6 +5,7 @@ mod diff_view;
 mod find;
 mod format;
 mod icons;
+mod input;
 mod rows;
 mod settings;
 mod theme;
@@ -45,6 +46,9 @@ actions!(
         SetStructural,
         NextMatch,
         PreviousMatch,
+        FindCommits,
+        NextChange,
+        PreviousChange,
         OpenSettings,
         Find,
         ToggleWrap,
@@ -74,6 +78,11 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("cmd-q", Quit, None),
                 KeyBinding::new("cmd-,", OpenSettings, None),
                 KeyBinding::new("cmd-f", Find, Some("Workspace")),
+                KeyBinding::new("cmd-shift-f", FindCommits, Some("Workspace")),
+                KeyBinding::new("f7", NextChange, Some("Workspace")),
+                KeyBinding::new("shift-f7", PreviousChange, Some("Workspace")),
+                KeyBinding::new("n", NextChange, Some("Workspace && !Typing")),
+                KeyBinding::new("p", PreviousChange, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-g", NextMatch, Some("Workspace")),
                 KeyBinding::new("cmd-shift-g", PreviousMatch, Some("Workspace")),
                 KeyBinding::new("up", PreviousCommit, Some("Workspace")),
@@ -136,9 +145,14 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
             MenuItem::action("Open Repository…", Open),
             MenuItem::action("Refresh", Refresh),
             MenuItem::separator(),
-            MenuItem::action("Find Commits…", Find),
-            MenuItem::action("Find Next in Diff", NextMatch),
-            MenuItem::action("Find Previous in Diff", PreviousMatch),
+            MenuItem::action("Find in Diff…", Find),
+            MenuItem::action("Find Next", NextMatch),
+            MenuItem::action("Find Previous", PreviousMatch),
+            MenuItem::separator(),
+            MenuItem::action("Find Commits…", FindCommits),
+            MenuItem::separator(),
+            MenuItem::action("Next Change", NextChange),
+            MenuItem::action("Previous Change", PreviousChange),
         ]),
         Menu::new("View").items([
             MenuItem::action("Unified Diff", ToggleUnified).checked(options.unified),
@@ -303,6 +317,16 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                 .ok();
             wait(1500).await;
         }
+        if let Ok(text) = std::env::var("GITLANCE_SNAPSHOT_FIND") {
+            window
+                .update(cx, |this, _, cx| {
+                    this.start_dfind(cx);
+                    this.set_dfind(text, cx);
+                    this.step_change(true, cx);
+                })
+                .ok();
+            wait(800).await;
+        }
         if let Ok(text) = std::env::var("GITLANCE_SNAPSHOT_SEARCH") {
             window
                 .update(cx, |this, _, cx| {
@@ -429,7 +453,15 @@ pub struct Workspace {
     jump: Option<u64>,
     /// "Copied ✓" on the Copy button until something changes.
     copied: bool,
-    /// Rows of the open diff that hold a search word, and the one stepped to.
+    /// The find bar's text over the open diff, and what it looks for.
+    dfind: Option<String>,
+    dterms: Arc<[String]>,
+    /// Rows where a change begins, and the one stepped to (F7).
+    changes: Vec<usize>,
+    change_at: Option<usize>,
+    /// The commit message's full body is shown.
+    body_expanded: bool,
+    /// Rows of the open diff that hold the find text, and the one stepped to.
     matches: Vec<usize>,
     match_at: usize,
     /// Said above the diff when it changed under the user.
@@ -491,6 +523,11 @@ impl Workspace {
             review_open: false,
             jump: None,
             copied: false,
+            dfind: None,
+            dterms: Arc::default(),
+            changes: Vec::new(),
+            change_at: None,
+            body_expanded: false,
             matches: Vec::new(),
             match_at: 0,
             notice: None,
@@ -578,6 +615,7 @@ impl Workspace {
 
     fn clear_diff(&mut self) {
         self.notice = None;
+        self.body_expanded = false;
         self.selection = Selection::None;
         self.diff = None;
         self.diff_task = None;
@@ -592,6 +630,8 @@ impl Workspace {
         self.expanded.clear();
         self.matches.clear();
         self.match_at = 0;
+        self.changes.clear();
+        self.change_at = None;
         self.offset = 0.;
         self.diff_list.reset(0);
     }
@@ -872,7 +912,8 @@ impl Workspace {
             wrap: self.options.wrap,
             offset: self.offset,
             marks: self.settings.mark_style,
-            terms: &self.find.terms,
+            terms: &self.dterms,
+            strong: false,
             gutter: digits as f32 * self.char_width + 16.,
         }
     }
@@ -1006,8 +1047,25 @@ impl Workspace {
         self.step_match(false, cx);
     }
 
+    /// ⌘F finds in the open diff; with none open it searches the commits.
     fn find_action(&mut self, _: &Find, _: &mut Window, cx: &mut Context<Self>) {
+        if self.diff.is_some() && !self.settings_open {
+            self.start_dfind(cx);
+        } else {
+            self.start_find(cx);
+        }
+    }
+
+    fn find_commits_action(&mut self, _: &FindCommits, _: &mut Window, cx: &mut Context<Self>) {
         self.start_find(cx);
+    }
+
+    fn next_change(&mut self, _: &NextChange, _: &mut Window, cx: &mut Context<Self>) {
+        self.step_change(true, cx);
+    }
+
+    fn previous_change(&mut self, _: &PreviousChange, _: &mut Window, cx: &mut Context<Self>) {
+        self.step_change(false, cx);
     }
 
     fn toggle_wrap(&mut self, _: &ToggleWrap, _: &mut Window, cx: &mut Context<Self>) {
@@ -1316,7 +1374,7 @@ impl Workspace {
             .child(
                 div()
                     .text_color(theme::muted())
-                    .child("Open a repository to browse its commits and branch versions."),
+                    .child("Open a repository to browse its commits and branch versions — or drop a folder anywhere in this window."),
             )
             .child(
                 button("welcome-open", "Open Repository…", "⌘O")
@@ -1572,7 +1630,7 @@ impl Workspace {
             .gap_4()
             .px_4()
             .py_3()
-            .child(self.render_summary(diff))
+            .child(self.render_summary(diff, cx))
             .child(self.render_toolbar(cx))
     }
 
@@ -1633,7 +1691,7 @@ impl Workspace {
             )
     }
 
-    fn render_summary(&self, diff: &Diff) -> impl IntoElement {
+    fn render_summary(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
         let (added, removed) = diff
             .files
             .iter()
@@ -1669,11 +1727,44 @@ impl Workspace {
                             .child(commit.summary.clone()),
                     )
                     .children(body.map(|b| {
+                        // A long message is folded after two lines, as GitLab and Android Studio do.
+                        let lines: Vec<&str> = b.lines().filter(|l| !l.trim().is_empty()).collect();
+                        let long = lines.len() > 2;
+                        let shown = if self.body_expanded || !long {
+                            b.clone()
+                        } else {
+                            format!("{}…", lines[..2].join("\n"))
+                        };
                         div()
-                            .max_h(px(120.))
-                            .overflow_hidden()
-                            .text_color(theme::muted())
-                            .child(b)
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .id("commit-body")
+                                    .max_h(px(220.))
+                                    .overflow_y_scroll()
+                                    .text_color(theme::muted())
+                                    .child(shown),
+                            )
+                            .when(long, |s| {
+                                s.child(
+                                    div()
+                                        .id("body-toggle")
+                                        .text_size(px(12.))
+                                        .text_color(theme::accent())
+                                        .cursor_pointer()
+                                        .child(if self.body_expanded {
+                                            "Show less"
+                                        } else {
+                                            "Show more"
+                                        })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.body_expanded = !this.body_expanded;
+                                            cx.notify();
+                                        })),
+                                )
+                            })
                     }))
                     .child(
                         div()
@@ -1810,16 +1901,29 @@ impl Workspace {
                             .flatten()
                             .map(|n| div().text_color(theme::warning()).child(n)),
                     )
-                    .children((!self.matches.is_empty()).then(|| {
+                    .children((!self.changes.is_empty()).then(|| {
                         div()
                             .flex_none()
-                            .text_size(px(12.))
-                            .text_color(theme::warning())
-                            .child(format!(
-                                "{} of {} matching lines · ⌘G",
-                                self.match_at + 1,
-                                self.matches.len()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().text_size(px(12.)).text_color(theme::muted()).child(
+                                match self.change_at {
+                                    Some(at) => {
+                                        format!("change {} of {}", at + 1, self.changes.len())
+                                    }
+                                    None => plural(self.changes.len(), "change"),
+                                },
                             ))
+                            .child(
+                                diff_view::group()
+                                    .child(chip("prev-change", "↑", false).on_click(cx.listener(
+                                        |this, _: &ClickEvent, _, cx| this.step_change(false, cx),
+                                    )))
+                                    .child(chip("next-change", "↓", false).on_click(cx.listener(
+                                        |this, _: &ClickEvent, _, cx| this.step_change(true, cx),
+                                    ))),
+                            )
                     }))
                     .children(mode_note.clone().map(|n| {
                         let unavailable = n.starts_with("Structural diff");
@@ -1834,6 +1938,7 @@ impl Workspace {
                             .child(n)
                     }))
             }))
+            .children(self.render_dfind(cx))
             .children(self.notice.as_ref().map(|notice| {
                 div()
                     .flex_none()
@@ -1900,7 +2005,8 @@ impl Workspace {
             let (Some(data), Some(&row)) = (workspace.data.clone(), workspace.rows.get(ix)) else {
                 return div().into_any_element();
             };
-            let style = workspace.row_style();
+            let mut style = workspace.row_style();
+            style.strong = workspace.matches.get(workspace.match_at) == Some(&ix);
             let indent = style.gutter + 8.;
             match row {
                 Row::Thread(id) => return workspace.render_thread(id, indent, this.clone()),
@@ -1985,11 +2091,13 @@ impl Render for Workspace {
 
         div()
             .id("workspace")
-            .key_context(if self.find.text.is_some() || self.compose.is_some() {
-                "Workspace Typing"
-            } else {
-                "Workspace"
-            })
+            .key_context(
+                if self.find.text.is_some() || self.dfind.is_some() || self.compose.is_some() {
+                    "Workspace Typing"
+                } else {
+                    "Workspace"
+                },
+            )
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::open))
             .on_action(cx.listener(Self::refresh))
@@ -2004,12 +2112,20 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::set_structural))
             .on_action(cx.listener(Self::open_settings_action))
             .on_action(cx.listener(Self::find_action))
+            .on_action(cx.listener(Self::find_commits_action))
+            .on_action(cx.listener(Self::next_change))
+            .on_action(cx.listener(Self::previous_change))
             .on_action(cx.listener(Self::next_match))
             .on_action(cx.listener(Self::previous_match))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| this.find_key(event, cx)))
             .on_action(cx.listener(Self::toggle_wrap))
             .on_action(cx.listener(Self::toggle_full_context))
             .on_action(cx.listener(Self::toggle_whitespace))
+            .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
+                if let Some(path) = paths.paths().first() {
+                    this.open_repo(path.clone(), None, cx);
+                }
+            }))
             .on_mouse_move(cx.listener(|this, event, _, cx| this.drag_move(event, cx)))
             .on_mouse_up(
                 MouseButton::Left,

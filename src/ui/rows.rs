@@ -29,7 +29,7 @@ impl Cell {
         }
     }
 
-    fn changed(self) -> bool {
+    pub fn changed(self) -> bool {
         self.kind != LineKind::Context
     }
 }
@@ -526,6 +526,17 @@ pub fn expand_tabs(text: &str, width: usize) -> (String, Vec<usize>) {
         map.push(out.len());
     }
     (out, map)
+}
+
+/// Whether a row shows a changed line (on either side).
+pub fn is_change(row: &Row) -> bool {
+    match *row {
+        Row::Split { left, right } => {
+            left.is_some_and(Cell::changed) || right.is_some_and(Cell::changed)
+        }
+        Row::Unified { cell, .. } => cell.changed(),
+        _ => false,
+    }
 }
 
 /// The rows whose text contains any of `words` (case-insensitive), for stepping through matches.

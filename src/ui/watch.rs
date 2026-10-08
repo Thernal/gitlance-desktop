@@ -337,6 +337,10 @@ impl Workspace {
             return None;
         }
         let status = self.watch.status;
+        // Quiet while everything is fine: a status that is always on stops being read.
+        if status == Status::UpToDate {
+            return None;
+        }
         Some(
             // A click refreshes, like ⌘R.
             div()

@@ -27,6 +27,8 @@ pub struct RowStyle<'a> {
     pub marks: MarkStyle,
     /// Words the commit search is looking for; highlighted wherever they appear.
     pub terms: &'a [String],
+    /// This row is the one the find bar is on: its matches are drawn solid, not tinted.
+    pub strong: bool,
 }
 
 impl RowStyle<'_> {
@@ -194,7 +196,13 @@ fn code(side: &Side, cell: Cell, old: bool, style: RowStyle<'_>) -> impl IntoEle
                 HighlightStyle {
                     color: run.color.map(theme::code),
                     font_style: run.italic.then_some(FontStyle::Italic),
-                    ..if run.found {
+                    ..if run.found && style.strong {
+                        HighlightStyle {
+                            color: Some(theme::base().into()),
+                            background_color: Some(theme::warning().into()),
+                            ..Default::default()
+                        }
+                    } else if run.found {
                         HighlightStyle {
                             background_color: Some(theme::warning_bg().into()),
                             ..Default::default()
