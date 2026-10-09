@@ -180,6 +180,19 @@ impl Workspace {
             },
         ));
 
+        let fold = switch("fold-generated", s.fold_generated).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.change_settings(
+                    |this| {
+                        this.settings.fold_generated = !this.settings.fold_generated;
+                        this.unfolded.clear();
+                    },
+                    cx,
+                );
+                this.refresh_rows();
+            },
+        ));
+
         let fetch = switch("fetch", self.fetch.enabled).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 let on = !this.fetch.enabled;
@@ -241,6 +254,11 @@ impl Workspace {
                                 "Default mode",
                                 "What a diff opens in. Lines, Words and Structural are also in the toolbar and the View menu.",
                                 modes,
+                            ))
+                            .child(item(
+                                "Fold generated files",
+                                "Lock files, minified and generated code (Cargo.lock, package-lock.json, *.min.js, *.pb.go …) start folded when they change by more than 40 lines. They stay in the file list, tagged “generated”; one click shows them.",
+                                fold,
                             ))
                             .child(heading("General"))
                             .child(item(

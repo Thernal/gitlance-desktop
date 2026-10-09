@@ -2,6 +2,7 @@
 
 mod dock;
 mod editor;
+mod generated;
 mod git;
 mod highlight;
 mod mr;

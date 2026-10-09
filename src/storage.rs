@@ -12,6 +12,10 @@ fn file(name: &str) -> Option<PathBuf> {
 
 /// Writes `body` to `name`; failures only cost what would have been remembered.
 pub(crate) fn save(name: &str, body: String) {
+    // A snapshot run draws a state; it must not become the user's remembered state.
+    if cfg!(feature = "snapshot") && std::env::var_os("GITLANCE_SNAPSHOT").is_some() {
+        return;
+    }
     if let Some(file) = file(name)
         && let Some(dir) = file.parent()
         && std::fs::create_dir_all(dir).is_ok()
@@ -277,6 +281,8 @@ pub struct Settings {
     pub default_mode: DiffMode,
     /// Re-read the repository when something outside the app changes it.
     pub auto_refresh: bool,
+    /// Lock files and other generated files start folded in a diff.
+    pub fold_generated: bool,
 }
 
 impl Default for Settings {
@@ -287,6 +293,7 @@ impl Default for Settings {
             mark_style: MarkStyle::default(),
             default_mode: DiffMode::default(),
             auto_refresh: true,
+            fold_generated: true,
         }
     }
 }
@@ -311,6 +318,7 @@ impl Settings {
                     settings.default_mode = DiffMode::from_key(value).unwrap_or_default()
                 }
                 "auto_refresh" => settings.auto_refresh = value != "false",
+                "fold_generated" => settings.fold_generated = value != "false",
                 "editor" => settings.editor = crate::editor::Editor::from_key(value),
                 "appearance" => {
                     settings.appearance = Appearance::from_key(value).unwrap_or_default()
@@ -327,6 +335,7 @@ impl std::fmt::Display for Settings {
         writeln!(f, "mark_style={}", self.mark_style.key())?;
         writeln!(f, "default_mode={}", self.default_mode.key())?;
         writeln!(f, "auto_refresh={}", self.auto_refresh)?;
+        writeln!(f, "fold_generated={}", self.fold_generated)?;
         writeln!(f, "appearance={}", self.appearance.key())?;
         if let Some(editor) = self.editor {
             writeln!(f, "editor={}", editor.key())?;
@@ -412,6 +421,7 @@ mod tests {
             mark_style: MarkStyle::Underlined,
             default_mode: DiffMode::Structural,
             auto_refresh: false,
+            fold_generated: false,
         };
         assert_eq!(Settings::parse(&settings.to_string()), settings);
     }

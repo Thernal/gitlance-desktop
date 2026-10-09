@@ -61,6 +61,15 @@ impl WebRemote {
         }
     }
 
+    /// The page of `path` at revision `sha`, at `line`.
+    pub fn blob(&self, sha: &str, path: &str, line: u32) -> String {
+        if self.github {
+            format!("{}/blob/{sha}/{path}#L{line}", self.base)
+        } else {
+            format!("{}/-/blob/{sha}/{path}#L{line}", self.base)
+        }
+    }
+
     /// `branch` as `main` or `origin/main`; a remote prefix is dropped.
     pub fn branch(&self, branch: &str) -> String {
         let name = branch.split_once('/').map_or(branch, |(_, rest)| rest);

@@ -722,6 +722,8 @@ pub struct Workspace {
     newreq: Option<create::NewRequest>,
     /// The keyboard card is open.
     shortcuts: bool,
+    /// Generated files the reader asked to see in full.
+    unfolded: HashSet<String>,
     /// The branch / merge request picker hangs from the title bar.
     picker_open: bool,
     /// The window's width in logical pixels, as of the last frame.
@@ -860,6 +862,7 @@ impl Workspace {
             gitlab_check: None,
             newreq: None,
             shortcuts: false,
+            unfolded: HashSet::new(),
             picker_open: false,
             win_width: 1480.,
             narrow: false,
@@ -1009,6 +1012,7 @@ impl Workspace {
     }
 
     fn clear_diff(&mut self) {
+        self.unfolded.clear();
         self.notice = None;
         self.body_expanded = false;
         self.selection = Selection::None;
@@ -1417,7 +1421,41 @@ impl Workspace {
                 Act::OpenEditor { path, line },
             ));
         }
-        self.open_menu(at, vec![vec![copy], second], cx);
+        // What a reviewer pastes into a chat: a link to the line, its place, the command.
+        let mut share = Vec::new();
+        if let (Some(path), Some(rev)) = (self.current_path(), self.viewed_rev()) {
+            if let (false, Some(web)) = (old, &self.web) {
+                share.push(
+                    Entry::new(
+                        format!("Copy link to line · {}", web.name()),
+                        Act::Copy(web.blob(&rev.to_string(), &path, line)),
+                    )
+                    .key("↗"),
+                );
+            }
+            share.push(Entry::new(
+                "Copy path:line",
+                Act::Copy(format!("{path}:{line}")),
+            ));
+            if matches!(self.selection, Selection::Commit(_)) {
+                share.push(Entry::new(
+                    format!("Copy git show {}", format::short(rev)),
+                    Act::Copy(format!("git show {}", format::short(rev))),
+                ));
+            }
+        }
+        self.open_menu(at, vec![vec![copy], second, share], cx);
+    }
+
+    /// The revision whose files the open diff shows on its new side; none for the working tree.
+    pub(super) fn viewed_rev(&self) -> Option<git2::Oid> {
+        match &self.diff.as_ref()?.header {
+            Header::Commit(c) => Some(c.id),
+            Header::Compare { head, .. } => Some(head.1),
+            Header::Versions { to, .. } => Some(to.tip),
+            Header::Interdiff { new, .. } => Some(new.id),
+            Header::WorkingTree { .. } => None,
+        }
     }
 
     fn commit_context(&mut self, ix: usize, at: Point<gpui::Pixels>, cx: &mut Context<Self>) {
@@ -1533,6 +1571,19 @@ impl Workspace {
             .and_then(|d| d.files.iter().map(|f| f.path().chars().count()).max())
             .unwrap_or(0);
         (longest as f32 * 7.4 + 96.).clamp(200., self.layout.files.max(200.))
+    }
+
+    /// A generated file with a long change starts folded; the reader can open it.
+    pub(super) fn generated_folded(&self, file: &FileDiff) -> bool {
+        self.settings.fold_generated
+            && crate::generated::is_generated(file.path())
+            && file.added + file.removed > crate::generated::FOLD_ABOVE
+            && !self.unfolded.contains(file.path())
+    }
+
+    fn unfold(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.unfolded.insert(path.to_owned());
+        cx.notify();
     }
 
     fn row_style(&self) -> RowStyle<'_> {
@@ -2306,7 +2357,10 @@ impl Workspace {
                     )
                     .child({
                         // A narrow sidebar has no room for the label and the chips on one line.
-                        let stacked = self.layout.sidebar < 300.;
+                        let stacked = self.layout.sidebar < 300.
+                            && (self.open_request.is_some()
+                                || self.wt.count > 0
+                                || self.selection == Selection::WorkingTree);
                         let chips = div()
                             .flex()
                             .items_center()
@@ -3168,6 +3222,40 @@ impl Workspace {
     fn render_file(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
         let file = diff.files.get(self.file);
         let body = match (file, &self.data) {
+            (Some(f), _) if self.generated_folded(f) => {
+                let path = f.path().to_owned();
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .text_color(theme::muted())
+                    .child(format!(
+                        "{} is generated: {} changed lines are folded.",
+                        path.rsplit('/').next().unwrap_or(&path),
+                        f.added + f.removed
+                    ))
+                    .child(
+                        div()
+                            .id("unfold-generated")
+                            .px_3()
+                            .h(px(26.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(ROW_RADIUS))
+                            .bg(theme::hover())
+                            .text_color(theme::text())
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::selected()))
+                            .child("Show it anyway  ↵")
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.unfold(&path, cx)
+                            })),
+                    )
+                    .into_any_element()
+            }
             (None, _) => div()
                 .flex_1()
                 .flex()
@@ -3764,6 +3852,7 @@ pub(super) fn render_file_row(
                         .child(d)
                 })),
         )
+        .children(generated_tag(file))
         .children(working::file_tag(tag))
         .child(stats(file))
         .on_mouse_down(
@@ -3774,6 +3863,17 @@ pub(super) fn render_file_row(
         )
         .on_click(cx.listener(move |this, _, _, cx| this.select_file(ix, cx)));
     div().w_full().h(px(42.)).px(px(6.)).py(px(1.)).child(item)
+}
+
+/// "generated" beside a lock or generated file.
+pub(super) fn generated_tag(file: &FileDiff) -> Option<gpui::Div> {
+    crate::generated::is_generated(file.path()).then(|| {
+        div()
+            .flex_none()
+            .text_size(px(10.))
+            .text_color(theme::faint())
+            .child("generated")
+    })
 }
 
 /// A file's added and removed line counts.

@@ -150,7 +150,19 @@ impl Workspace {
                     self.set_zone(Zone::Diff, cx);
                 }
             }
-            Zone::Diff => {}
+            Zone::Diff => {
+                // A folded generated file opens on ↵.
+                if let Some(path) = self
+                    .diff
+                    .as_ref()
+                    .and_then(|d| d.files.get(self.file))
+                    .filter(|f| self.generated_folded(f))
+                    .map(|f| f.path().to_owned())
+                {
+                    self.unfolded.insert(path);
+                    cx.notify();
+                }
+            }
         }
     }
 
