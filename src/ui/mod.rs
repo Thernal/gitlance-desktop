@@ -82,6 +82,7 @@ actions!(
         SubmitReview,
         CreateRequest,
         ShowShortcuts,
+        ToggleThread,
         NextThread,
         PreviousThread,
         ReplyThread,
@@ -158,6 +159,7 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("shift-p", PreviousThread, Some("Workspace && !Typing")),
                 KeyBinding::new("r", ReplyThread, Some("Workspace && !Typing")),
                 KeyBinding::new("x", ResolveThread, Some("Workspace && !Typing")),
+                KeyBinding::new("o", ToggleThread, Some("Workspace && !Typing")),
                 KeyBinding::new("tab", NextZone, Some("Workspace && !Typing")),
                 KeyBinding::new("shift-tab", PreviousZone, Some("Workspace && !Typing")),
                 KeyBinding::new("enter", Activate, Some("Workspace && !Typing")),
@@ -706,6 +708,12 @@ pub struct Workspace {
     newreq: Option<create::NewRequest>,
     /// The keyboard card is open.
     shortcuts: bool,
+    /// The comment marks of the open file's gutter.
+    notes: Vec<diff_view::LineNote>,
+    /// Discussions whose open or folded state differs from the default (a resolved one is folded).
+    toggled_mr: HashSet<usize>,
+    /// Agent comments the reader folded.
+    toggled_agent: HashSet<u64>,
     /// The discussion `r`, `x` and ⇧n / ⇧p act on (an index into the request's threads).
     thread_at: Option<usize>,
     /// The token being entered in the connect panel; shown as dots.
@@ -831,6 +839,9 @@ impl Workspace {
             gitlab_check: None,
             newreq: None,
             shortcuts: false,
+            notes: Vec::new(),
+            toggled_mr: HashSet::new(),
+            toggled_agent: HashSet::new(),
             thread_at: None,
             token_input: String::new(),
             testing: false,
@@ -1232,6 +1243,7 @@ impl Workspace {
             .map(|data| rows::layout(data, &self.options, &self.expanded))
             .unwrap_or_default();
         self.rows = self.with_comments(rows);
+        self.notes = self.line_notes();
         self.diff_list.reset(self.rows.len());
         self.offset = self.offset.min(self.max_offset());
         self.recompute_matches();
@@ -1470,7 +1482,9 @@ impl Workspace {
             terms: &self.dterms,
             strong: false,
             sel: self.sel,
-            gutter: digits as f32 * self.char_width + 16.,
+            notes: &self.notes,
+            // Room for the comment mark (16 px) left of the number.
+            gutter: digits.max(3) as f32 * self.char_width + 30.,
             whole: self
                 .diff
                 .as_ref()
@@ -3227,7 +3241,13 @@ impl Workspace {
                 this.clone(),
                 this.clone(),
             );
+            let toggle = this.clone();
             let events = diff_view::Events {
+                toggle: Box::new(move |old, line, cx| {
+                    toggle
+                        .update(cx, |this, cx| this.toggle_notes_at(old, line, cx))
+                        .ok();
+                }),
                 comment: Box::new(move |old, line, cx| {
                     comment
                         .update(cx, |this, cx| this.start_comment(old, line, cx))
@@ -3387,6 +3407,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &PreviousThread, _, cx| this.step_thread(false, cx)))
             .on_action(cx.listener(|this, _: &ReplyThread, _, cx| this.reply_focused(cx)))
             .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))
+            .on_action(cx.listener(|this, _: &ToggleThread, _, cx| this.toggle_focused(cx)))
             .on_action(cx.listener(|this, _: &NextZone, _, cx| this.step_zone(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousZone, _, cx| this.step_zone(false, cx)))
             .on_action(cx.listener(|this, _: &Activate, _, cx| this.activate(cx)))

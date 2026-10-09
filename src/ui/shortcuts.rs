@@ -27,7 +27,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("Tab in the box", "agent / merge request"),
             ("⌘↵", "add or post"),
             ("⇧⌘↵", "keep pending · submit review"),
-            ("r  x", "reply to / resolve a discussion"),
+            ("r  x  o", "reply to, resolve, fold a discussion"),
         ],
     ),
     (

@@ -32,6 +32,8 @@ pub struct RowStyle<'a> {
     pub strong: bool,
     /// The selected text.
     pub sel: Option<Sel>,
+    /// The lines of this file that have comments.
+    pub notes: &'a [LineNote],
     /// The file is added or deleted as a whole: its lines keep the gutter bar but no fill.
     pub whole: bool,
 }
@@ -47,6 +49,26 @@ impl RowStyle<'_> {
     }
 }
 
+/// Whose comment sits on a line.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NoteTone {
+    /// A discussion on the merge request (GitLab).
+    Request,
+    /// A pending comment of one's own on the request.
+    Draft,
+    /// A comment kept for the agent.
+    Agent,
+}
+
+/// A line that has comments: drawn as a mark in its gutter.
+#[derive(Clone, Copy, Debug)]
+pub struct LineNote {
+    pub old: bool,
+    pub line: u32,
+    pub tone: NoteTone,
+    pub count: usize,
+}
+
 /// A callback about a diff line: (on the removed side, line number, …).
 type OnLine = Box<dyn Fn(bool, u32, &mut App)>;
 /// … with the byte under the pointer, the click count and whether ⇧ was held.
@@ -60,6 +82,8 @@ type OnContext = Box<dyn Fn(bool, u32, Point<Pixels>, &mut App)>;
 pub struct Events {
     /// A gutter's + was clicked.
     pub comment: OnLine,
+    /// A gutter's comment mark was clicked: open or fold what is on that line.
+    pub toggle: OnLine,
     /// The mouse went down on a line.
     pub press: OnPress,
     /// The pointer moved over a line with the button down.
@@ -191,24 +215,60 @@ fn gutter(
         .when_some(bg, |s, bg| s.bg(bg))
         .text_color(theme::muted())
         .children(line.map(|l| l.to_string()))
-        .children(comment.map(|(old, line, events)| {
-            div()
-                .id(("comment-plus", u64::from(line) * 2 + u64::from(old)))
-                .absolute()
-                .left(px(3.))
-                .top(px(1.))
-                .size(px(18.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(ROW_RADIUS))
-                .bg(theme::accent())
-                .text_color(theme::base())
-                .cursor_pointer()
-                .invisible()
-                .group_hover("diff-row", |s| s.visible())
-                .child("+")
-                .on_click(move |_, _, cx| (events.comment)(old, line, cx))
+        .children(comment.clone().and_then(|(old, line, events)| {
+            let note = style
+                .notes
+                .iter()
+                .find(|n| n.old == old && n.line == line)
+                .copied()?;
+            let tone = match note.tone {
+                NoteTone::Request => theme::warning(),
+                NoteTone::Draft => theme::renamed(),
+                NoteTone::Agent => theme::focus(),
+            };
+            Some(
+                div()
+                    .id(("comment-mark", u64::from(line) * 2 + u64::from(old)))
+                    .absolute()
+                    .left(px(2.))
+                    .top(px(1.))
+                    .h(px(18.))
+                    .px(px(3.))
+                    .flex()
+                    .items_center()
+                    .gap(px(2.))
+                    .rounded(px(ROW_RADIUS))
+                    .text_size(px(10.))
+                    .text_color(tone)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::hover()))
+                    .child(super::icons::icon("message").size(px(13.)).text_color(tone))
+                    .on_click(move |_, _, cx| (events.toggle)(old, line, cx)),
+            )
+        }))
+        .children(comment.and_then(|(old, line, events)| {
+            if style.notes.iter().any(|n| n.old == old && n.line == line) {
+                return None;
+            }
+            Some(
+                div()
+                    .id(("comment-plus", u64::from(line) * 2 + u64::from(old)))
+                    .absolute()
+                    .left(px(3.))
+                    .top(px(1.))
+                    .size(px(18.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(ROW_RADIUS))
+                    .bg(theme::accent())
+                    .text_color(theme::base())
+                    .cursor_pointer()
+                    .invisible()
+                    .group_hover("diff-row", |s| s.visible())
+                    .child("+")
+                    .on_click(move |_, _, cx| (events.comment)(old, line, cx)),
+            )
         }))
 }
 

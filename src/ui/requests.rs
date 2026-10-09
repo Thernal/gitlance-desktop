@@ -280,8 +280,57 @@ impl Workspace {
         let Some(t) = self.requests.threads.get(ix) else {
             return div().into_any_element();
         };
+        if !self.mr_open(ix) {
+            let first = &t.notes[0];
+            let more = t.notes.len() - 1;
+            return div()
+                .w_full()
+                .pl(px(indent))
+                .pr(px(12.))
+                .py(px(2.))
+                .child(
+                    div()
+                        .id(("thread-folded", ix))
+                        .max_w(px(640.))
+                        .h(px(26.))
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .rounded(px(super::ROW_RADIUS))
+                        .border_1()
+                        .border_color(theme::island_border())
+                        .bg(theme::panel())
+                        .font_family(theme::UI_FONT)
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                        .child(div().flex_none().text_color(theme::warning()).child("▸"))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_color(theme::warning())
+                                .child(first.author.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .child(first.body.replace('\n', " ")),
+                        )
+                        .children((more > 0).then(|| plural(more, "reply")))
+                        .children(t.resolved.then_some("resolved ✓"))
+                        .on_click(move |_, _, cx| {
+                            this.update(cx, |this, cx| this.set_thread_open(ix, true, cx))
+                                .ok();
+                        }),
+                )
+                .into_any_element();
+        }
         let can_act = self.request_target().is_some();
-        let (reply, resolve) = (this.clone(), this);
+        let (reply, resolve, fold) = (this.clone(), this.clone(), this);
         let resolved = t.resolved;
         let focused = self.thread_at == Some(ix);
         let action = |id: &'static str, label: &'static str, key: &'static str| {
@@ -355,17 +404,17 @@ impl Workspace {
                     .text_size(px(12.))
                     .line_height(px(17.))
                     .children(notes)
-                    .children(can_act.then(|| {
+                    .child(
                         div()
                             .flex()
                             .gap_1()
                             .pt(px(6.))
-                            .child(action("thread-reply", "Reply", "r").on_click(
-                                move |_, _, cx| {
+                            .children(can_act.then(|| {
+                                action("thread-reply", "Reply", "r").on_click(move |_, _, cx| {
                                     reply.update(cx, |this, cx| this.start_reply(ix, cx)).ok();
-                                },
-                            ))
-                            .children(t.resolvable.then(|| {
+                                })
+                            }))
+                            .children((can_act && t.resolvable).then(|| {
                                 action(
                                     "thread-resolve",
                                     if resolved { "Reopen" } else { "Resolve" },
@@ -377,7 +426,13 @@ impl Workspace {
                                         .ok();
                                 })
                             }))
-                    })),
+                            .child(
+                                action("thread-fold", "Fold", "o").on_click(move |_, _, cx| {
+                                    fold.update(cx, |this, cx| this.set_thread_open(ix, false, cx))
+                                        .ok();
+                                }),
+                            ),
+                    ),
             )
             .into_any_element()
     }
@@ -424,6 +479,9 @@ impl Workspace {
         };
         let ix = order[next];
         self.thread_at = Some(ix);
+        if !self.mr_open(ix) {
+            self.set_thread_open(ix, true, cx);
+        }
         let t = &self.requests.threads[ix];
         if let Some(path) = t.path.clone() {
             let (line, old) = (t.new_line.or(t.old_line).unwrap_or(1), t.new_line.is_none());
@@ -441,6 +499,29 @@ impl Workspace {
     pub(super) fn resolve_focused(&mut self, cx: &mut Context<Self>) {
         if let Some(ix) = self.thread_at.filter(|_| self.request_target().is_some()) {
             self.toggle_resolved(ix, cx);
+        }
+    }
+
+    /// Is discussion `ix` shown open? A resolved one starts folded, as in GitLab.
+    pub(super) fn mr_open(&self, ix: usize) -> bool {
+        let default = self.requests.threads.get(ix).is_some_and(|t| !t.resolved);
+        default != self.toggled_mr.contains(&ix)
+    }
+
+    /// Opens or folds discussion `ix`.
+    pub(super) fn set_thread_open(&mut self, ix: usize, open: bool, cx: &mut Context<Self>) {
+        if self.mr_open(ix) != open && !self.toggled_mr.remove(&ix) {
+            self.toggled_mr.insert(ix);
+        }
+        self.refresh_rows();
+        cx.notify();
+    }
+
+    /// `o`: folds or opens the discussion the keyboard is on.
+    pub(super) fn toggle_focused(&mut self, cx: &mut Context<Self>) {
+        if let Some(ix) = self.thread_at {
+            let open = self.mr_open(ix);
+            self.set_thread_open(ix, !open, cx);
         }
     }
 

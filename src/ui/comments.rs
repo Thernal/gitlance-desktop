@@ -44,6 +44,88 @@ impl Workspace {
             .map(|f| f.path().to_owned())
     }
 
+    /// The comment marks of the open file's gutter: one per line with comments, in the colour of
+    /// the most important kind there (the request's, then one's pending, then the agent's).
+    pub(super) fn line_notes(&self) -> Vec<super::diff_view::LineNote> {
+        use super::diff_view::{LineNote, NoteTone};
+        let mut out: Vec<LineNote> = Vec::new();
+        let mut add = |old: bool, line: u32, tone: NoteTone| match out
+            .iter_mut()
+            .find(|n| n.old == old && n.line == line)
+        {
+            Some(n) => {
+                n.count += 1;
+                let rank = |t: NoteTone| match t {
+                    NoteTone::Request => 0,
+                    NoteTone::Draft => 1,
+                    NoteTone::Agent => 2,
+                };
+                if rank(tone) < rank(n.tone) {
+                    n.tone = tone;
+                }
+            }
+            None => out.push(LineNote {
+                old,
+                line,
+                tone,
+                count: 1,
+            }),
+        };
+        for c in &self.comments {
+            if let Some(Place::Line(n)) = self.place_in_open_file(c) {
+                add(c.old, n, NoteTone::Agent);
+            }
+        }
+        if self.showing_request() {
+            for (_, old, line) in self.request_threads_here() {
+                add(old, line, NoteTone::Request);
+            }
+            for (_, old, line) in self.drafts_here() {
+                add(old, line, NoteTone::Draft);
+            }
+        }
+        out
+    }
+
+    /// A click on a line's comment mark: folds what is open there, or opens what is folded.
+    pub(super) fn toggle_notes_at(&mut self, old: bool, line: u32, cx: &mut Context<Self>) {
+        let mine: Vec<usize> = if self.showing_request() {
+            self.request_threads_here()
+                .into_iter()
+                .filter(|(_, o, n)| *o == old && *n == line)
+                .map(|(ix, _, _)| ix)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let agent: Vec<u64> = self
+            .comments
+            .iter()
+            .filter(|c| {
+                c.old == old
+                    && matches!(self.place_in_open_file(c), Some(Place::Line(n)) if n == line)
+            })
+            .map(|c| c.id)
+            .collect();
+        let any_open = mine.iter().any(|&ix| self.mr_open(ix))
+            || agent.iter().any(|id| !self.toggled_agent.contains(id));
+        for ix in mine {
+            // Everything there ends up the other way round from how most of it was.
+            if self.mr_open(ix) == any_open && !self.toggled_mr.remove(&ix) {
+                self.toggled_mr.insert(ix);
+            }
+        }
+        for id in agent {
+            if any_open {
+                self.toggled_agent.insert(id);
+            } else {
+                self.toggled_agent.remove(&id);
+            }
+        }
+        self.refresh_rows();
+        cx.notify();
+    }
+
     /// Where `comment` sits in the open file now (`None` when it belongs to another file).
     fn place_in_open_file(&self, comment: &Comment) -> Option<Place> {
         let data = self.data.as_ref()?;
@@ -715,6 +797,54 @@ impl Workspace {
         let Some(comment) = self.comments.iter().find(|c| c.id == id) else {
             return div().into_any_element();
         };
+        if self.toggled_agent.contains(&id) {
+            return div()
+                .w_full()
+                .pl(px(indent))
+                .pr(px(12.))
+                .py(px(2.))
+                .child(
+                    div()
+                        .id(("agent-folded", id))
+                        .max_w(px(640.))
+                        .h(px(26.))
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .rounded(px(ROW_RADIUS))
+                        .border_1()
+                        .border_color(theme::island_border())
+                        .bg(theme::panel())
+                        .font_family(theme::UI_FONT)
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_color(theme::focus())
+                                .child("▸ You → agent"),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .child(comment.body.replace('\n', " ")),
+                        )
+                        .on_click(move |_, _, cx| {
+                            this.update(cx, |this, cx| {
+                                this.toggled_agent.remove(&id);
+                                this.refresh_rows();
+                                cx.notify();
+                            })
+                            .ok();
+                        }),
+                )
+                .into_any_element();
+        }
         div()
             .w_full()
             .pl(px(indent))
