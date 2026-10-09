@@ -1,6 +1,7 @@
 //! The GitLance window: branches, versions and commits on the left, the diff on the right.
 
 mod comments;
+mod create;
 mod diff_view;
 mod fetch;
 mod find;
@@ -78,6 +79,7 @@ actions!(
         ToggleWhitespace,
         CommentLine,
         SubmitReview,
+        CreateRequest,
         NextZone,
         PreviousZone,
         Activate,
@@ -144,6 +146,7 @@ pub fn run(path: Option<PathBuf>) {
                     SubmitReview,
                     Some("Workspace && !Typing"),
                 ),
+                KeyBinding::new("cmd-alt-m", CreateRequest, Some("Workspace && !Typing")),
                 KeyBinding::new("tab", NextZone, Some("Workspace && !Typing")),
                 KeyBinding::new("shift-tab", PreviousZone, Some("Workspace && !Typing")),
                 KeyBinding::new("enter", Activate, Some("Workspace && !Typing")),
@@ -251,6 +254,7 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
             MenuItem::action("Reopen Closed Tab", ReopenTab),
             MenuItem::separator(),
             MenuItem::action("Open Repository…", Open),
+            MenuItem::action("Create Merge Request…", CreateRequest),
             MenuItem::action("Refresh", Refresh),
             MenuItem::separator(),
             MenuItem::action("Find in Diff…", Find),
@@ -687,6 +691,8 @@ pub struct Workspace {
     open_request: Option<PendingCompare>,
     /// What the last "Test" of the GitLab connection in Settings found.
     gitlab_check: Option<Result<String, String>>,
+    /// The card for a new merge request, while it is open.
+    newreq: Option<create::NewRequest>,
     /// The token being entered in the connect panel; shown as dots.
     token_input: String,
     /// A token is being checked against GitLab.
@@ -808,6 +814,7 @@ impl Workspace {
             pending_compare: None,
             open_request: None,
             gitlab_check: None,
+            newreq: None,
             token_input: String::new(),
             testing: false,
             goline: None,
@@ -1404,6 +1411,11 @@ impl Workspace {
             "Copy branch name",
             Act::Copy(branch.name.clone()),
         )]];
+        if self.requests.available && branch.name != "main" && branch.name != "master" {
+            groups.push(vec![
+                Entry::new("Create merge request…", Act::CreateRequest(ix)).key("⌥⌘M"),
+            ]);
+        }
         if let Some(web) = &self.web {
             groups.push(vec![Entry::new(
                 format!("Open in {} ↗", web.name()),
@@ -3220,6 +3232,7 @@ impl Render for Workspace {
                     || self.field.is_some()
                     || self.palette.is_some()
                     || self.goline.is_some()
+                    || self.newreq.is_some()
                 {
                     if self.palette.is_some() {
                         "Workspace Typing Palette"
@@ -3260,6 +3273,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::previous_match))
             .on_action(cx.listener(|this, _: &CommentLine, _, cx| this.open_goline(cx)))
             .on_action(cx.listener(|this, _: &SubmitReview, _, cx| this.submit_review(cx)))
+            .on_action(cx.listener(|this, _: &CreateRequest, _, cx| this.open_create(None, cx)))
             .on_action(cx.listener(|this, _: &NextZone, _, cx| this.step_zone(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousZone, _, cx| this.step_zone(false, cx)))
             .on_action(cx.listener(|this, _: &Activate, _, cx| this.activate(cx)))
@@ -3401,6 +3415,7 @@ impl Render for Workspace {
             // Last, so it paints over everything.
             .children(self.repo_menu.then(|| self.render_repo_menu(cx)))
             .children(self.render_ctx_menu(window.viewport_size(), cx))
+            .children(self.render_create(cx))
             .children(self.render_palette(cx))
     }
 }

@@ -918,7 +918,26 @@ impl Workspace {
                             .text_color(theme::muted())
                             .child(n)
                     }))
-                    .children(items.map(|i| div().py(px(1.)).child(i))),
+                    .children(items.map(|i| div().py(px(1.)).child(i)))
+                    .child(
+                        div().py(px(1.)).child(
+                            row("new-request", false)
+                                .h(px(32.))
+                                .gap_2()
+                                .text_color(theme::warning())
+                                .child("＋ New merge request…")
+                                .child(div().flex_1())
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(theme::faint())
+                                        .child("⌥⌘M"),
+                                )
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.open_create(None, cx)
+                                })),
+                        ),
+                    ),
             )
     }
 

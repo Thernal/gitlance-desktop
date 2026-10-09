@@ -39,10 +39,12 @@ pub enum Cmd {
     Whitespace,
     Compare,
     NewTab,
+    CreateRequest,
 }
 
 const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Compare two refs…", "⌘⇧C", Cmd::Compare),
+    ("Create merge request…", "⌥⌘M", Cmd::CreateRequest),
     ("Find in the diff", "⌘F", Cmd::FindInDiff),
     ("Search commits", "⌘⇧F", Cmd::FindCommits),
     ("Filter files by path", "⌘P", Cmd::FilterFiles),
@@ -557,5 +559,6 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::Whitespace => Box::new(ToggleWhitespace),
         Cmd::Compare => Box::new(Compare),
         Cmd::NewTab => Box::new(NewTab),
+        Cmd::CreateRequest => Box::new(CreateRequest),
     }
 }

@@ -14,6 +14,7 @@ pub enum Act {
     Comment { old: bool, line: u32 },
     SetMode(DiffMode),
     Toggle(Opt),
+    CreateRequest(usize),
 }
 
 #[derive(Clone)]
@@ -85,6 +86,7 @@ impl Workspace {
             Act::Comment { old, line } => self.start_comment(old, line, cx),
             Act::SetMode(mode) => self.set_mode(mode, cx),
             Act::Toggle(opt) => self.toggle(opt, cx),
+            Act::CreateRequest(ix) => self.open_create(Some(ix), cx),
         }
         cx.notify();
     }

@@ -203,6 +203,9 @@ impl Workspace {
         if self.palette.is_some() {
             return self.palette_key(event, window, cx);
         }
+        if self.newreq.is_some() {
+            return self.newreq_key(event, cx);
+        }
         if self.goline.is_some() {
             return self.goline_key(event, cx);
         }

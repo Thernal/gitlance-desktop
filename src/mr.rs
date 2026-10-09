@@ -304,7 +304,8 @@ fn call(
         "204" => Ok(Value::Null),
         "401" | "403" => bail!("GitLab refused the token"),
         "404" => bail!("GitLab does not know this project (or the token cannot see it)"),
-        "400" => bail!("GitLab would not take that: {}", message(body)),
+        "400" | "422" => bail!("GitLab would not take that: {}", message(body)),
+        "409" => bail!("A merge request for these branches already exists"),
         other => bail!("GitLab answered {other}"),
     }
 }
@@ -394,6 +395,53 @@ fn record(line: String) -> Result<bool> {
     text.push('\n');
     std::fs::write(file, text)?;
     Ok(true)
+}
+
+/// Opens a merge request from `source` into `target`. The branch must already be on the remote.
+pub fn create(
+    remote: &WebRemote,
+    source: &str,
+    target: &str,
+    title: &str,
+    description: &str,
+    draft: bool,
+    remove_source: bool,
+) -> Result<Mr> {
+    let title = if draft && !title.to_lowercase().starts_with("draft:") {
+        format!("Draft: {title}")
+    } else {
+        title.to_owned()
+    };
+    if record(format!(
+        "create {source} {target} {draft} {remove_source} {title}"
+    ))? {
+        return Ok(Mr {
+            iid: 999,
+            title,
+            author: "You".to_owned(),
+            source: source.to_owned(),
+            target: target.to_owned(),
+            url: String::new(),
+            updated: 0,
+            comments: 0,
+            draft,
+        });
+    }
+    let value = request(
+        remote,
+        "merge_requests",
+        &[
+            ("source_branch", source.to_owned()),
+            ("target_branch", target.to_owned()),
+            ("title", title),
+            ("description", description.to_owned()),
+            ("remove_source_branch", remove_source.to_string()),
+        ],
+    )?;
+    parse_mrs(&Value::Array(vec![value]))
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("GitLab answered without a merge request"))
 }
 
 /// Marks a discussion resolved or open again.
