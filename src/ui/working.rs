@@ -1,9 +1,9 @@
 //! The working tree against `HEAD`: a pinned entry above the commits, kept current while an agent
 //! works. Read-only — GitLance never stages or commits.
 
-use super::{Diff, Header, Selection, WorkingState, Workspace, row, theme};
+use super::{Diff, Header, Selection, WorkingState, Workspace, theme};
 use crate::git::Repo;
-use gpui::{Context, FontWeight, div, prelude::*, px};
+use gpui::{Context, div, prelude::*, px};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -83,37 +83,19 @@ impl Workspace {
         self.load_working_tree(keep, cx);
     }
 
-    /// The pinned entry above the commit list.
-    pub(super) fn render_working_row(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    /// The working tree as a chip on the Commits label: how many changes, one click to open.
+    pub(super) fn render_working_chip(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let selected = self.selection == Selection::WorkingTree;
         (self.wt.count > 0 || selected).then(|| {
-            div().w_full().px(px(6.)).pb(px(4.)).child(
-                row("working-tree", selected)
-                    .h(px(34.))
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Working tree"),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(px(12.))
-                            .text_color(theme::warning())
-                            .child(format!(
-                                "{} {}",
-                                self.wt.count,
-                                if self.wt.count == 1 {
-                                    "change"
-                                } else {
-                                    "changes"
-                                }
-                            )),
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.select_working_tree(cx))),
-            )
+            super::commit_chip("working-tree", selected)
+                .child("WT")
+                .tooltip(|_, cx| cx.new(|_| super::Tip("Working tree against HEAD")).into())
+                .child(
+                    div()
+                        .text_color(theme::warning())
+                        .child(self.wt.count.to_string()),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.select_working_tree(cx)))
         })
     }
 }

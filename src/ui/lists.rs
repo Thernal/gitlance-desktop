@@ -261,6 +261,7 @@ impl Workspace {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.select_branch(ix, None, cx);
                                 this.record();
+                                this.close_picker(cx);
                             })),
                     )
                     .into_any_element()
@@ -352,6 +353,10 @@ impl Workspace {
             Edit::Escape => {
                 text.clear();
                 self.field = None;
+            }
+            Edit::Enter { .. } if field == Field::Branches && self.picker_open => {
+                self.close_picker(cx);
+                return true;
             }
             Edit::Enter { .. } if field == Field::Token => {
                 self.submit_token(cx);
@@ -560,7 +565,7 @@ impl Workspace {
         let count = self.items().len();
         let list = self.options.list_files;
         super::island()
-            .w(px(self.layout.files))
+            .w(px(self.files_width()))
             .flex_none()
             .border_2()
             .border_color(self.zone_border(super::zones::Zone::Files))

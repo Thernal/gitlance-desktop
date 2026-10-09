@@ -217,6 +217,8 @@ impl Workspace {
             if self.shortcuts {
                 self.shortcuts = false;
                 cx.notify();
+            } else if self.picker_open {
+                self.close_picker(cx);
             } else if self.ctx_menu.is_some() {
                 self.close_menu(cx);
             } else if self.repo_menu {

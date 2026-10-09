@@ -182,7 +182,6 @@ impl Workspace {
         }
         self.select_branch(src, None, cx);
         self.record();
-        self.review_open = true;
     }
 
     /// Reads the pushes GitLab kept for request `iid`; they become the versions timeline once the
@@ -658,34 +657,19 @@ impl Workspace {
         self.request_action(move |remote| mr::delete_draft(&remote, iid, id), cx);
     }
 
-    /// "Whole request" above the commits: back to the diff of the request after a single commit.
-    pub(super) fn render_request_row(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    /// "!412 · 3" on the Commits label: back to the diff of the whole request after one commit.
+    pub(super) fn render_request_chip(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let (base, head, iid) = self.open_request.clone()?;
         let selected = self.selection == Selection::None && self.showing_request();
         let n = self.commits.len();
         Some(
-            div().w_full().px(px(6.)).pb(px(4.)).child(
-                row("request-row", selected)
-                    .h(px(34.))
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .font_weight(FontWeight::MEDIUM)
-                            .truncate()
-                            .child(format!("Whole request !{iid}")),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(px(12.))
-                            .text_color(theme::warning())
-                            .child(plural(n, "commit")),
-                    )
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.run_compare(base.clone(), head.clone(), true, Some(iid), cx)
-                    })),
-            ),
+            super::commit_chip("request-row", selected)
+                .child(format!("!{iid}"))
+                .tooltip(|_, cx| cx.new(|_| super::Tip("The whole merge request")).into())
+                .child(div().text_color(theme::warning()).child(n.to_string()))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.run_compare(base.clone(), head.clone(), true, Some(iid), cx)
+                })),
         )
     }
 
@@ -826,6 +810,29 @@ impl Workspace {
                                 },
                             )),
                         )
+                        .children((!self.comments.is_empty()).then(|| {
+                            div()
+                                .id("copy-for-agent")
+                                .mr(px(6.))
+                                .mt(px(6.))
+                                .px_2()
+                                .rounded(px(super::ROW_RADIUS))
+                                .border_1()
+                                .border_color(theme::focus())
+                                .text_color(theme::focus())
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .cursor_pointer()
+                                .hover(|s| s.bg(theme::hover()))
+                                .child(if self.copied {
+                                    "Copied ✓".to_owned()
+                                } else {
+                                    format!("Copy for agent · {}", self.comments.len())
+                                })
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.copy_for_agent(cx)
+                                }))
+                        }))
                         .children((pending > 0).then(|| {
                             div()
                                 .id("submit-review")
@@ -1079,9 +1086,10 @@ impl Workspace {
                             format::ago(m.updated),
                         )),
                 )
-                .on_click(
-                    cx.listener(move |this, _: &ClickEvent, _, cx| this.select_request(iid, cx)),
-                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.select_request(iid, cx);
+                    this.close_picker(cx);
+                }))
         });
         div()
             .flex_1()
@@ -1159,112 +1167,6 @@ impl Workspace {
     }
 
     /// The discussions on the open branch's merge request, for the review panel.
-    pub(super) fn render_request_threads(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement + use<>> {
-        let iid = self.requests.current?;
-        let threads = &self.requests.threads;
-        if threads.is_empty() {
-            return None;
-        }
-        let open = threads.iter().filter(|t| !t.resolved).count();
-        let items = threads.iter().map(|t| {
-            let first = &t.notes[0];
-            let where_ = match (&t.path, t.new_line.or(t.old_line)) {
-                (Some(p), Some(n)) => format!("{p}:{n}"),
-                (Some(p), None) => p.clone(),
-                _ => "General".to_owned(),
-            };
-            let target = t.path.clone().zip(t.new_line.or(t.old_line));
-            let old = t.new_line.is_none();
-            div()
-                .id((
-                    "mr-thread",
-                    t.notes.len() * 1000 + first.created as usize % 1000,
-                ))
-                .mx(px(6.))
-                .my(px(1.))
-                .px(px(10.))
-                .py(px(8.))
-                .rounded(px(super::ROW_RADIUS))
-                .when(target.is_some(), |s| {
-                    s.cursor_pointer().hover(|s| s.bg(theme::hover()))
-                })
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .font_family(theme::CODE_FONT)
-                        .text_size(px(11.))
-                        .text_color(theme::faint())
-                        .child(div().flex_1().min_w_0().truncate().child(where_))
-                        .child(if t.resolved { "resolved ✓" } else { "" }),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(theme::accent())
-                        .child(first.author.clone()),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(if t.resolved {
-                            theme::muted()
-                        } else {
-                            theme::text()
-                        })
-                        .line_clamp(5)
-                        .child(first.body.clone()),
-                )
-                .children((t.notes.len() > 1).then(|| {
-                    div()
-                        .pt(px(2.))
-                        .text_size(px(11.))
-                        .text_color(theme::muted())
-                        .child(format!(
-                            "{} · last by {}",
-                            plural(t.notes.len() - 1, "reply"),
-                            t.notes
-                                .last()
-                                .map(|n| n.author.as_str())
-                                .unwrap_or_default()
-                        ))
-                }))
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    if let Some((path, line)) = target.clone() {
-                        this.jump_to_line(&path, line, old, cx)
-                    }
-                }))
-        });
-        Some(
-            div()
-                .flex_none()
-                .max_h(px(420.))
-                .flex()
-                .flex_col()
-                .border_b_1()
-                .border_color(theme::island_border())
-                .child(
-                    super::island_label(format!(
-                        "GitLab !{iid} · {} · {open} open",
-                        plural(threads.len(), "thread")
-                    ))
-                    .text_color(theme::warning()),
-                )
-                .child(
-                    div()
-                        .id("mr-threads")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .pb(px(6.))
-                        .children(items),
-                ),
-        )
-    }
-
     /// Shows `line` of `path`: that file first when it is another one.
     pub(super) fn jump_to_line(
         &mut self,

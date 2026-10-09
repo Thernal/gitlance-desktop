@@ -104,7 +104,7 @@ impl Default for Layout {
     fn default() -> Self {
         Self {
             sidebar: 360.,
-            files: 280.,
+            files: 320.,
             branches: 180.,
             show_sidebar: true,
             show_files: true,

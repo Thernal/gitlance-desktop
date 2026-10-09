@@ -5,11 +5,9 @@
 
 use super::input::{self, Edit};
 use super::rows::Row;
-use super::{GAP, ROW_RADIUS, Selection, Workspace, format, island, island_label, theme};
+use super::{ROW_RADIUS, Selection, Workspace, format, theme};
 use crate::review::{self, Comment, Place};
-use gpui::{
-    ClickEvent, ClipboardItem, Context, FontWeight, KeyDownEvent, WeakEntity, div, prelude::*, px,
-};
+use gpui::{ClipboardItem, Context, FontWeight, KeyDownEvent, WeakEntity, div, prelude::*, px};
 
 /// Who a comment is for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -345,7 +343,6 @@ impl Workspace {
         });
         self.save_comments();
         self.copied = false;
-        self.review_open = true;
         self.refresh_rows();
         cx.notify();
     }
@@ -428,7 +425,6 @@ impl Workspace {
                 match result {
                     Ok(()) => {
                         this.compose = None;
-                        this.review_open = true;
                         this.refresh_rows();
                         this.reload_threads(cx);
                     }
@@ -1087,112 +1083,6 @@ impl Workspace {
                     ),
             )
             .into_any_element()
-    }
-
-    /// The Review island: every comment of the repository, and Copy for agent.
-    pub(super) fn render_review(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let threads = self.render_request_threads(cx);
-        let items = self.comments.iter().map(|c| {
-            let id = c.id;
-            let place = self.place_of(c);
-            let where_ = match place {
-                Place::Line(n) => format!("{}:{n}", c.path),
-                Place::Outdated => format!("{} · outdated", c.path),
-            };
-            div()
-                .id(("review-item", id))
-                .mx(px(6.))
-                .my(px(1.))
-                .px(px(10.))
-                .py(px(8.))
-                .rounded(px(ROW_RADIUS))
-                .cursor_pointer()
-                .hover(|s| s.bg(theme::hover()))
-                .child(
-                    div()
-                        .font_family(theme::CODE_FONT)
-                        .text_size(px(11.))
-                        .text_color(theme::faint())
-                        .truncate()
-                        .child(where_),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(if place == Place::Outdated {
-                            theme::muted()
-                        } else {
-                            theme::text()
-                        })
-                        .child(c.body.clone()),
-                )
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.jump_to(id, cx)))
-        });
-        let count = self.comments.len();
-        island()
-            .w(px(320.))
-            .flex_none()
-            .ml(px(GAP))
-            .children(threads)
-            .child(
-                island_label(format!(
-                    "For your agent · {count} comment{}",
-                    if count == 1 { "" } else { "s" }
-                ))
-                .text_color(theme::focus()),
-            )
-            .child(
-                div()
-                    .id("review-list")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .children(items)
-                    .when(count == 0, |s| {
-                        s.child(
-                            div()
-                                .px_4()
-                                .py_4()
-                                .text_size(px(12.))
-                                .text_color(theme::muted())
-                                .child("Hover a line in the diff and press + to write a comment for your agent."),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .p_3()
-                    .border_t_1()
-                    .border_color(theme::island_border())
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(theme::muted())
-                            .child("Kept on this Mac, not in the repository. Copy them and paste into your agent."),
-                    )
-                    .child(
-                        div()
-                            .id("copy-for-agent")
-                            .flex()
-                            .justify_center()
-                            .py_1()
-                            .rounded(px(8.))
-                            .bg(if count == 0 { theme::hover() } else { theme::accent() })
-                            .text_color(if count == 0 { theme::faint() } else { theme::base() })
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .when(count > 0, |s| s.cursor_pointer())
-                            .child(if self.copied { "Copied ✓" } else { "Copy for agent" })
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                if !this.comments.is_empty() {
-                                    this.copy_for_agent(cx)
-                                }
-                            })),
-                    ),
-            )
     }
 
     /// Shows a comment: in the open file, scrolled to; in another file of the diff, that file first.

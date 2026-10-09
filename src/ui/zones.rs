@@ -42,8 +42,11 @@ impl Workspace {
     }
 
     pub(super) fn set_zone(&mut self, zone: Zone, cx: &mut Context<Self>) {
-        if self.zone != zone {
+        // In a narrow window the files list is a popover: it opens with the zone and closes with it.
+        let popover = zone == Zone::Files && self.compact();
+        if self.zone != zone || self.files_popover != popover {
             self.zone = zone;
+            self.files_popover = popover;
             cx.notify();
         }
     }
@@ -52,10 +55,10 @@ impl Workspace {
     fn zones(&self) -> Vec<Zone> {
         let mut out = Vec::new();
         if self.layout.show_sidebar {
-            out.extend([Zone::Branches, Zone::Commits]);
+            out.push(Zone::Commits);
         }
         if self.diff.is_some() && !self.settings_open {
-            if self.layout.show_files {
+            if self.files_zone() {
                 out.push(Zone::Files);
             }
             out.push(Zone::Diff);
@@ -98,7 +101,7 @@ impl Workspace {
             }
             Zone::Branches if forward => self.set_zone(Zone::Commits, cx),
             Zone::Diff if !forward => self.set_zone(
-                if self.layout.show_files {
+                if self.files_zone() {
                     Zone::Files
                 } else {
                     Zone::Commits
@@ -127,11 +130,11 @@ impl Workspace {
     /// ↵: one step in.
     pub(super) fn activate(&mut self, cx: &mut Context<Self>) {
         match self.zone {
-            Zone::Branches => self.set_zone(Zone::Commits, cx),
+            Zone::Branches => self.close_picker(cx),
             Zone::Commits => {
                 if self.diff.is_some() {
                     self.set_zone(
-                        if self.layout.show_files {
+                        if self.files_zone() {
                             Zone::Files
                         } else {
                             Zone::Diff

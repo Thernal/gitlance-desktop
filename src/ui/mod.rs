@@ -429,7 +429,6 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                                         .into(),
                                     at: "a10f3cf".into(),
                                 });
-                                this.review_open = true;
                                 this.start_comment(false, line + 1, cx);
                                 if let Some(c) = this.compose.as_mut() {
                                     c.body = "Name this after what it holds.".into();
@@ -651,19 +650,17 @@ struct Diff {
 enum Split {
     Sidebar,
     Files,
-    Branches,
 }
 
 impl Split {
     fn vertical(self) -> bool {
-        self == Split::Branches
+        false
     }
 
     fn bounds(self) -> (f32, f32) {
         match self {
             Split::Sidebar => (220., 720.),
             Split::Files => (160., 640.),
-            Split::Branches => (48., 640.),
         }
     }
 }
@@ -708,6 +705,14 @@ pub struct Workspace {
     newreq: Option<create::NewRequest>,
     /// The keyboard card is open.
     shortcuts: bool,
+    /// The branch / merge request picker hangs from the title bar.
+    picker_open: bool,
+    /// The window's width in logical pixels, as of the last frame.
+    win_width: f32,
+    /// The diff is narrower than 700 px: it is drawn unified whatever the option says.
+    narrow: bool,
+    /// The files list is open over the diff (a window too narrow for its column).
+    files_popover: bool,
     /// The comment marks of the open file's gutter.
     notes: Vec<diff_view::LineNote>,
     /// Discussions whose open or folded state differs from the default (a resolved one is folded).
@@ -738,7 +743,6 @@ pub struct Workspace {
     /// Review comments of this repository, the one being written, and the Review island.
     comments: Vec<crate::review::Comment>,
     compose: Option<comments::Compose>,
-    review_open: bool,
     /// A comment to scroll to once its file is laid out.
     jump: Option<u64>,
     /// "Copied ✓" on the Copy button until something changes.
@@ -839,6 +843,10 @@ impl Workspace {
             gitlab_check: None,
             newreq: None,
             shortcuts: false,
+            picker_open: false,
+            win_width: 1480.,
+            narrow: false,
+            files_popover: false,
             notes: Vec::new(),
             toggled_mr: HashSet::new(),
             toggled_agent: HashSet::new(),
@@ -859,7 +867,6 @@ impl Workspace {
             watch: watch::Watch::default(),
             comments: Vec::new(),
             compose: None,
-            review_open: false,
             jump: None,
             copied: false,
             field_all: false,
@@ -1206,6 +1213,10 @@ impl Workspace {
         };
         self.file = ix;
         self.fcursor = None;
+        if self.files_popover {
+            self.files_popover = false;
+            self.zone = zones::Zone::Diff;
+        }
         self.clear_file();
         self.scroll_file_into_view(ix);
         let mode = self.options.mode;
@@ -1240,7 +1251,7 @@ impl Workspace {
         let rows = self
             .data
             .as_ref()
-            .map(|data| rows::layout(data, &self.options, &self.expanded))
+            .map(|data| rows::layout(data, &self.view_options(), &self.expanded))
             .unwrap_or_default();
         self.rows = self.with_comments(rows);
         self.notes = self.line_notes();
@@ -1262,7 +1273,7 @@ impl Workspace {
             return;
         };
         self.expanded.insert(segment);
-        let rows = self.with_comments(rows::layout(&data, &self.options, &self.expanded));
+        let rows = self.with_comments(rows::layout(&data, &self.view_options(), &self.expanded));
         let inserted = rows.len() + 1 - self.rows.len();
         self.rows = rows;
         self.diff_list.splice(at..at + 1, inserted);
@@ -1473,6 +1484,40 @@ impl Workspace {
         }
     }
 
+    /// The options the rows are laid out with: a diff under 700 px wide is unified.
+    fn view_options(&self) -> ViewOptions {
+        let mut options = self.options;
+        options.unified |= self.narrow;
+        options
+    }
+
+    /// A window under 1 100 px has no room for the files column: it opens over the diff instead.
+    fn compact(&self) -> bool {
+        self.win_width < 1100.
+    }
+
+    /// The files column is drawn: there is more than one file to list and room for the column.
+    fn files_shown(&self) -> bool {
+        self.layout.show_files
+            && !self.compact()
+            && self.diff.as_ref().is_some_and(|d| d.files.len() > 1)
+    }
+
+    /// The files exist as a zone (a column, or the popover of a narrow window).
+    pub(super) fn files_zone(&self) -> bool {
+        self.layout.show_files && self.diff.as_ref().is_some_and(|d| d.files.len() > 1)
+    }
+
+    /// As wide as the longest path needs, within 200 px and the width the column was dragged to.
+    pub(super) fn files_width(&self) -> f32 {
+        let longest = self
+            .diff
+            .as_ref()
+            .and_then(|d| d.files.iter().map(|f| f.path().chars().count()).max())
+            .unwrap_or(0);
+        (longest as f32 * 7.4 + 96.).clamp(200., self.layout.files.max(200.))
+    }
+
     fn row_style(&self) -> RowStyle<'_> {
         let digits = self.data.as_ref().map_or(3, |d| d.gutter_digits);
         RowStyle {
@@ -1504,8 +1549,8 @@ impl Workspace {
             return 0.;
         };
         let style = self.row_style();
-        let sides = if self.options.unified { 1. } else { 2. };
-        let visible = (self.body_width.get() - style.chrome(self.options.unified)) / sides;
+        let sides = if self.view_options().unified { 1. } else { 2. };
+        let visible = (self.body_width.get() - style.chrome(self.view_options().unified)) / sides;
         (data.widest as f32 * self.char_width + 24. - visible).max(0.)
     }
 
@@ -1606,17 +1651,82 @@ impl Workspace {
         if !self.requests.available && !self.requests.connectable {
             return;
         }
-        self.layout.show_sidebar = true;
-        self.requests.side = match self.requests.side {
-            requests::Side::Requests => requests::Side::Branches,
-            requests::Side::Branches => requests::Side::Requests,
-        };
-        self.layout.save();
-        // The connect panel is ready for the token to be pasted.
-        if self.requests.connectable && self.requests.side == requests::Side::Requests {
-            self.start_field(lists::Field::Token, cx);
+        if self.picker_open && self.requests.side == requests::Side::Requests {
+            return self.close_picker(cx);
         }
+        self.open_picker(true, cx);
+    }
+
+    /// The picker under the title bar: branches, or (`requests`) merge requests. The filter, or
+    /// the token field of the connect panel, takes the keyboard at once.
+    pub(super) fn open_picker(&mut self, requests: bool, cx: &mut Context<Self>) {
+        let side = if requests && (self.requests.available || self.requests.connectable) {
+            requests::Side::Requests
+        } else {
+            requests::Side::Branches
+        };
+        self.requests.side = side;
+        self.picker_open = true;
+        self.zone = zones::Zone::Branches;
+        let field = if side == requests::Side::Requests && self.requests.connectable {
+            lists::Field::Token
+        } else {
+            lists::Field::Branches
+        };
+        self.start_field(field, cx);
+    }
+
+    pub(super) fn close_picker(&mut self, cx: &mut Context<Self>) {
+        if !self.picker_open {
+            return;
+        }
+        self.picker_open = false;
+        self.field = None;
+        self.bfilter.clear();
+        self.zone = zones::Zone::Commits;
         cx.notify();
+    }
+
+    fn render_picker(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        if !self.picker_open {
+            return None;
+        }
+        Some(
+            div()
+                .id("picker-backdrop")
+                .absolute()
+                .size_full()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| this.close_picker(cx)),
+                )
+                .child(
+                    island()
+                        .occlude()
+                        .absolute()
+                        .left(px(56.))
+                        .top(px(44.))
+                        .w(px(400.))
+                        .h(px(self.picker_height()))
+                        .border_2()
+                        .border_color(theme::focus())
+                        .shadow_lg()
+                        .child(self.render_branches_header())
+                        .child(
+                            if self.requests.side == requests::Side::Requests
+                                && self.requests.connectable
+                            {
+                                self.render_connect(cx).into_any_element()
+                            } else if self.requests.side == requests::Side::Requests
+                                && self.requests.available
+                            {
+                                self.render_requests(cx).into_any_element()
+                            } else {
+                                self.render_branches(cx).into_any_element()
+                            },
+                        ),
+                ),
+        )
     }
 
     /// ⌘.: the diff alone; pressed again, the islands come back.
@@ -1737,7 +1847,6 @@ impl Workspace {
         match split {
             Split::Sidebar => &mut self.layout.sidebar,
             Split::Files => &mut self.layout.files,
-            Split::Branches => &mut self.layout.branches,
         }
     }
 
@@ -1747,7 +1856,6 @@ impl Workspace {
             *self.size(split) = match split {
                 Split::Sidebar => Layout::default().sidebar,
                 Split::Files => Layout::default().files,
-                Split::Branches => Layout::default().branches,
             };
             self.layout.save();
             cx.notify();
@@ -1790,7 +1898,6 @@ impl Workspace {
         let group = match split {
             Split::Sidebar => "split-sidebar",
             Split::Files => "split-files",
-            Split::Branches => "split-branches",
         };
         let line = div()
             .rounded_full()
@@ -1893,12 +2000,29 @@ impl Workspace {
                     })
                     .children(branch.map(|b| {
                         div()
+                            .id("branch-picker")
                             .flex()
                             .items_center()
                             .gap_1()
+                            .px_2()
+                            .h(px(26.))
+                            .rounded(px(ROW_RADIUS))
                             .text_color(theme::muted())
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                            .tooltip(|_, cx| cx.new(|_| Tip("Branches  ⌃1")).into())
                             .child(icons::icon("branch").text_color(theme::muted()))
                             .child(b)
+                            .child(icons::icon("chevron").text_color(theme::muted()))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if this.picker_open
+                                    && this.requests.side == requests::Side::Branches
+                                {
+                                    this.close_picker(cx)
+                                } else {
+                                    this.open_picker(false, cx)
+                                }
+                            }))
                     }))
                     .children(self.render_request_title()),
             )
@@ -2145,42 +2269,6 @@ impl Workspace {
             .flex_none()
             .flex()
             .flex_col()
-            .child(
-                island()
-                    .h(px(self.branches_height()))
-                    // Gives way when comments and versions need the room, so Commits stays.
-                    .flex_shrink(1.)
-                    .min_h(px(
-                        if self.requests.connectable
-                            && self.requests.side == requests::Side::Requests
-                        {
-                            300.
-                        } else {
-                            140.
-                        },
-                    ))
-                    .border_2()
-                    .border_color(self.zone_border(zones::Zone::Branches))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| this.set_zone(zones::Zone::Branches, cx)),
-                    )
-                    .child(self.render_branches_header())
-                    .child(
-                        if self.requests.side == requests::Side::Requests
-                            && self.requests.connectable
-                        {
-                            self.render_connect(cx).into_any_element()
-                        } else if self.requests.side == requests::Side::Requests
-                            && self.requests.available
-                        {
-                            self.render_requests(cx).into_any_element()
-                        } else {
-                            self.render_branches(cx).into_any_element()
-                        },
-                    ),
-            )
-            .child(self.handle(Split::Branches, cx))
             .children((self.versions.len() > 1).then(|| {
                 div()
                     .flex_none()
@@ -2207,14 +2295,31 @@ impl Workspace {
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| this.set_zone(zones::Zone::Commits, cx)),
                     )
-                    .child(island_label(format!(
-                        "Commits · {}{}",
-                        self.commits.len(),
-                        self.zone_tag(zones::Zone::Commits)
-                    )))
-                    .children(self.render_request_row(cx))
-                    .children(self.render_working_row(cx))
-                    .child(self.render_find(cx))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .pr(px(8.))
+                            .child(
+                                island_label(format!(
+                                    "Commits · {}{}",
+                                    self.commits.len(),
+                                    self.zone_tag(zones::Zone::Commits)
+                                ))
+                                .flex_none(),
+                            )
+                            .child(div().flex_1())
+                            .children(self.render_request_chip(cx))
+                            .children(self.render_working_chip(cx))
+                            .child(
+                                commit_chip("commit-search", self.find.text.is_some())
+                                    .child("⌕")
+                                    .tooltip(|_, cx| cx.new(|_| Tip("Search commits  ⌘⇧F")).into())
+                                    .on_click(cx.listener(|this, _, _, cx| this.start_find(cx))),
+                            ),
+                    )
+                    .children(self.find.text.is_some().then(|| self.render_find(cx)))
                     .children(self.render_pill(cx))
                     .child(if self.find.shown.as_ref().is_some_and(Vec::is_empty) {
                         self.render_no_match().into_any_element()
@@ -2236,8 +2341,8 @@ impl Workspace {
             )
     }
 
-    /// The height of the branches island: what its rows need, never more than the dragged size.
-    fn branches_height(&self) -> f32 {
+    /// The height of the picker: what its rows need, up to 560 px.
+    fn picker_height(&self) -> f32 {
         let content = if self.requests.connectable && self.requests.side == requests::Side::Requests
         {
             300.
@@ -2247,7 +2352,7 @@ impl Workspace {
             // Label and filter, a header and a row each: roughly what `branch_items` draws.
             92. + 34. * self.branches.len() as f32 + 28. * 2.
         };
-        self.layout.branches.min(content.max(150.))
+        content.clamp(150., 560.)
     }
 
     fn render_versions(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2534,7 +2639,6 @@ impl Workspace {
             .child(
                 div()
                     .w_full()
-                    .h(px(34.))
                     .line_height(px(17.))
                     .overflow_hidden()
                     .line_clamp(2)
@@ -2553,19 +2657,20 @@ impl Workspace {
                             .child(format::short(commit.id)),
                     )
                     .child(
-                        div().flex().min_w_0().overflow_hidden().gap_2().children(
+                        div().flex().flex_none().gap_2().children(
                             self.decor
                                 .get(&commit.id)
-                                .map(|d| lists::deco_tags(d))
+                                .map(|d| {
+                                    lists::deco_tags(d).into_iter().take(1).collect::<Vec<_>>()
+                                })
                                 .unwrap_or_default(),
                         ),
                     )
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .children(several.then(|| commit.author.clone())),
+                        div().flex_1().min_w_0().truncate().children(
+                            (several && !self.decor.contains_key(&commit.id))
+                                .then(|| commit.author.clone()),
+                        ),
                     )
                     .child(
                         div()
@@ -2611,11 +2716,12 @@ impl Workspace {
             .child(div().h(px(GAP)).flex_none())
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .flex()
                     .when(!commits_tab, |s| {
-                        s.children(self.layout.show_files.then(|| {
+                        s.children(self.files_shown().then(|| {
                             div()
                                 .flex()
                                 .flex_none()
@@ -2623,7 +2729,20 @@ impl Workspace {
                                 .child(self.handle(Split::Files, cx))
                         }))
                         .child(self.render_file(diff, cx))
-                        .children(self.review_open.then(|| self.render_review(cx)))
+                        .children(
+                            (self.compact() && self.files_popover && self.files_zone()).then(
+                                || {
+                                    div()
+                                        .absolute()
+                                        .left(px(0.))
+                                        .top(px(0.))
+                                        .bottom(px(0.))
+                                        .flex()
+                                        .shadow_lg()
+                                        .child(self.render_files(diff, cx))
+                                },
+                            ),
+                        )
                     })
                     .when(commits_tab, |s| s.child(self.render_pairs(diff, cx))),
             )
@@ -2637,7 +2756,7 @@ impl Workspace {
             .items_start()
             .gap_4()
             .px_4()
-            .py_3()
+            .py(px(8.))
             .child(self.render_summary(diff, cx))
             .child(self.render_toolbar(cx))
     }
@@ -2659,19 +2778,6 @@ impl Workspace {
                 diff_view::group()
                     .child(chip("split", "Split", !o.unified).on_click(set(Opt::Unified, false)))
                     .child(chip("unified", "Unified", o.unified).on_click(set(Opt::Unified, true))),
-            )
-            .child(
-                diff_view::group().child(
-                    chip(
-                        "review",
-                        format!("Review · {}", self.comments.len()),
-                        self.review_open,
-                    )
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.review_open = !this.review_open;
-                        cx.notify();
-                    })),
-                ),
             )
             .child(
                 diff_view::group().child(
@@ -2744,45 +2850,13 @@ impl Workspace {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(commit.summary.clone()),
                     )
-                    .children(body.map(|b| {
-                        // A long message is folded after two lines, as GitLab and Android Studio do.
-                        let lines: Vec<&str> = b.lines().filter(|l| !l.trim().is_empty()).collect();
-                        let long = lines.len() > 2;
-                        let shown = if self.body_expanded || !long {
-                            b.clone()
-                        } else {
-                            format!("{}…", lines[..2].join("\n"))
-                        };
+                    .children(body.clone().filter(|_| self.body_expanded).map(|b| {
                         div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .id("commit-body")
-                                    .max_h(px(220.))
-                                    .overflow_y_scroll()
-                                    .text_color(theme::muted())
-                                    .child(shown),
-                            )
-                            .when(long, |s| {
-                                s.child(
-                                    div()
-                                        .id("body-toggle")
-                                        .text_size(px(12.))
-                                        .text_color(theme::accent())
-                                        .cursor_pointer()
-                                        .child(if self.body_expanded {
-                                            "Show less"
-                                        } else {
-                                            "Show more"
-                                        })
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.body_expanded = !this.body_expanded;
-                                            cx.notify();
-                                        })),
-                                )
-                            })
+                            .id("commit-body")
+                            .max_h(px(220.))
+                            .overflow_y_scroll()
+                            .text_color(theme::muted())
+                            .child(b)
                     }))
                     .child(
                         div()
@@ -2808,6 +2882,22 @@ impl Workspace {
                                     ),
                             )
                             .child(commit.author.clone())
+                            .children(body.is_some().then(|| {
+                                div()
+                                    .id("body-toggle")
+                                    .text_color(theme::accent())
+                                    .cursor_pointer()
+                                    .hover(|s| s.text_color(theme::text()))
+                                    .child(if self.body_expanded {
+                                        "Message ▴"
+                                    } else {
+                                        "Message ▾"
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.body_expanded = !this.body_expanded;
+                                        cx.notify();
+                                    }))
+                            }))
                             .child(format::date(commit.time))
                             .child(stats)
                             .children(self.web.as_ref().map(|web| {
@@ -3081,6 +3171,23 @@ impl Workspace {
                     .px_4()
                     .border_b_1()
                     .border_color(theme::island_border())
+                    .children((self.compact() && self.files_zone()).then(|| {
+                        chip(
+                            "files-popover",
+                            format!("▾ {}", plural(diff.files.len(), "file")),
+                            self.files_popover,
+                        )
+                        .on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                let open = !this.files_popover;
+                                this.files_popover = open;
+                                if open {
+                                    this.zone = zones::Zone::Files;
+                                }
+                                cx.notify();
+                            },
+                        ))
+                    }))
                     .child(change_badge(f.change))
                     .child(div().flex_1().min_w_0().truncate().child(path))
                     .children(
@@ -3343,6 +3450,20 @@ impl Render for Workspace {
             window.set_window_title(&title);
             self.title = title;
         }
+        // The widths the layout rules read: the window's, and last frame's width of the diff.
+        let win: f32 = window.viewport_size().width.into();
+        if (win - self.win_width).abs() > 0.5 {
+            self.win_width = win;
+            if !self.compact() {
+                self.files_popover = false;
+            }
+        }
+        let body = self.body_width.get();
+        let narrow = body > 0. && body < 700.;
+        if narrow != self.narrow {
+            self.narrow = narrow;
+            self.relayout();
+        }
         if self.char_width == 0. {
             let text = window.text_system();
             let id = text.resolve_font(&font(theme::CODE_FONT));
@@ -3415,9 +3536,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &PageUp, _, cx| this.page(false, cx)))
             .on_action(cx.listener(|this, _: &DiffStart, _, cx| this.diff_edge(false, cx)))
             .on_action(cx.listener(|this, _: &DiffEnd, _, cx| this.diff_edge(true, cx)))
-            .on_action(cx.listener(|this, _: &FocusBranches, _, cx| {
-                this.set_zone(zones::Zone::Branches, cx)
-            }))
+            .on_action(cx.listener(|this, _: &FocusBranches, _, cx| this.open_picker(false, cx)))
             .on_action(
                 cx.listener(|this, _: &FocusCommits, _, cx| {
                     this.set_zone(zones::Zone::Commits, cx)
@@ -3549,6 +3668,7 @@ impl Render for Workspace {
             // Last, so it paints over everything.
             .children(self.repo_menu.then(|| self.render_repo_menu(cx)))
             .children(self.render_ctx_menu(window.viewport_size(), cx))
+            .children(self.render_picker(cx))
             .children(self.render_create(cx))
             .children(self.render_shortcuts(cx))
             .children(self.render_palette(cx))
@@ -3679,6 +3799,24 @@ fn is_trailer(line: &str) -> bool {
     ];
     line.split_once(':')
         .is_some_and(|(key, _)| KEYS.contains(&key.trim().to_lowercase().as_str()))
+}
+
+/// A small pill on the Commits label.
+fn commit_chip(id: &'static str, on: bool) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .h(px(22.))
+        .px(px(8.))
+        .flex()
+        .items_center()
+        .gap(px(5.))
+        .rounded(px(ROW_RADIUS))
+        .text_size(px(12.))
+        .text_color(if on { theme::text() } else { theme::muted() })
+        .cursor_pointer()
+        .when(on, |s| s.bg(theme::selected()))
+        .hover(|s| s.bg(theme::hover()))
 }
 
 fn island_label(text: impl Into<SharedString>) -> gpui::Div {
