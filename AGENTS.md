@@ -22,6 +22,6 @@ Feature specs, UI mockups and design decisions: the sibling repo `../Design` —
 - Layout: `src/git/` (read-only git layer, tested on temp repos), `src/highlight.rs` (syntect, One Dark), `src/structural.rs` (difftastic), `src/worddiff.rs` (changed words), `src/search.rs` (commit search),
   `src/ui/` (GPUI views), `src/storage.rs` (recent repos, pane sizes, view options, Settings).
   Icons are Lucide, embedded in `src/ui/icons.rs` (one set, drawn in the text colour; set `.text_color` on the svg itself).
-  `src/ui/` splits into `find.rs` (search field), `watch.rs` (auto-refresh: polls `.git`, read-only), `settings.rs`, `palette.rs` (⌘K palette and the compare picker). `./run.sh` builds and opens it.
+  `src/ui/` splits into `find.rs` (search field), `watch.rs` (auto-refresh: polls `.git`, read-only), `settings.rs`, `palette.rs` (⌘K palette and the compare picker), `working.rs` (working tree against HEAD, polled every 2 s; VIEW token `worktree`). `./run.sh` builds and opens it.
 - Commits: Conventional Commits — `<type>(<scope>): <subject>`, imperative, lowercase, no trailing period.
 - Agent scratch files go in `.misc/` (ignored).

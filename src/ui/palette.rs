@@ -397,6 +397,7 @@ impl Workspace {
                 },
                 files: Arc::new(c.files),
                 pairs: Vec::new(),
+                tags: Default::default(),
             })
         });
         cx.notify();

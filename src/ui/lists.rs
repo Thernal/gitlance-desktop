@@ -54,7 +54,7 @@ impl Workspace {
                 id: self.commits.get(ix)?.id,
             }),
             super::Selection::Versions { from, to } => Some(Nav::Versions { refname, from, to }),
-            super::Selection::None => None,
+            super::Selection::WorkingTree | super::Selection::None => None,
         }
     }
 
@@ -592,6 +592,7 @@ impl Workspace {
                             .pl(px(8. + *depth as f32 * 14.))
                             .child(change_badge(file.change))
                             .child(div().flex_1().min_w_0().truncate().child(name))
+                            .children(super::working::file_tag(diff.tags.get(file.path())))
                             .child(super::stats(file))
                             .on_mouse_down(
                                 MouseButton::Right,
@@ -603,10 +604,14 @@ impl Workspace {
                     )
                     .into_any_element()
             }
-            FileItem::File { ix, .. } => {
-                super::render_file_row(&diff.files[*ix], *ix, self.file == *ix, cx)
-                    .into_any_element()
-            }
+            FileItem::File { ix, .. } => super::render_file_row(
+                &diff.files[*ix],
+                diff.tags.get(diff.files[*ix].path()),
+                *ix,
+                self.file == *ix,
+                cx,
+            )
+            .into_any_element(),
             FileItem::Dir {
                 path,
                 name,

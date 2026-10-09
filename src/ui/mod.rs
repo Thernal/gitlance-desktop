@@ -14,6 +14,7 @@ mod select;
 mod settings;
 mod theme;
 mod watch;
+mod working;
 
 use crate::git::{
     BranchRef, ChangeKind, CommitInfo, DiffSettings, FileDiff, PairCommit, PairKind, RangePair,
@@ -412,6 +413,12 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                 .ok();
             wait(1500).await;
         }
+        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("worktree")) {
+            window
+                .update(cx, |this, _, cx| this.select_working_tree(cx))
+                .ok();
+            wait(2500).await;
+        }
         if let Ok(spec) = std::env::var("GITLANCE_SNAPSHOT_COMPARE") {
             window
                 .update(cx, |this, _, cx| {
@@ -461,6 +468,7 @@ enum Selection {
     None,
     Commit(usize),
     Versions { from: usize, to: usize },
+    WorkingTree,
 }
 
 enum Header {
@@ -470,6 +478,10 @@ enum Header {
         to: Version,
         rebased: bool,
         conflicts: usize,
+    },
+    /// Uncommitted work against `HEAD`.
+    WorkingTree {
+        only_unstaged: bool,
     },
     /// Any two refs: what `head` changed against `base`.
     Compare {
@@ -486,6 +498,15 @@ enum Header {
         old: PairCommit,
         new: PairCommit,
     },
+}
+
+/// The working tree's count and fingerprint, polled while a repository is open.
+#[derive(Default)]
+struct WorkingState {
+    count: usize,
+    hash: u64,
+    only_unstaged: bool,
+    task: Option<gpui::Task<()>>,
 }
 
 /// What the version comparison shows: the files that changed, or the commits paired up.
@@ -506,6 +527,8 @@ struct Diff {
     files: Arc<Vec<FileDiff>>,
     /// The commits of a version comparison, paired (empty for anything else).
     pairs: Vec<RangePair>,
+    /// Per path, a word for the file list (the working tree: staged, untracked…).
+    tags: std::collections::HashMap<String, &'static str>,
 }
 
 /// A pane boundary that can be dragged.
@@ -554,6 +577,7 @@ pub struct Workspace {
     selection: Selection,
     version_tab: VersionTab,
     palette: Option<palette::Palette>,
+    wt: WorkingState,
     diff: Option<Diff>,
     file: usize,
     options: ViewOptions,
@@ -650,6 +674,7 @@ impl Workspace {
             selection: Selection::None,
             version_tab: VersionTab::Files,
             palette: None,
+            wt: WorkingState::default(),
             diff: None,
             file: 0,
             options: ViewOptions::load(&settings),
@@ -748,6 +773,7 @@ impl Workspace {
                             this.compose = None;
                         }
                         this.watch.watch(git_dir, fingerprint);
+                        this.start_working_poll(cx);
                         this.root = Some(root);
                         this.branches = branches;
                         let (refname, commit) = keep.unzip();
@@ -864,6 +890,7 @@ impl Workspace {
                 header: Header::Commit(commit),
                 files: Arc::new(files),
                 pairs: Vec::new(),
+                tags: Default::default(),
             })
         });
     }
@@ -910,6 +937,7 @@ impl Workspace {
                 },
                 files: Arc::new(diff.files),
                 pairs,
+                tags: Default::default(),
             })
         });
     }
@@ -937,6 +965,7 @@ impl Workspace {
                 header: Header::Interdiff { from, to, old, new },
                 files: Arc::new(diff.files),
                 pairs: Vec::new(),
+                tags: Default::default(),
             })
         });
     }
@@ -1238,6 +1267,7 @@ impl Workspace {
         match self.selection {
             Selection::Commit(ix) => self.load_commit(ix, keep, cx),
             Selection::Versions { from, to } => self.load_versions(from, to, keep, cx),
+            Selection::WorkingTree => self.load_working_tree(keep, cx),
             Selection::None => {}
         }
     }
@@ -1892,6 +1922,7 @@ impl Workspace {
                     .flex_1()
                     .min_h_0()
                     .child(island_label(format!("Commits · {}", self.commits.len())))
+                    .children(self.render_working_row(cx))
                     .child(self.render_find(cx))
                     .children(self.render_pill(cx))
                     .child(if self.find.shown.as_ref().is_some_and(Vec::is_empty) {
@@ -2429,6 +2460,44 @@ impl Workspace {
                                         this.run_act(Act::OpenUrl(url.clone()), cx)
                                     }))
                             })),
+                    )
+            }
+            Header::WorkingTree { only_unstaged } => {
+                let only = *only_unstaged;
+                header
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_size(px(15.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Working tree against HEAD"),
+                            )
+                            .child(
+                                diff_view::group()
+                                    .child(chip("wt-all", "All changes", !only).on_click(
+                                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                                            this.set_only_unstaged(false, cx)
+                                        }),
+                                    ))
+                                    .child(chip("wt-unstaged", "Not staged only", only).on_click(
+                                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                                            this.set_only_unstaged(true, cx)
+                                        }),
+                                    )),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_3()
+                            .text_size(px(12.))
+                            .text_color(theme::muted())
+                            .child("Read-only: staging and committing happen elsewhere")
+                            .child(stats),
                     )
             }
             Header::Compare {
@@ -3021,6 +3090,7 @@ fn axis(split: Split, position: Point<gpui::Pixels>) -> f32 {
 
 pub(super) fn render_file_row(
     file: &FileDiff,
+    tag: Option<&&'static str>,
     ix: usize,
     selected: bool,
     cx: &mut Context<Workspace>,
@@ -3049,6 +3119,7 @@ pub(super) fn render_file_row(
                         .child(d)
                 })),
         )
+        .children(working::file_tag(tag))
         .child(stats(file))
         .on_mouse_down(
             MouseButton::Right,

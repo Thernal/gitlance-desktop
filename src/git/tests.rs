@@ -474,3 +474,44 @@ fn compare_since_the_merge_base_shows_only_what_the_head_added() {
     assert_eq!(repo.resolve("feature").unwrap(), feature);
     assert!(repo.resolve("nonexistent").is_err());
 }
+
+#[test]
+fn the_working_tree_reads_staged_unstaged_and_untracked_changes() {
+    use std::fs;
+    let fx = Fixture::new();
+    let dir = fx.repo.workdir().unwrap().to_owned();
+    fs::write(dir.join("a.txt"), "one\n").unwrap();
+    fs::write(dir.join("b.txt"), "one\n").unwrap();
+    let mut index = fx.repo.index().unwrap();
+    index.add_path(std::path::Path::new("a.txt")).unwrap();
+    index.add_path(std::path::Path::new("b.txt")).unwrap();
+    index.write().unwrap();
+    let tree = fx.repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let sig = Signature::new("Test", "t@example.com", &Time::new(1, 0)).unwrap();
+    fx.repo
+        .commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+        .unwrap();
+
+    fs::write(dir.join("a.txt"), "two\n").unwrap(); // not staged
+    fs::write(dir.join("b.txt"), "two\n").unwrap();
+    index.add_path(std::path::Path::new("b.txt")).unwrap(); // staged
+    index.write().unwrap();
+    fs::write(dir.join("c.txt"), "new\n").unwrap(); // untracked
+
+    let repo = fx.open();
+    let all = repo.working_tree(DiffSettings::default(), false).unwrap();
+    assert_eq!(paths(&all.files), ["a.txt", "b.txt", "c.txt"]);
+    assert_eq!(all.tags["a.txt"], "not staged");
+    assert_eq!(all.tags["b.txt"], "staged");
+    assert_eq!(all.tags["c.txt"], "untracked");
+    let c = all.files.iter().find(|f| f.path() == "c.txt").unwrap();
+    assert_eq!(c.new_text.as_deref(), Some("new\n"));
+
+    let unstaged = repo.working_tree(DiffSettings::default(), true).unwrap();
+    assert_eq!(paths(&unstaged.files), ["a.txt", "c.txt"]);
+
+    let (count, before) = repo.working_summary().unwrap();
+    assert_eq!(count, 3);
+    fs::write(dir.join("a.txt"), "three!\n").unwrap();
+    assert_ne!(repo.working_summary().unwrap().1, before);
+}

@@ -88,7 +88,16 @@ pub(super) fn tree_to_tree(
     collect(repo, diff)
 }
 
-pub(super) fn collect(repo: &Repository, mut diff: Diff<'_>) -> Result<Vec<FileDiff>> {
+pub(super) fn collect(repo: &Repository, diff: Diff<'_>) -> Result<Vec<FileDiff>> {
+    collect_from(repo, diff, false)
+}
+
+/// `workdir`: the new side may be a file on disk that has no blob yet.
+pub(super) fn collect_from(
+    repo: &Repository,
+    mut diff: Diff<'_>,
+    workdir: bool,
+) -> Result<Vec<FileDiff>> {
     diff.find_similar(Some(DiffFindOptions::new().renames(true)))?;
     let mut files = Vec::with_capacity(diff.deltas().len());
     for idx in 0..diff.deltas().len() {
@@ -112,8 +121,8 @@ pub(super) fn collect(repo: &Repository, mut diff: Diff<'_>) -> Result<Vec<FileD
             .then(|| path(delta.new_file()))
             .flatten();
 
-        let old = load(repo, delta.old_file());
-        let new = load(repo, delta.new_file());
+        let old = load(repo, delta.old_file(), false);
+        let new = load(repo, delta.new_file(), workdir);
         let note = if delta.flags().is_binary() {
             Some(Content::Binary)
         } else {
@@ -189,15 +198,22 @@ impl Content {
     }
 }
 
-fn load(repo: &Repository, file: DiffFile<'_>) -> Content {
+fn load(repo: &Repository, file: DiffFile<'_>, from_disk: bool) -> Content {
     if file.id().is_zero() {
-        return Content::Absent;
+        return match (from_disk, repo.workdir(), file.path()) {
+            (true, Some(dir), Some(path)) => read_file(&dir.join(path)),
+            _ => Content::Absent,
+        };
     }
     if file.mode() == FileMode::Commit {
         return Content::Submodule;
     }
     let Ok(blob) = repo.find_blob(file.id()) else {
-        return Content::Absent;
+        // A working-tree file whose blob git has not written.
+        return match (from_disk, repo.workdir(), file.path()) {
+            (true, Some(dir), Some(path)) => read_file(&dir.join(path)),
+            _ => Content::Absent,
+        };
     };
     if blob.is_binary() {
         Content::Binary
@@ -205,5 +221,23 @@ fn load(repo: &Repository, file: DiffFile<'_>) -> Content {
         Content::TooLarge
     } else {
         Content::Text(String::from_utf8_lossy(blob.content()).into())
+    }
+}
+
+/// A file of the working tree as `Content`.
+fn read_file(path: &std::path::Path) -> Content {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return Content::Absent;
+    };
+    if !meta.is_file() {
+        return Content::Absent;
+    }
+    if meta.len() as usize > MAX_TEXT_BYTES {
+        return Content::TooLarge;
+    }
+    match std::fs::read(path) {
+        Ok(bytes) if bytes.iter().take(8000).any(|b| *b == 0) => Content::Binary,
+        Ok(bytes) => Content::Text(String::from_utf8_lossy(&bytes).into()),
+        Err(_) => Content::Absent,
     }
 }

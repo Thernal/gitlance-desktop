@@ -104,6 +104,7 @@ impl Workspace {
                     _ => String::new(),
                 }
             }
+            Selection::WorkingTree => "working tree".to_owned(),
             Selection::None => String::new(),
         };
         self.compose = Some(Compose {

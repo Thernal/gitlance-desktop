@@ -278,6 +278,7 @@ impl Workspace {
             (Selection::Versions { from, to }, _) if to < self.versions.len() => {
                 self.selection = Selection::Versions { from, to };
             }
+            (Selection::WorkingTree, _) => {}
             _ => self.clear_diff(),
         }
         self.follow_latest_version(seen, cx);

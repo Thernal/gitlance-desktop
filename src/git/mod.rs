@@ -133,6 +133,13 @@ pub struct NamedRef {
     pub tag: bool,
 }
 
+/// Uncommitted work against `HEAD`.
+pub struct WorkingTree {
+    pub files: Vec<FileDiff>,
+    /// Per path: `staged`, `partly staged`, `not staged` or `untracked`.
+    pub tags: HashMap<String, &'static str>,
+}
+
 pub struct Comparison {
     pub files: Vec<FileDiff>,
     /// Where the comparison starts: the base itself or its merge base with the head.
@@ -311,6 +318,116 @@ impl Repo {
             _ => Some(commit.parent(0)?.tree()?),
         };
         diff::tree_to_tree(&self.inner, old.as_ref(), Some(&new), settings)
+    }
+
+    /// The changes of the working tree against `HEAD` (staged, not staged and untracked files);
+    /// with `only_unstaged` only what changed since the last `git add`. Read-only.
+    pub fn working_tree(&self, settings: DiffSettings, only_unstaged: bool) -> Result<WorkingTree> {
+        if self.inner.workdir().is_none() {
+            return Ok(WorkingTree {
+                files: Vec::new(),
+                tags: HashMap::new(),
+            });
+        }
+        let head = self.inner.head().ok().and_then(|h| h.peel_to_tree().ok());
+        let opts = |settings| {
+            let mut o = diff::options(settings);
+            o.include_untracked(true)
+                .recurse_untracked_dirs(true)
+                .show_untracked_content(true);
+            o
+        };
+        let unstaged = diff::collect_from(
+            &self.inner,
+            self.inner
+                .diff_index_to_workdir(None, Some(&mut opts(settings)))?,
+            true,
+        )?;
+        let staged = self.inner.diff_tree_to_index(
+            head.as_ref(),
+            None,
+            Some(&mut diff::options(settings)),
+        )?;
+        let staged_paths: std::collections::HashSet<String> = staged
+            .deltas()
+            .filter_map(|d| {
+                d.new_file()
+                    .path()
+                    .map(|p| p.to_string_lossy().into_owned())
+            })
+            .collect();
+        let untracked: std::collections::HashSet<String> = self
+            .inner
+            .statuses(Some(
+                git2::StatusOptions::new()
+                    .include_untracked(true)
+                    .recurse_untracked_dirs(true)
+                    .include_ignored(false),
+            ))?
+            .iter()
+            .filter(|e| e.status().contains(git2::Status::WT_NEW))
+            .filter_map(|e| e.path().ok().map(str::to_owned))
+            .collect();
+        let unstaged_paths: std::collections::HashSet<String> =
+            unstaged.iter().map(|f| f.path().to_owned()).collect();
+
+        let mut tags = HashMap::new();
+        for path in staged_paths.iter().chain(&unstaged_paths) {
+            let tag = match (
+                staged_paths.contains(path),
+                unstaged_paths.contains(path),
+                untracked.contains(path),
+            ) {
+                (_, _, true) => "untracked",
+                (true, true, _) => "partly staged",
+                (true, false, _) => "staged",
+                _ => "not staged",
+            };
+            tags.insert(path.clone(), tag);
+        }
+        let files = if only_unstaged {
+            unstaged
+        } else {
+            diff::collect_from(
+                &self.inner,
+                self.inner
+                    .diff_tree_to_workdir_with_index(head.as_ref(), Some(&mut opts(settings)))?,
+                true,
+            )?
+        };
+        Ok(WorkingTree { files, tags })
+    }
+
+    /// How many paths changed in the working tree and a fingerprint of them (their status, size and
+    /// modification time), to notice an edit without diffing; `(0, 0)` for a bare repository.
+    pub fn working_summary(&self) -> Result<(usize, u64)> {
+        use std::hash::{Hash, Hasher};
+        let Some(dir) = self.inner.workdir() else {
+            return Ok((0, 0));
+        };
+        let statuses = self.inner.statuses(Some(
+            git2::StatusOptions::new()
+                .include_untracked(true)
+                .recurse_untracked_dirs(true)
+                .include_ignored(false),
+        ))?;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut count = 0;
+        for entry in statuses.iter() {
+            count += 1;
+            entry.path_bytes().hash(&mut hasher);
+            entry.status().bits().hash(&mut hasher);
+            if count <= 2000
+                && let Ok(path) = entry.path()
+                && let Ok(meta) = std::fs::metadata(dir.join(path))
+            {
+                meta.len().hash(&mut hasher);
+                if let Ok(time) = meta.modified() {
+                    time.hash(&mut hasher);
+                }
+            }
+        }
+        Ok((count, hasher.finish()))
     }
 
     /// Every branch and tag with the commit it points at, for picking a side to compare.
