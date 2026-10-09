@@ -4,12 +4,12 @@
 
 use super::diff_view::chip;
 use super::input::{self, Edit};
+use super::px;
 use super::{Workspace, change_badge, row, theme};
 use crate::git::{Deco, DecoKind, FileDiff, RefKind};
 use git2::Oid;
 use gpui::{
-    ClickEvent, Context, KeyDownEvent, MouseButton, MouseDownEvent, ScrollStrategy, div,
-    prelude::*, px,
+    ClickEvent, Context, KeyDownEvent, MouseButton, MouseDownEvent, ScrollStrategy, div, prelude::*,
 };
 use std::collections::{BTreeMap, HashSet};
 

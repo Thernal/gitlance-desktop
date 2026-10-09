@@ -1,8 +1,9 @@
 //! The keyboard card: every key of the app in one place, grouped by what one is doing. `?` opens
 //! it; esc or a click closes it. Designed in round 2 of the review (`../Design/review/round-2.html`, A29).
 
+use super::px;
 use super::{ISLAND_RADIUS, Workspace, theme};
-use gpui::{ClickEvent, Context, FontWeight, MouseButton, div, prelude::*, px};
+use gpui::{ClickEvent, Context, FontWeight, MouseButton, div, prelude::*};
 
 /// (group, [(keys, what it does)]).
 const GROUPS: &[(&str, &[(&str, &str)])] = &[
@@ -57,7 +58,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌥⌘B", "annotate: who wrote each line"),
             ("⌥⌘1 ⌥⌘2 ⌥⌘3", "branches, files, merge requests"),
             ("⌘.", "the diff alone"),
-            ("⌘+  ⌘−  ⌘0", "code bigger, smaller, actual size"),
+            ("⌘+  ⌘−  ⌘0", "interface bigger, smaller, actual size"),
             ("⌘T ⌘W ⌘1…9", "tabs"),
             ("⌥⌘M", "new merge request"),
             ("?", "this card"),

@@ -2,10 +2,11 @@
 //! window refreshes itself. Designed in `../Design/mockups/settings/a-general.html`.
 
 use super::diff_view::{self, chip};
+use super::px;
 use super::{GAP, ISLAND_RADIUS, Workspace, button, island, theme};
 use crate::editor::{self, Editor};
 use crate::storage::{Appearance, DiffMode, MarkStyle};
-use gpui::{ClickEvent, Context, FontWeight, SharedString, div, prelude::*, px};
+use gpui::{ClickEvent, Context, FontWeight, SharedString, div, prelude::*};
 
 impl Workspace {
     pub(super) fn open_settings(&mut self, cx: &mut Context<Self>) {
@@ -180,6 +181,20 @@ impl Workspace {
             },
         ));
 
+        let ui_zoom = diff_view::group()
+            .child(chip("ui-zoom-out", "−", false).on_click(
+                cx.listener(|this, _: &ClickEvent, window, cx| this.ui_zoom_by(-1, window, cx)),
+            ))
+            .child(
+                chip("ui-zoom-reset", format!("{}%", s.ui_zoom), s.ui_zoom != 100).on_click(
+                    cx.listener(|this, _: &ClickEvent, window, cx| {
+                        this.set_ui_zoom(100, window, cx)
+                    }),
+                ),
+            )
+            .child(chip("ui-zoom-in", "+", false).on_click(
+                cx.listener(|this, _: &ClickEvent, window, cx| this.ui_zoom_by(1, window, cx)),
+            ));
         let zoom = diff_view::group()
             .child(
                 chip("zoom-out", "−", false)
@@ -269,8 +284,13 @@ impl Workspace {
                                 modes,
                             ))
                             .child(item(
+                                "Interface size",
+                                "How big everything in the window is, 60 % to 250 %. ⌘+ and ⌘− change it anywhere, ⌘0 puts it back; a click on the percentage does the same.",
+                                ui_zoom,
+                            ))
+                            .child(item(
                                 "Code size",
-                                "How big the code in a diff is, 60 % to 250 %. ⌘+ and ⌘− change it anywhere, ⌘0 puts it back; the click on the percentage does the same. The rest of the window keeps its size.",
+                                "The code in a diff, as a share of the interface size, 60 % to 250 %. It follows the interface size too, so this is only for making code larger or smaller than the rest.",
                                 zoom,
                             ))
                             .child(item(

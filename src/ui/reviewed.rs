@@ -3,10 +3,11 @@
 //! range or merge request on this Mac; a file that changes in a newer version loses its mark.
 //! Designed in `../Design/mockups/ide-ideas/a-ideas.html` (1).
 
+use super::px;
 use super::{Header, ROW_RADIUS, Workspace, plural, theme};
 use crate::git::FileDiff;
 use crate::storage;
-use gpui::{ClickEvent, Context, FontWeight, IntoElement, MouseButton, div, prelude::*, px};
+use gpui::{ClickEvent, Context, FontWeight, IntoElement, MouseButton, div, prelude::*};
 use std::collections::HashMap;
 
 /// How a file stands in the review.

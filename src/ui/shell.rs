@@ -2,8 +2,9 @@
 //! filter and scroll position. `⌘T` opens one, `⌘W` closes, `⌘1…9` switch, `⌘⇧T` reopens the last
 //! closed. The strip sits under the title bar and shows only with two or more tabs.
 
+use super::px;
 use super::{ROW_RADIUS, Workspace, theme};
-use gpui::{ClickEvent, Context, Entity, MouseButton, WeakEntity, Window, div, prelude::*, px};
+use gpui::{ClickEvent, Context, Entity, MouseButton, WeakEntity, Window, div, prelude::*};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;

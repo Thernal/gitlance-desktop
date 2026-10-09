@@ -3,10 +3,11 @@
 //! only on this Mac is told to be pushed first. Designed in `../Design/mockups/mr-create/`.
 
 use super::input::{self, Edit};
+use super::px;
 use super::{ISLAND_RADIUS, ROW_RADIUS, Workspace, plural, theme};
 use crate::git::{RefKind, Repo};
 use crate::mr;
-use gpui::{ClickEvent, Context, FontWeight, KeyDownEvent, MouseButton, div, prelude::*, px};
+use gpui::{ClickEvent, Context, FontWeight, KeyDownEvent, MouseButton, div, prelude::*};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Focus {

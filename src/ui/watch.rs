@@ -2,9 +2,10 @@
 //! a checkout made elsewhere) and re-read it, without moving what the user is looking at. It only
 //! reads — fetching is a separate, opt-in feature.
 
+use super::px;
 use super::{COMMIT_LIMIT, Selection, Workspace, theme};
 use crate::git::{self, BranchRef, CommitInfo, Repo, Version};
-use gpui::{ClickEvent, Context, Rgba, Task, div, prelude::*, px};
+use gpui::{ClickEvent, Context, Rgba, Task, div, prelude::*};
 use std::path::PathBuf;
 use std::time::Duration;
 

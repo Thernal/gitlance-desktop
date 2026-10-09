@@ -3,6 +3,7 @@
 
 use super::diff_view::chip;
 use super::input::{self, Edit};
+use super::px;
 use super::{COMMIT_LIMIT, Workspace, rows, theme};
 use crate::git::Repo;
 use crate::search::{self, Query};
@@ -10,7 +11,7 @@ use crate::ui::rows::Row;
 use git2::Oid;
 use gpui::{
     ClickEvent, Context, HighlightStyle, KeyDownEvent, SharedString, StyledText, Task, div,
-    prelude::*, px,
+    prelude::*,
 };
 use std::collections::HashMap;
 use std::sync::Arc;

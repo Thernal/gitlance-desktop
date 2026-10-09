@@ -2,10 +2,11 @@
 //! overlay as the picker for comparing any two refs (⌘⇧C).
 
 use super::input::{self, Edit};
+use super::px;
 use super::{Diff, Header, ISLAND_RADIUS, Selection, Workspace, format, island_label, theme};
 use crate::git::{NamedRef, Repo};
 use git2::Oid;
-use gpui::{Action, Context, KeyDownEvent, MouseButton, Window, div, prelude::*, px};
+use gpui::{Action, Context, KeyDownEvent, MouseButton, Window, div, prelude::*};
 use std::sync::Arc;
 
 /// What the palette is for.
@@ -73,8 +74,8 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
         Cmd::Structure,
     ),
     ("Bookmarks", "⌘F3", Cmd::Bookmarks),
-    ("Zoom in — bigger code", "⌘+", Cmd::ZoomIn),
-    ("Zoom out — smaller code", "⌘−", Cmd::ZoomOut),
+    ("Zoom in — bigger interface", "⌘+", Cmd::ZoomIn),
+    ("Zoom out — smaller interface", "⌘−", Cmd::ZoomOut),
     ("Actual size", "⌘0", Cmd::ZoomReset),
     (
         "Changes in this file — functions and types",

@@ -2,8 +2,9 @@
 //! (commit search, find in the diff, path filter, branch filter, a comment) is a `String` this edits,
 //! with one "everything selected" flag (⌘A) shared by whichever field has the keyboard.
 
+use super::px;
 use super::theme;
-use gpui::{App, Div, Keystroke, div, prelude::*, px};
+use gpui::{App, Div, Keystroke, div, prelude::*};
 
 /// What a key press did to a field.
 pub enum Edit {

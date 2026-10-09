@@ -2,11 +2,12 @@
 //! branch, and the discussions other people left on one, in the review panel. Read-only; GitLab
 //! only (see `crate::mr`).
 
+use super::px;
 use super::rows::Row;
 use super::{Header, Selection, Workspace, format, island, island_label, plural, row, theme};
 use crate::git::{RefKind, Repo, Version};
 use crate::mr::{self, Draft, Mr, Pipeline, Thread};
-use gpui::{ClickEvent, Context, FontWeight, Task, WeakEntity, div, prelude::*, px};
+use gpui::{ClickEvent, Context, FontWeight, Task, WeakEntity, div, prelude::*};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Side {

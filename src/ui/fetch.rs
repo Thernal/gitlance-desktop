@@ -3,9 +3,10 @@
 //! minutes. It is the one place GitLance writes to a repository: remote-tracking refs and objects,
 //! nothing else. The auto-refresh then sees the moved refs and marks new versions.
 
+use super::px;
 use super::{Workspace, format, theme};
 use crate::storage;
-use gpui::{ClickEvent, Context, Task, div, prelude::*, px};
+use gpui::{ClickEvent, Context, Task, div, prelude::*};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};

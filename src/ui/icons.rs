@@ -1,7 +1,8 @@
 //! Lucide icons (ISC licence, https://lucide.dev), embedded: the app is offline and uses one icon
 //! set, 1.75 px strokes with round caps, drawn in the text colour.
 
-use gpui::{AssetSource, Result, SharedString, Svg, prelude::*, px, svg};
+use super::px;
+use gpui::{AssetSource, Result, SharedString, Svg, prelude::*, svg};
 use std::borrow::Cow;
 
 macro_rules! lucide {

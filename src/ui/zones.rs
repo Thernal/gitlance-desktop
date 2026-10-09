@@ -2,8 +2,9 @@
 //! keyboard at a time (its island has an outline), Tab and ⇧Tab move between them, ↑ ↓ ← → work in
 //! the one that has it, and ↵ goes one step in.
 
+use super::px;
 use super::{Selection, Workspace, requests, theme};
-use gpui::{Context, Rgba, px};
+use gpui::{Context, Rgba};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum Zone {

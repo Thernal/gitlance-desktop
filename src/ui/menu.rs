@@ -1,10 +1,11 @@
 //! A context menu at the pointer (right click on a commit, a file or a line; the diff's View
 //! menu) and the actions its entries run: copy, open in the web or the editor, toggle a view option.
 
+use super::px;
 use super::{ISLAND_RADIUS, Opt, Workspace, row, theme};
 use crate::editor;
 use crate::storage::DiffMode;
-use gpui::{ClipboardItem, Context, MouseButton, Pixels, Point, div, prelude::*, px};
+use gpui::{ClipboardItem, Context, MouseButton, Pixels, Point, div, prelude::*};
 
 #[derive(Clone)]
 pub enum Act {

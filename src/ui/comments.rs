@@ -4,10 +4,11 @@
 //! `../Design/mockups/line-comments/a-agent-comments.html`.
 
 use super::input::{self, Edit};
+use super::px;
 use super::rows::Row;
 use super::{ROW_RADIUS, Selection, Workspace, format, theme};
 use crate::review::{self, Comment, Place};
-use gpui::{ClipboardItem, Context, FontWeight, KeyDownEvent, WeakEntity, div, prelude::*, px};
+use gpui::{ClipboardItem, Context, FontWeight, KeyDownEvent, WeakEntity, div, prelude::*};
 
 /// Who a comment is for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

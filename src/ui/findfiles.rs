@@ -3,11 +3,12 @@
 //! Designed in `../Design/mockups/ide-ideas/a-ideas.html` (3).
 
 use super::input::{self, Edit};
+use super::px;
 use super::{ISLAND_RADIUS, ROW_RADIUS, Workspace, plural, theme};
 use crate::git::LineKind;
 use gpui::{
     ClickEvent, Context, FontWeight, HighlightStyle, KeyDownEvent, MouseButton, ScrollHandle,
-    StyledText, div, prelude::*, px,
+    StyledText, div, prelude::*,
 };
 use std::ops::Range;
 

@@ -1,5 +1,6 @@
 //! Drawing one row of a file diff, and the small controls above it.
 
+use super::px;
 use super::rows::{self, Cell, FileData, Row, Side};
 use super::select::Sel;
 use super::{DIFF_ROW, ROW_RADIUS, theme};
@@ -8,7 +9,7 @@ use crate::search;
 use crate::storage::MarkStyle;
 use gpui::{
     AnyElement, App, FontStyle, HighlightStyle, MouseButton, Pixels, Point, Rgba, SharedString,
-    StyledText, UnderlineStyle, div, prelude::*, px,
+    StyledText, UnderlineStyle, div, prelude::*,
 };
 use std::rc::Rc;
 

@@ -1,9 +1,10 @@
 //! The working tree against `HEAD`: a pinned entry above the commits, kept current while an agent
 //! works. Read-only — GitLance never stages or commits.
 
+use super::px;
 use super::{Diff, Header, Selection, WorkingState, Workspace, theme};
 use crate::git::Repo;
-use gpui::{Context, div, prelude::*, px};
+use gpui::{Context, div, prelude::*};
 use std::sync::Arc;
 use std::time::Duration;
 

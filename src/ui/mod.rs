@@ -38,7 +38,7 @@ use gpui::{
     ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent,
     PathPromptOptions, Point, Rgba, ScrollStrategy, ScrollWheelEvent, SharedString, Task,
     TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas,
-    div, font, list, prelude::*, px, size, uniform_list,
+    div, font, list, prelude::*, size, uniform_list,
 };
 use lists::{Field, History};
 use menu::{Act, CtxMenu, Entry};
@@ -756,6 +756,7 @@ pub struct Workspace {
     newreq: Option<create::NewRequest>,
     /// The keyboard card is open.
     shortcuts: bool,
+    zoom_applied: bool,
     bookmarks: bookmarks::Store,
     /// Places opened lately, newest first.
     recents: Vec<recents::Entry>,
@@ -909,6 +910,7 @@ impl Workspace {
             gitlab_check: None,
             newreq: None,
             shortcuts: false,
+            zoom_applied: false,
             bookmarks: bookmarks::Store::load(),
             recents: Vec::new(),
             annotate: false,
@@ -1620,7 +1622,31 @@ impl Workspace {
         (DIFF_ROW * f32::from(self.settings.zoom) / 100.).round()
     }
 
-    /// ⌘+ and ⌘−: one step bigger or smaller.
+    /// ⌘+ and ⌘−: the whole interface one step bigger or smaller.
+    pub(super) fn ui_zoom_by(&mut self, steps: i32, window: &mut Window, cx: &mut Context<Self>) {
+        let next = i32::from(self.settings.ui_zoom) + steps * i32::from(Settings::ZOOM_STEP);
+        self.set_ui_zoom(next.max(0) as u16, window, cx);
+    }
+
+    pub(super) fn set_ui_zoom(
+        &mut self,
+        percent: u16,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let zoom = percent.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX);
+        if zoom == self.settings.ui_zoom {
+            return;
+        }
+        self.settings.ui_zoom = zoom;
+        self.settings.save();
+        apply_ui_zoom(zoom, window);
+        self.char_width = 0.;
+        self.relayout();
+        cx.notify();
+    }
+
+    /// Code size only (Settings): on top of the interface size.
     pub(super) fn zoom_by(&mut self, steps: i32, cx: &mut Context<Self>) {
         let step = i32::from(Settings::ZOOM_STEP);
         let next = i32::from(self.settings.zoom) + steps * step;
@@ -3701,6 +3727,10 @@ impl Render for Workspace {
             self.title = title;
         }
         // The widths the layout rules read: the window's, and last frame's width of the diff.
+        if !self.zoom_applied {
+            self.zoom_applied = true;
+            apply_ui_zoom(self.settings.ui_zoom, window);
+        }
         let win: f32 = window.viewport_size().width.into();
         if (win - self.win_width).abs() > 0.5 {
             self.win_width = win;
@@ -3789,9 +3819,11 @@ impl Render for Workspace {
                     this.open_palette(palette::Kind::Bookmarks, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom_by(1, cx)))
-            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom_by(-1, cx)))
-            .on_action(cx.listener(|this, _: &ZoomReset, _, cx| this.set_zoom(100, cx)))
+            .on_action(cx.listener(|this, _: &ZoomIn, window, cx| this.ui_zoom_by(1, window, cx)))
+            .on_action(cx.listener(|this, _: &ZoomOut, window, cx| this.ui_zoom_by(-1, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &ZoomReset, window, cx| this.set_ui_zoom(100, window, cx)),
+            )
             .on_action(cx.listener(|this, _: &ShowStructure, _, cx| {
                 if this.palette.is_some() {
                     this.close_palette(cx);
@@ -4075,6 +4107,21 @@ fn section_label(text: impl Into<SharedString>) -> gpui::Div {
 }
 
 /// A rounded pane floating on the window background.
+/// A length in logical pixels at the interface size the reader chose (⌘+ ⌘−): every size in the
+/// window goes through here, so the whole of it grows and shrinks together.
+pub(crate) fn px(value: f32) -> gpui::Pixels {
+    gpui::px(value * f32::from(UI_ZOOM.load(std::sync::atomic::Ordering::Relaxed)) / 100.)
+}
+
+/// Makes `percent` the interface size: `px` and the window's rem (what `px_2`, `gap_3` … use).
+pub(crate) fn apply_ui_zoom(percent: u16, window: &mut Window) {
+    UI_ZOOM.store(percent, std::sync::atomic::Ordering::Relaxed);
+    window.set_rem_size(gpui::px(16. * f32::from(percent) / 100.));
+}
+
+/// The interface size, in percent; read by `px`.
+static UI_ZOOM: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(100);
+
 fn island() -> gpui::Div {
     div()
         .flex()

@@ -285,6 +285,8 @@ pub struct Settings {
     pub fold_generated: bool,
     /// The size of the code in a diff, in percent of the normal size (⌘+ ⌘− ⌘0).
     pub zoom: u16,
+    /// The size of the whole interface, in percent (⌘+ ⌘− ⌘0).
+    pub ui_zoom: u16,
 }
 
 impl Default for Settings {
@@ -297,6 +299,7 @@ impl Default for Settings {
             auto_refresh: true,
             fold_generated: true,
             zoom: 100,
+            ui_zoom: 100,
         }
     }
 }
@@ -326,6 +329,11 @@ impl Settings {
                 }
                 "auto_refresh" => settings.auto_refresh = value != "false",
                 "fold_generated" => settings.fold_generated = value != "false",
+                "ui_zoom" => {
+                    settings.ui_zoom = value.parse().map_or(100, |z: u16| {
+                        z.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX)
+                    })
+                }
                 "zoom" => {
                     settings.zoom = value.parse().map_or(100, |z: u16| {
                         z.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX)
@@ -349,6 +357,7 @@ impl std::fmt::Display for Settings {
         writeln!(f, "auto_refresh={}", self.auto_refresh)?;
         writeln!(f, "fold_generated={}", self.fold_generated)?;
         writeln!(f, "zoom={}", self.zoom)?;
+        writeln!(f, "ui_zoom={}", self.ui_zoom)?;
         writeln!(f, "appearance={}", self.appearance.key())?;
         if let Some(editor) = self.editor {
             writeln!(f, "editor={}", editor.key())?;
@@ -436,6 +445,7 @@ mod tests {
             auto_refresh: false,
             fold_generated: false,
             zoom: 130,
+            ui_zoom: 120,
         };
         assert_eq!(Settings::parse(&settings.to_string()), settings);
     }
