@@ -10,6 +10,7 @@ mod input;
 mod lists;
 mod menu;
 mod palette;
+mod requests;
 mod rows;
 mod select;
 mod settings;
@@ -322,6 +323,10 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
             ws.update(cx, |this, cx| {
                 for name in view.split(',') {
                     let opt = match name.trim() {
+                        "requests" => {
+                            this.requests.side = requests::Side::Requests;
+                            continue;
+                        }
                         "unified" => Opt::Unified,
                         "split" => {
                             this.set_option_unsaved(Opt::Unified, false, cx);
@@ -476,6 +481,14 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
             });
             wait(500).await;
         }
+        if let Ok(iid) = std::env::var("GITLANCE_SNAPSHOT_MR") {
+            ws.update(cx, |this, cx| {
+                if let Ok(iid) = iid.parse() {
+                    this.select_request(iid, cx);
+                }
+            });
+            wait(2000).await;
+        }
         if let Ok(keys) = std::env::var("GITLANCE_SNAPSHOT_KEYS") {
             // Keystrokes sent to the window itself (not the keyboard), e.g. `right right cmd-t`.
             for key in keys.split_whitespace() {
@@ -621,6 +634,8 @@ pub struct Workspace {
     wt: WorkingState,
     fetch: fetch::Fetch,
     shell: Option<gpui::WeakEntity<shell::Shell>>,
+    requests: requests::Requests,
+    jump_line: Option<(u32, bool)>,
     tabs: shell::TabModel,
     diff: Option<Diff>,
     file: usize,
@@ -727,6 +742,8 @@ impl Workspace {
             wt: WorkingState::default(),
             fetch: fetch::Fetch::default(),
             shell: None,
+            requests: Default::default(),
+            jump_line: None,
             tabs: Default::default(),
             diff: None,
             file: 0,
@@ -834,6 +851,7 @@ impl Workspace {
                         this.watch.watch(git_dir, fingerprint);
                         this.start_working_poll(cx);
                         this.start_fetching(cx);
+                        this.load_requests(cx);
                         this.root = Some(root);
                         this.branches = branches;
                         let (refname, commit) = keep.unzip();
@@ -887,6 +905,7 @@ impl Workspace {
     }
 
     fn select_branch(&mut self, ix: usize, keep: Option<git2::Oid>, cx: &mut Context<Self>) {
+        self.sync_request(ix, cx);
         let (Some(root), Some(branch)) = (self.root.clone(), self.branches.get(ix)) else {
             return;
         };
@@ -1755,7 +1774,8 @@ impl Workspace {
                             .text_color(theme::muted())
                             .child(icons::icon("branch").text_color(theme::muted()))
                             .child(b)
-                    })),
+                    }))
+                    .children(self.render_request_title()),
             )
             .children(self.render_fetch(cx))
             .children(self.render_status(cx))
@@ -1970,8 +1990,15 @@ impl Workspace {
             .child(
                 island()
                     .h(px(self.layout.branches))
-                    .child(island_label("Branches"))
-                    .child(self.render_branches(cx)),
+                    .child(self.render_branches_header(cx))
+                    .child(
+                        if self.requests.side == requests::Side::Requests && self.requests.available
+                        {
+                            self.render_requests(cx).into_any_element()
+                        } else {
+                            self.render_branches(cx).into_any_element()
+                        },
+                    ),
             )
             .child(self.handle(Split::Branches, cx))
             .children((self.versions.len() > 1).then(|| {

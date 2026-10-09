@@ -4,6 +4,7 @@ mod dock;
 mod editor;
 mod git;
 mod highlight;
+mod mr;
 mod review;
 mod search;
 mod storage;

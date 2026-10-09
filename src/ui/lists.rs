@@ -245,6 +245,13 @@ impl Workspace {
                                     })
                                     .child(name.to_owned()),
                             )
+                            .children(self.request_of_branch(ix).map(|m| {
+                                div()
+                                    .flex_none()
+                                    .text_size(px(11.))
+                                    .text_color(theme::accent())
+                                    .child(format!("!{}", m.iid))
+                            }))
                             .on_mouse_down(
                                 MouseButton::Right,
                                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {

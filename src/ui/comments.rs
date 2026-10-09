@@ -367,6 +367,7 @@ impl Workspace {
 
     /// The Review island: every comment of the repository, and Copy for agent.
     pub(super) fn render_review(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let threads = self.render_request_threads(cx);
         let items = self.comments.iter().map(|c| {
             let id = c.id;
             let place = self.place_of(c);
@@ -408,6 +409,7 @@ impl Workspace {
             .w(px(320.))
             .flex_none()
             .ml(px(GAP))
+            .children(threads)
             .child(island_label(format!(
                 "Review · {count} comment{}",
                 if count == 1 { "" } else { "s" }
@@ -493,6 +495,12 @@ impl Workspace {
 
     /// Scrolls to the thread of the comment asked for, once its file is laid out.
     pub(super) fn apply_jump(&mut self, cx: &mut Context<Self>) {
+        if let Some((line, old)) = self.jump_line.take()
+            && let Some(at) = self.row_of_line(line, old)
+        {
+            self.diff_list.scroll_to_reveal_item(at);
+            cx.notify();
+        }
         let Some(id) = self.jump.take() else {
             return;
         };
