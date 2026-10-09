@@ -5,6 +5,7 @@ mod create;
 mod diff_view;
 mod fetch;
 mod find;
+mod findfiles;
 mod format;
 mod icons;
 mod input;
@@ -86,6 +87,7 @@ actions!(
         ToggleThread,
         ToggleComments,
         MarkReviewed,
+        FindInFiles,
         ToggleReviewed,
         NextThread,
         PreviousThread,
@@ -166,6 +168,7 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("o", ToggleThread, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-shift-r", ToggleComments, Some("Workspace && !Typing")),
                 KeyBinding::new("v", MarkReviewed, Some("Workspace && !Typing")),
+                KeyBinding::new("cmd-alt-f", FindInFiles, Some("Workspace")),
                 KeyBinding::new("shift-v", ToggleReviewed, Some("Workspace && !Typing")),
                 KeyBinding::new("tab", NextZone, Some("Workspace && !Typing")),
                 KeyBinding::new("shift-tab", PreviousZone, Some("Workspace && !Typing")),
@@ -727,6 +730,8 @@ pub struct Workspace {
     newreq: Option<create::NewRequest>,
     /// The keyboard card is open.
     shortcuts: bool,
+    /// The search over all files of the diff, while it is open.
+    ffind: Option<findfiles::FindFiles>,
     /// The marks of files read, and the scope and file fingerprints of the open diff.
     reviewed: reviewed::Store,
     review_scope: Option<String>,
@@ -871,6 +876,7 @@ impl Workspace {
             gitlab_check: None,
             newreq: None,
             shortcuts: false,
+            ffind: None,
             reviewed: reviewed::Store::load(),
             review_scope: None,
             fps: Vec::new(),
@@ -1858,10 +1864,16 @@ impl Workspace {
     }
 
     fn palette_up(&mut self, _: &PaletteUp, _: &mut Window, cx: &mut Context<Self>) {
+        if self.ffind.is_some() {
+            return self.ffind_step(false, cx);
+        }
         self.palette_step(false, cx);
     }
 
     fn palette_down(&mut self, _: &PaletteDown, _: &mut Window, cx: &mut Context<Self>) {
+        if self.ffind.is_some() {
+            return self.ffind_step(true, cx);
+        }
         self.palette_step(true, cx);
     }
 
@@ -3628,10 +3640,11 @@ impl Render for Workspace {
                     || self.compose.is_some()
                     || self.field.is_some()
                     || self.palette.is_some()
+                    || self.ffind.is_some()
                     || self.goline.is_some()
                     || self.newreq.is_some()
                 {
-                    if self.palette.is_some() {
+                    if self.palette.is_some() || self.ffind.is_some() {
                         "Workspace Typing Palette"
                     } else {
                         "Workspace Typing"
@@ -3678,6 +3691,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))
             .on_action(cx.listener(|this, _: &ToggleThread, _, cx| this.toggle_focused(cx)))
             .on_action(cx.listener(|this, _: &MarkReviewed, _, cx| this.mark_and_advance(cx)))
+            .on_action(cx.listener(|this, _: &FindInFiles, _, cx| this.open_find_files(cx)))
             .on_action(cx.listener(|this, _: &ToggleReviewed, _, cx| this.toggle_reviewed(cx)))
             .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
                 this.set_comments_open(!this.layout.comments_open, cx)
@@ -3822,6 +3836,7 @@ impl Render for Workspace {
             .children(self.repo_menu.then(|| self.render_repo_menu(cx)))
             .children(self.render_ctx_menu(window.viewport_size(), cx))
             .children(self.render_picker(cx))
+            .children(self.render_find_files(cx))
             .children(self.render_create(cx))
             .children(self.render_shortcuts(cx))
             .children(self.render_palette(cx))

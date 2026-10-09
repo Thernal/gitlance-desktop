@@ -40,6 +40,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
         &[
             ("⌘K", "search everything"),
             ("⌘F", "find in the diff"),
+            ("⌘⌥F", "search all files of the diff"),
             ("⌘⇧F", "search commits"),
             ("⌘P", "filter files"),
             ("⌘⇧C", "compare two refs"),

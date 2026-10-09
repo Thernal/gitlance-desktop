@@ -42,6 +42,7 @@ pub enum Cmd {
     CreateRequest,
     Shortcuts,
     Comments,
+    FindInFiles,
 }
 
 const COMMANDS: &[(&str, &str, Cmd)] = &[
@@ -50,6 +51,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Keyboard shortcuts", "?", Cmd::Shortcuts),
     ("Show or hide the comments", "⌘⇧R", Cmd::Comments),
     ("Find in the diff", "⌘F", Cmd::FindInDiff),
+    ("Search in all files of the diff", "⌘⌥F", Cmd::FindInFiles),
     ("Search commits", "⌘⇧F", Cmd::FindCommits),
     ("Filter files by path", "⌘P", Cmd::FilterFiles),
     ("Refresh", "⌘R", Cmd::Refresh),
@@ -566,5 +568,6 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::CreateRequest => Box::new(CreateRequest),
         Cmd::Shortcuts => Box::new(ShowShortcuts),
         Cmd::Comments => Box::new(ToggleComments),
+        Cmd::FindInFiles => Box::new(FindInFiles),
     }
 }

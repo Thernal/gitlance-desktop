@@ -200,6 +200,9 @@ impl Workspace {
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
+        if self.ffind.is_some() {
+            return self.ffind_key(event, cx);
+        }
         if self.palette.is_some() {
             return self.palette_key(event, window, cx);
         }
