@@ -153,6 +153,9 @@ impl Workspace {
                         .id("ctx-backdrop")
                         .absolute()
                         .size_full()
+                        // Modal: a press on the View button must only close the menu, not reach
+                        // the button and open it again.
+                        .occlude()
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _, _, cx| this.close_menu(cx)),
