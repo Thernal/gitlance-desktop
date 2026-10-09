@@ -154,6 +154,10 @@ impl Workspace {
             return;
         };
         self.load_request_versions(iid, cx);
+        if let Some(m) = self.requests.list.iter().find(|m| m.iid == iid) {
+            let (label, detail) = (m.title.clone(), format!("!{iid}"));
+            self.remember_place(super::recents::Key::Request(iid), label, detail);
+        }
         let pick = |name: &str| {
             let remote = self.branches.iter().position(|b| {
                 b.kind == RefKind::Remote && b.name.split_once('/').is_some_and(|(_, n)| n == name)

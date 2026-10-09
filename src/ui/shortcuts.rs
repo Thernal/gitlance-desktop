@@ -44,6 +44,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌘⇧F", "search commits"),
             ("⌘P", "filter files"),
             ("⌘⇧C", "compare two refs"),
+            ("⌘E", "recent places"),
         ],
     ),
     (

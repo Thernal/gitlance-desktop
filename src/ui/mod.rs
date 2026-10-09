@@ -13,6 +13,7 @@ mod input;
 mod lists;
 mod menu;
 mod palette;
+mod recents;
 mod requests;
 mod reviewed;
 mod rows;
@@ -88,6 +89,7 @@ actions!(
         ToggleThread,
         ToggleComments,
         MarkReviewed,
+        OpenRecent,
         ToggleAnnotate,
         FindInFiles,
         ToggleReviewed,
@@ -170,6 +172,7 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("o", ToggleThread, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-shift-r", ToggleComments, Some("Workspace && !Typing")),
                 KeyBinding::new("v", MarkReviewed, Some("Workspace && !Typing")),
+                KeyBinding::new("cmd-e", OpenRecent, Some("Workspace")),
                 KeyBinding::new("cmd-alt-b", ToggleAnnotate, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-alt-f", FindInFiles, Some("Workspace")),
                 KeyBinding::new("shift-v", ToggleReviewed, Some("Workspace && !Typing")),
@@ -733,6 +736,8 @@ pub struct Workspace {
     newreq: Option<create::NewRequest>,
     /// The keyboard card is open.
     shortcuts: bool,
+    /// Places opened lately, newest first.
+    recents: Vec<recents::Entry>,
     /// The annotation column (who wrote each line) is on, and what blame said of the open file.
     annotate: bool,
     annotations: Vec<diff_view::AnnCell>,
@@ -883,6 +888,7 @@ impl Workspace {
             gitlab_check: None,
             newreq: None,
             shortcuts: false,
+            recents: Vec::new(),
             annotate: false,
             annotations: Vec::new(),
             annot_task: None,
@@ -1125,6 +1131,11 @@ impl Workspace {
         self.clear_diff();
         self.selection = Selection::Commit(ix);
         self.record();
+        self.remember_place(
+            recents::Key::Commit(commit.id),
+            commit.summary.clone(),
+            format!("commit {}", format::short(commit.id)),
+        );
         if let Some(row) = self.row_of(ix) {
             self.commit_scroll
                 .scroll_to_item(row, ScrollStrategy::Nearest);
@@ -1264,6 +1275,11 @@ impl Workspace {
         };
         self.file = ix;
         self.fcursor = None;
+        self.remember_place(
+            recents::Key::File(file.path().to_owned()),
+            file.path().to_owned(),
+            "file".to_owned(),
+        );
         if self.files_popover {
             self.files_popover = false;
             self.zone = zones::Zone::Diff;
@@ -3713,6 +3729,13 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))
             .on_action(cx.listener(|this, _: &ToggleThread, _, cx| this.toggle_focused(cx)))
             .on_action(cx.listener(|this, _: &MarkReviewed, _, cx| this.mark_and_advance(cx)))
+            .on_action(cx.listener(|this, _: &OpenRecent, _, cx| {
+                if this.palette.is_some() {
+                    this.close_palette(cx);
+                } else {
+                    this.open_palette(palette::Kind::Recent, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleAnnotate, _, cx| this.toggle_annotate(cx)))
             .on_action(cx.listener(|this, _: &FindInFiles, _, cx| this.open_find_files(cx)))
             .on_action(cx.listener(|this, _: &ToggleReviewed, _, cx| this.toggle_reviewed(cx)))
