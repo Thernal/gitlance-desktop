@@ -17,11 +17,11 @@ Feature specs, UI mockups and design decisions: the sibling repo `../Design` —
 - **One Dark** is the only theme, for the UI and for code.
 - **Checking the UI** needs no screen access: `GITLANCE_SNAPSHOT=<file.png> cargo run --features snapshot -- <repo>`
   renders the window offscreen to a PNG and quits, without taking focus. `GITLANCE_SNAPSHOT_VIEW=unified,lines,words,structural,underlined,wrap,all-lines,whitespace,settings,menu,notice,comments,viewmenu,linemenu`
-  turns view options (or the Settings page) on, unsaved; `GITLANCE_SNAPSHOT_SEARCH=<text>` fills the commit search and `GITLANCE_SNAPSHOT_FIND=<text>` the find bar of the diff; `GITLANCE_SNAPSHOT_VERSIONS=1` (with VIEW `interdiff`: the first modified commit pair) compares the first and last versions.
+  turns view options (or the Settings page) on, unsaved; `GITLANCE_SNAPSHOT_SEARCH=<text>` fills the commit search and `GITLANCE_SNAPSHOT_FIND=<text>` the find bar of the diff; `GITLANCE_SNAPSHOT_COMPARE=<base>,<head>` shows a comparison, `GITLANCE_SNAPSHOT_PALETTE=<text>` opens the ⌘K palette (`compare:<text>` the compare picker); `GITLANCE_SNAPSHOT_VERSIONS=1` (with VIEW `interdiff`: the first modified commit pair) compares the first and last versions.
   Never drive the real mouse or keyboard for a check: the developer is using the machine.
 - Layout: `src/git/` (read-only git layer, tested on temp repos), `src/highlight.rs` (syntect, One Dark), `src/structural.rs` (difftastic), `src/worddiff.rs` (changed words), `src/search.rs` (commit search),
   `src/ui/` (GPUI views), `src/storage.rs` (recent repos, pane sizes, view options, Settings).
   Icons are Lucide, embedded in `src/ui/icons.rs` (one set, drawn in the text colour; set `.text_color` on the svg itself).
-  `src/ui/` splits into `find.rs` (search field), `watch.rs` (auto-refresh: polls `.git`, read-only), `settings.rs`. `./run.sh` builds and opens it.
+  `src/ui/` splits into `find.rs` (search field), `watch.rs` (auto-refresh: polls `.git`, read-only), `settings.rs`, `palette.rs` (⌘K palette and the compare picker). `./run.sh` builds and opens it.
 - Commits: Conventional Commits — `<type>(<scope>): <subject>`, imperative, lowercase, no trailing period.
 - Agent scratch files go in `.misc/` (ignored).

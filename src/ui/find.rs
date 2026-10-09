@@ -194,7 +194,15 @@ impl Workspace {
     }
 
     /// Typing into the open field: the diff find, else the commit search.
-    pub(super) fn find_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    pub(super) fn find_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.palette.is_some() {
+            return self.palette_key(event, window, cx);
+        }
         if self.compose.is_some() {
             return self.compose_key(event, cx);
         }

@@ -8,6 +8,7 @@ mod icons;
 mod input;
 mod lists;
 mod menu;
+mod palette;
 mod rows;
 mod select;
 mod settings;
@@ -69,6 +70,10 @@ actions!(
         ToggleWrap,
         ToggleFullContext,
         ToggleWhitespace,
+        OpenPalette,
+        Compare,
+        PaletteUp,
+        PaletteDown,
         Quit
     ]
 );
@@ -108,8 +113,12 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("p", PreviousChange, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-g", NextMatch, Some("Workspace")),
                 KeyBinding::new("cmd-shift-g", PreviousMatch, Some("Workspace")),
-                KeyBinding::new("up", PreviousCommit, Some("Workspace")),
-                KeyBinding::new("down", NextCommit, Some("Workspace")),
+                KeyBinding::new("up", PreviousCommit, Some("Workspace && !Palette")),
+                KeyBinding::new("down", NextCommit, Some("Workspace && !Palette")),
+                KeyBinding::new("up", PaletteUp, Some("Palette")),
+                KeyBinding::new("down", PaletteDown, Some("Palette")),
+                KeyBinding::new("cmd-k", OpenPalette, Some("Workspace")),
+                KeyBinding::new("cmd-shift-c", Compare, Some("Workspace")),
                 // Bare letters and arrows are typing while the search field is active.
                 KeyBinding::new("k", PreviousCommit, Some("Workspace && !Typing")),
                 KeyBinding::new("j", NextCommit, Some("Workspace && !Typing")),
@@ -403,6 +412,34 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                 .ok();
             wait(1500).await;
         }
+        if let Ok(spec) = std::env::var("GITLANCE_SNAPSHOT_COMPARE") {
+            window
+                .update(cx, |this, _, cx| {
+                    let repo = this.root.as_ref().and_then(|r| Repo::open(r).ok());
+                    let mut sides = spec
+                        .split(',')
+                        .filter_map(|s| Some((s.to_owned(), repo.as_ref()?.resolve(s).ok()?)));
+                    if let (Some(base), Some(head)) = (sides.next(), sides.next()) {
+                        this.run_compare(base, head, true, cx);
+                    }
+                })
+                .ok();
+            wait(1500).await;
+        }
+        if let Ok(query) = std::env::var("GITLANCE_SNAPSHOT_PALETTE") {
+            window
+                .update(cx, |this, _, cx| {
+                    let kind = if query.starts_with("compare:") {
+                        palette::Kind::Base
+                    } else {
+                        palette::Kind::Jump
+                    };
+                    this.open_palette(kind, cx);
+                    this.type_in_palette(query.trim_start_matches("compare:"));
+                })
+                .ok();
+            wait(500).await;
+        }
         // A hidden window gets no display-link frames: draw one by hand.
         // `update_window` leaves the root view free for the draw to render.
         let saved = cx.update_window(window.into(), |_, window, cx| {
@@ -433,6 +470,14 @@ enum Header {
         to: Version,
         rebased: bool,
         conflicts: usize,
+    },
+    /// Any two refs: what `head` changed against `base`.
+    Compare {
+        base: (String, git2::Oid),
+        head: (String, git2::Oid),
+        since_merge_base: bool,
+        start: git2::Oid,
+        commits: usize,
     },
     /// One commit of an older version against its counterpart in a newer one.
     Interdiff {
@@ -508,6 +553,7 @@ pub struct Workspace {
     commits: Vec<CommitInfo>,
     selection: Selection,
     version_tab: VersionTab,
+    palette: Option<palette::Palette>,
     diff: Option<Diff>,
     file: usize,
     options: ViewOptions,
@@ -603,6 +649,7 @@ impl Workspace {
             commits: Vec::new(),
             selection: Selection::None,
             version_tab: VersionTab::Files,
+            palette: None,
             diff: None,
             file: 0,
             options: ViewOptions::load(&settings),
@@ -1365,6 +1412,28 @@ impl Workspace {
 
     fn open_settings_action(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
         self.open_settings(cx);
+    }
+
+    fn open_palette_action(&mut self, _: &OpenPalette, _: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.is_some() {
+            self.close_palette(cx);
+        } else {
+            self.open_palette(palette::Kind::Jump, cx);
+        }
+    }
+
+    fn compare_action(&mut self, _: &Compare, _: &mut Window, cx: &mut Context<Self>) {
+        if self.root.is_some() {
+            self.open_palette(palette::Kind::Base, cx);
+        }
+    }
+
+    fn palette_up(&mut self, _: &PaletteUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.palette_step(false, cx);
+    }
+
+    fn palette_down(&mut self, _: &PaletteDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.palette_step(true, cx);
     }
 
     fn next_match(&mut self, _: &NextMatch, _: &mut Window, cx: &mut Context<Self>) {
@@ -2362,6 +2431,61 @@ impl Workspace {
                             })),
                     )
             }
+            Header::Compare {
+                base,
+                head,
+                since_merge_base,
+                start,
+                commits,
+            } => {
+                let (b, h, since) = (base.clone(), head.clone(), *since_merge_base);
+                let (b2, h2) = (b.clone(), h.clone());
+                let (b3, h3) = (b.clone(), h.clone());
+                header
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_size(px(15.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(format!("{} … {}", base.0, head.0)),
+                            )
+                            .child(
+                                diff_view::group()
+                                    .child(chip("cmp-since", "Since merge base", since).on_click(
+                                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                            this.run_compare(b.clone(), h.clone(), true, cx)
+                                        }),
+                                    ))
+                                    .child(chip("cmp-direct", "Direct", !since).on_click(
+                                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                            this.run_compare(b2.clone(), h2.clone(), false, cx)
+                                        }),
+                                    )),
+                            )
+                            .child(chip("cmp-swap", "⇄ Swap", false).on_click(cx.listener(
+                                move |this, _: &ClickEvent, _, cx| {
+                                    this.run_compare(h3.clone(), b3.clone(), since, cx)
+                                },
+                            ))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_3()
+                            .text_size(px(12.))
+                            .text_color(theme::muted())
+                            .child(format!(
+                                "{} · from {}",
+                                plural(*commits, "commit"),
+                                format::short(*start)
+                            ))
+                            .child(stats),
+                    )
+            }
             Header::Interdiff { from, to, old, new } => {
                 let (from, to) = (*from, *to);
                 header
@@ -2770,8 +2894,13 @@ impl Render for Workspace {
                     || self.dfind.is_some()
                     || self.compose.is_some()
                     || self.field.is_some()
+                    || self.palette.is_some()
                 {
-                    "Workspace Typing"
+                    if self.palette.is_some() {
+                        "Workspace Typing Palette"
+                    } else {
+                        "Workspace Typing"
+                    }
                 } else {
                     "Workspace"
                 },
@@ -2803,7 +2932,13 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::previous_change))
             .on_action(cx.listener(Self::next_match))
             .on_action(cx.listener(Self::previous_match))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| this.find_key(event, cx)))
+            .on_action(cx.listener(Self::open_palette_action))
+            .on_action(cx.listener(Self::compare_action))
+            .on_action(cx.listener(Self::palette_up))
+            .on_action(cx.listener(Self::palette_down))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.find_key(event, window, cx)
+            }))
             .on_action(cx.listener(Self::toggle_wrap))
             .on_action(cx.listener(Self::toggle_full_context))
             .on_action(cx.listener(Self::toggle_whitespace))
@@ -2871,6 +3006,7 @@ impl Render for Workspace {
             // Last, so it paints over everything.
             .children(self.repo_menu.then(|| self.render_repo_menu(cx)))
             .children(self.render_ctx_menu(window.viewport_size(), cx))
+            .children(self.render_palette(cx))
     }
 }
 

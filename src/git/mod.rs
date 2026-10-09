@@ -125,6 +125,22 @@ pub struct CommitInfo {
     pub time: i64,
 }
 
+/// A branch or a tag, to compare.
+#[derive(Clone, Debug)]
+pub struct NamedRef {
+    pub name: String,
+    pub tip: Oid,
+    pub tag: bool,
+}
+
+pub struct Comparison {
+    pub files: Vec<FileDiff>,
+    /// Where the comparison starts: the base itself or its merge base with the head.
+    pub start: Oid,
+    /// Commits the head has beyond `start`.
+    pub commits: usize,
+}
+
 pub struct Repo {
     inner: Repository,
 }
@@ -295,6 +311,70 @@ impl Repo {
             _ => Some(commit.parent(0)?.tree()?),
         };
         diff::tree_to_tree(&self.inner, old.as_ref(), Some(&new), settings)
+    }
+
+    /// Every branch and tag with the commit it points at, for picking a side to compare.
+    pub fn compare_refs(&self) -> Result<Vec<NamedRef>> {
+        let mut out: Vec<NamedRef> = self
+            .branches()?
+            .into_iter()
+            .map(|b| NamedRef {
+                name: b.name,
+                tip: b.tip,
+                tag: false,
+            })
+            .collect();
+        for name in self.inner.tag_names(None)?.iter().flatten().flatten() {
+            let tip = self
+                .inner
+                .revparse_single(&format!("refs/tags/{name}"))
+                .and_then(|o| o.peel_to_commit())
+                .map(|c| c.id());
+            if let Ok(tip) = tip {
+                out.push(NamedRef {
+                    name: name.to_owned(),
+                    tip,
+                    tag: true,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// A branch, tag, `HEAD~3` or (part of) a commit id as a commit.
+    pub fn resolve(&self, spec: &str) -> Result<Oid> {
+        Ok(self
+            .inner
+            .revparse_single(spec.trim())?
+            .peel_to_commit()?
+            .id())
+    }
+
+    /// The changes from `base` to `head`; with `since_merge_base` from where the two diverged,
+    /// so only what `head` added shows (`base...head`).
+    pub fn compare(
+        &self,
+        base: Oid,
+        head: Oid,
+        since_merge_base: bool,
+        settings: DiffSettings,
+    ) -> Result<Comparison> {
+        let start = if since_merge_base {
+            self.inner.merge_base(base, head).unwrap_or(base)
+        } else {
+            base
+        };
+        let old = self.inner.find_commit(start)?.tree()?;
+        let new = self.inner.find_commit(head)?.tree()?;
+        let files = diff::tree_to_tree(&self.inner, Some(&old), Some(&new), settings)?;
+        let mut walk = self.inner.revwalk()?;
+        walk.push(head)?;
+        walk.hide(start)?;
+        Ok(Comparison {
+            files,
+            start,
+            commits: walk.count(),
+        })
     }
 
     /// The versions of a branch, oldest first, read from the ref's reflog.

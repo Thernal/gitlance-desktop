@@ -443,3 +443,34 @@ fn range_pairs_tell_unchanged_modified_new_and_dropped_commits() {
         .unwrap();
     assert_eq!(paths(&inter.files), ["a.txt"]);
 }
+
+#[test]
+fn compare_since_the_merge_base_shows_only_what_the_head_added() {
+    let mut fx = Fixture::new();
+    let root = fx.commit("refs/heads/main", &[], &[("a.txt", "1\n")], "root");
+    let feature = fx.commit(
+        "refs/heads/feature",
+        &[root],
+        &[("a.txt", "1\n"), ("f.txt", "f\n")],
+        "commit: feature",
+    );
+    // main moved on after the fork.
+    let main = fx.commit(
+        "refs/heads/main",
+        &[root],
+        &[("a.txt", "1\n"), ("m.txt", "m\n")],
+        "commit: main work",
+    );
+    let repo = fx.open();
+    let since = repo
+        .compare(main, feature, true, DiffSettings::default())
+        .unwrap();
+    assert_eq!(paths(&since.files), ["f.txt"]);
+    assert_eq!((since.start, since.commits), (root, 1));
+    let direct = repo
+        .compare(main, feature, false, DiffSettings::default())
+        .unwrap();
+    assert_eq!(paths(&direct.files), ["f.txt", "m.txt"]);
+    assert_eq!(repo.resolve("feature").unwrap(), feature);
+    assert!(repo.resolve("nonexistent").is_err());
+}
