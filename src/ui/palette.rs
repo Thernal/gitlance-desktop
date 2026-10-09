@@ -37,6 +37,7 @@ pub enum Cmd {
     FullContext,
     Whitespace,
     Compare,
+    NewTab,
 }
 
 const COMMANDS: &[(&str, &str, Cmd)] = &[
@@ -53,9 +54,10 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Toggle wrap", "⌥Z", Cmd::Wrap),
     ("Toggle full file", "⌥E", Cmd::FullContext),
     ("Toggle ignore whitespace", "⌥W", Cmd::Whitespace),
-    ("Hide or show the branches", "⌘1", Cmd::ToggleSidebar),
-    ("Hide or show the files", "⌘2", Cmd::ToggleFiles),
+    ("Hide or show the branches", "⌥⌘1", Cmd::ToggleSidebar),
+    ("Hide or show the files", "⌥⌘2", Cmd::ToggleFiles),
     ("Diff only", "⌘.", Cmd::FocusDiff),
+    ("New tab", "⌘T", Cmd::NewTab),
     ("Settings", "⌘,", Cmd::Settings),
 ];
 
@@ -549,5 +551,6 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::FullContext => Box::new(ToggleFullContext),
         Cmd::Whitespace => Box::new(ToggleWhitespace),
         Cmd::Compare => Box::new(Compare),
+        Cmd::NewTab => Box::new(NewTab),
     }
 }

@@ -13,6 +13,7 @@ mod palette;
 mod rows;
 mod select;
 mod settings;
+mod shell;
 mod theme;
 mod watch;
 mod working;
@@ -72,6 +73,20 @@ actions!(
         ToggleWrap,
         ToggleFullContext,
         ToggleWhitespace,
+        NewTab,
+        CloseTab,
+        ReopenTab,
+        NextTab,
+        PreviousTab,
+        Tab1,
+        Tab2,
+        Tab3,
+        Tab4,
+        Tab5,
+        Tab6,
+        Tab7,
+        Tab8,
+        Tab9,
         OpenPalette,
         Compare,
         PaletteUp,
@@ -104,8 +119,22 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("cmd-p", FilterFiles, Some("Workspace")),
                 KeyBinding::new("cmd-[", GoBack, Some("Workspace")),
                 KeyBinding::new("cmd-]", GoForward, Some("Workspace")),
-                KeyBinding::new("cmd-1", ToggleSidebar, Some("Workspace")),
-                KeyBinding::new("cmd-2", ToggleFiles, Some("Workspace")),
+                KeyBinding::new("cmd-alt-1", ToggleSidebar, Some("Workspace")),
+                KeyBinding::new("cmd-alt-2", ToggleFiles, Some("Workspace")),
+                KeyBinding::new("cmd-t", NewTab, Some("Workspace")),
+                KeyBinding::new("cmd-w", CloseTab, Some("Workspace")),
+                KeyBinding::new("cmd-shift-t", ReopenTab, Some("Workspace")),
+                KeyBinding::new("cmd-shift-]", NextTab, Some("Workspace")),
+                KeyBinding::new("cmd-shift-[", PreviousTab, Some("Workspace")),
+                KeyBinding::new("cmd-1", Tab1, Some("Workspace")),
+                KeyBinding::new("cmd-2", Tab2, Some("Workspace")),
+                KeyBinding::new("cmd-3", Tab3, Some("Workspace")),
+                KeyBinding::new("cmd-4", Tab4, Some("Workspace")),
+                KeyBinding::new("cmd-5", Tab5, Some("Workspace")),
+                KeyBinding::new("cmd-6", Tab6, Some("Workspace")),
+                KeyBinding::new("cmd-7", Tab7, Some("Workspace")),
+                KeyBinding::new("cmd-8", Tab8, Some("Workspace")),
+                KeyBinding::new("cmd-9", Tab9, Some("Workspace")),
                 KeyBinding::new("cmd-.", FocusDiff, Some("Workspace")),
                 KeyBinding::new("cmd-c", CopySelection, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-a", SelectAll, Some("Workspace && !Typing")),
@@ -157,7 +186,7 @@ pub fn run(path: Option<PathBuf>) {
             };
             let window = cx
                 .open_window(options, |window, cx| {
-                    cx.new(|cx| Workspace::new(path, window, cx))
+                    cx.new(|cx| shell::Shell::new(path, window, cx))
                 })
                 .expect("open the window");
             if !offscreen {
@@ -179,6 +208,10 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
             MenuItem::action("Quit GitLance", Quit),
         ]),
         Menu::new("File").items([
+            MenuItem::action("New Tab", NewTab),
+            MenuItem::action("Close Tab", CloseTab),
+            MenuItem::action("Reopen Closed Tab", ReopenTab),
+            MenuItem::separator(),
             MenuItem::action("Open Repository…", Open),
             MenuItem::action("Refresh", Refresh),
             MenuItem::separator(),
@@ -195,6 +228,9 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
         Menu::new("Go").items([
             MenuItem::action("Back", GoBack),
             MenuItem::action("Forward", GoForward),
+            MenuItem::separator(),
+            MenuItem::action("Next Tab", NextTab),
+            MenuItem::action("Previous Tab", PreviousTab),
         ]),
         Menu::new("View").items([
             MenuItem::action("Show Branches and Commits", ToggleSidebar),
@@ -231,12 +267,16 @@ pub(crate) enum Opt {
 /// compares the first and last versions (`GITLANCE_SNAPSHOT_VERSIONS=1`), then writes the frame to
 /// `GITLANCE_SNAPSHOT` and quits.
 #[cfg(feature = "snapshot")]
-fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
+fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
     use std::time::Duration;
     let Some(out) = std::env::var_os("GITLANCE_SNAPSHOT").map(PathBuf::from) else {
         return;
     };
     let versions = std::env::var_os("GITLANCE_SNAPSHOT_VERSIONS").is_some();
+    let Ok(shell) = window.entity(cx) else {
+        return;
+    };
+    let ws = shell.read(cx).first();
     cx.spawn(async move |cx| {
         let executor = cx.background_executor().clone();
         let wait = |ms| executor.timer(Duration::from_millis(ms));
@@ -245,207 +285,195 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
             .and_then(|d| d.parse().ok())
             .unwrap_or(2500);
         wait(delay).await;
-        if let Ok(prefix) = std::env::var("GITLANCE_SNAPSHOT_COMMIT") {
+        if let Ok(path) = std::env::var("GITLANCE_SNAPSHOT_TABS") {
+            // A second repository in a tab of its own.
             window
-                .update(cx, |this, _, cx| {
-                    let found = this
-                        .commits
-                        .iter()
-                        .position(|c| c.id.to_string().starts_with(&prefix));
-                    if let Some(ix) = found {
-                        this.select_commit(ix, cx);
-                    }
+                .update(cx, |shell, window, cx| {
+                    shell.open_tab(path.into(), window, cx)
                 })
-                .ok();
-            wait(1500).await;
-        }
-        if let Ok(path) = std::env::var("GITLANCE_SNAPSHOT_FILE") {
-            window
-                .update(cx, |this, _, cx| {
-                    let found = this
-                        .diff
-                        .as_ref()
-                        .and_then(|d| d.files.iter().position(|f| f.path() == path));
-                    if let Some(ix) = found {
-                        this.select_file(ix, cx);
-                    }
-                })
-                .ok();
-            wait(1500).await;
-        }
-        if let Ok(view) = std::env::var("GITLANCE_SNAPSHOT_VIEW") {
-            window
-                .update(cx, |this, _, cx| {
-                    for name in view.split(',') {
-                        let opt = match name.trim() {
-                            "unified" => Opt::Unified,
-                            "split" => {
-                                this.set_option_unsaved(Opt::Unified, false, cx);
-                                continue;
-                            }
-                            "lines" => {
-                                this.set_mode(DiffMode::Lines, cx);
-                                continue;
-                            }
-                            "words" => {
-                                this.set_mode(DiffMode::Words, cx);
-                                continue;
-                            }
-                            "structural" => {
-                                this.set_mode(DiffMode::Structural, cx);
-                                continue;
-                            }
-                            "underlined" => {
-                                // Not saved either: only this frame.
-                                this.settings.mark_style = crate::storage::MarkStyle::Underlined;
-                                continue;
-                            }
-                            "comments" => {
-                                // Unsaved sample comments on the first changed line, one being written.
-                                let (Some(data), Some(path)) = (&this.data, this.current_path())
-                                else {
-                                    continue;
-                                };
-                                let target = this.rows.iter().find_map(|row| match row {
-                                    Row::Split { right: Some(c), .. }
-                                    | Row::Unified {
-                                        cell: c,
-                                        old: false,
-                                        ..
-                                    } if c.kind == crate::git::LineKind::Added => Some(c.line),
-                                    _ => None,
-                                });
-                                if let Some(line) = target {
-                                    let code = data.side(false).line(line).0.to_owned();
-                                    this.comments.push(crate::review::Comment {
-                                        id: 1,
-                                        path: path.clone(),
-                                        old: false,
-                                        line,
-                                        code: code.clone(),
-                                        body: "Clamp this value — the API rejects anything else."
-                                            .into(),
-                                        at: "a10f3cf".into(),
-                                    });
-                                    this.review_open = true;
-                                    this.start_comment(false, line + 1, cx);
-                                    if let Some(c) = this.compose.as_mut() {
-                                        c.body = "Name this after what it holds.".into();
-                                    }
-                                    this.refresh_rows();
-                                }
-                                continue;
-                            }
-                            "notice" => {
-                                this.notice = Some(Notice {
-                                    text: "v3 arrived — this comparison now ends at v3.".into(),
-                                    undo: Selection::None,
-                                });
-                                continue;
-                            }
-                            "viewmenu" => {
-                                let groups = this.view_menu();
-                                this.open_menu(Point::new(px(1090.), px(78.)), groups, cx);
-                                continue;
-                            }
-                            "linemenu" => {
-                                this.sel = Some(Sel {
-                                    old: false,
-                                    anchor: select::Pos { line: 66, byte: 4 },
-                                    head: select::Pos { line: 68, byte: 12 },
-                                });
-                                this.line_context(false, 67, Point::new(px(900.), px(520.)), cx);
-                                continue;
-                            }
-                            "menu" => {
-                                this.repo_menu = true;
-                                continue;
-                            }
-                            "settings" => {
-                                this.open_settings(cx);
-                                continue;
-                            }
-                            "wrap" => Opt::Wrap,
-                            "all-lines" => Opt::FullContext,
-                            "whitespace" => Opt::Whitespace,
-                            _ => continue,
-                        };
-                        // Not saved: a snapshot must not change the user's settings.
-                        this.set_option_unsaved(opt, true, cx);
-                    }
-                })
-                .ok();
-            wait(1500).await;
-        }
-        if let Ok(text) = std::env::var("GITLANCE_SNAPSHOT_FIND") {
-            window
-                .update(cx, |this, _, cx| {
-                    this.start_dfind(cx);
-                    this.set_dfind(text, cx);
-                    this.step_change(true, cx);
-                })
-                .ok();
-            wait(800).await;
-        }
-        if let Ok(text) = std::env::var("GITLANCE_SNAPSHOT_SEARCH") {
-            window
-                .update(cx, |this, _, cx| {
-                    this.find.text = Some(text);
-                    this.refilter();
-                    this.recompute_matches();
-                    cx.notify();
-                })
-                .ok();
-            wait(800).await;
-        }
-        if versions {
-            window
-                .update(cx, |this, _, cx| {
-                    if this.versions.len() > 1 {
-                        this.select_versions(0, this.versions.len() - 1, cx);
-                    }
-                })
-                .ok();
-            wait(1500).await;
-        }
-        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("interdiff")) {
-            window
-                .update(cx, |this, _, cx| this.select_interdiff(0, cx))
-                .ok();
-            wait(1500).await;
-        }
-        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("worktree")) {
-            window
-                .update(cx, |this, _, cx| this.select_working_tree(cx))
                 .ok();
             wait(2500).await;
         }
+        if let Ok(prefix) = std::env::var("GITLANCE_SNAPSHOT_COMMIT") {
+            ws.update(cx, |this, cx| {
+                let found = this
+                    .commits
+                    .iter()
+                    .position(|c| c.id.to_string().starts_with(&prefix));
+                if let Some(ix) = found {
+                    this.select_commit(ix, cx);
+                }
+            });
+            wait(1500).await;
+        }
+        if let Ok(path) = std::env::var("GITLANCE_SNAPSHOT_FILE") {
+            ws.update(cx, |this, cx| {
+                let found = this
+                    .diff
+                    .as_ref()
+                    .and_then(|d| d.files.iter().position(|f| f.path() == path));
+                if let Some(ix) = found {
+                    this.select_file(ix, cx);
+                }
+            });
+            wait(1500).await;
+        }
+        if let Ok(view) = std::env::var("GITLANCE_SNAPSHOT_VIEW") {
+            ws.update(cx, |this, cx| {
+                for name in view.split(',') {
+                    let opt = match name.trim() {
+                        "unified" => Opt::Unified,
+                        "split" => {
+                            this.set_option_unsaved(Opt::Unified, false, cx);
+                            continue;
+                        }
+                        "lines" => {
+                            this.set_mode(DiffMode::Lines, cx);
+                            continue;
+                        }
+                        "words" => {
+                            this.set_mode(DiffMode::Words, cx);
+                            continue;
+                        }
+                        "structural" => {
+                            this.set_mode(DiffMode::Structural, cx);
+                            continue;
+                        }
+                        "underlined" => {
+                            // Not saved either: only this frame.
+                            this.settings.mark_style = crate::storage::MarkStyle::Underlined;
+                            continue;
+                        }
+                        "comments" => {
+                            // Unsaved sample comments on the first changed line, one being written.
+                            let (Some(data), Some(path)) = (&this.data, this.current_path()) else {
+                                continue;
+                            };
+                            let target = this.rows.iter().find_map(|row| match row {
+                                Row::Split { right: Some(c), .. }
+                                | Row::Unified {
+                                    cell: c,
+                                    old: false,
+                                    ..
+                                } if c.kind == crate::git::LineKind::Added => Some(c.line),
+                                _ => None,
+                            });
+                            if let Some(line) = target {
+                                let code = data.side(false).line(line).0.to_owned();
+                                this.comments.push(crate::review::Comment {
+                                    id: 1,
+                                    path: path.clone(),
+                                    old: false,
+                                    line,
+                                    code: code.clone(),
+                                    body: "Clamp this value — the API rejects anything else."
+                                        .into(),
+                                    at: "a10f3cf".into(),
+                                });
+                                this.review_open = true;
+                                this.start_comment(false, line + 1, cx);
+                                if let Some(c) = this.compose.as_mut() {
+                                    c.body = "Name this after what it holds.".into();
+                                }
+                                this.refresh_rows();
+                            }
+                            continue;
+                        }
+                        "notice" => {
+                            this.notice = Some(Notice {
+                                text: "v3 arrived — this comparison now ends at v3.".into(),
+                                undo: Selection::None,
+                            });
+                            continue;
+                        }
+                        "viewmenu" => {
+                            let groups = this.view_menu();
+                            this.open_menu(Point::new(px(1090.), px(78.)), groups, cx);
+                            continue;
+                        }
+                        "linemenu" => {
+                            this.sel = Some(Sel {
+                                old: false,
+                                anchor: select::Pos { line: 66, byte: 4 },
+                                head: select::Pos { line: 68, byte: 12 },
+                            });
+                            this.line_context(false, 67, Point::new(px(900.), px(520.)), cx);
+                            continue;
+                        }
+                        "menu" => {
+                            this.repo_menu = true;
+                            continue;
+                        }
+                        "settings" => {
+                            this.open_settings(cx);
+                            continue;
+                        }
+                        "wrap" => Opt::Wrap,
+                        "all-lines" => Opt::FullContext,
+                        "whitespace" => Opt::Whitespace,
+                        _ => continue,
+                    };
+                    // Not saved: a snapshot must not change the user's settings.
+                    this.set_option_unsaved(opt, true, cx);
+                }
+            });
+            wait(1500).await;
+        }
+        if let Ok(text) = std::env::var("GITLANCE_SNAPSHOT_FIND") {
+            ws.update(cx, |this, cx| {
+                this.start_dfind(cx);
+                this.set_dfind(text, cx);
+                this.step_change(true, cx);
+            });
+            wait(800).await;
+        }
+        if let Ok(text) = std::env::var("GITLANCE_SNAPSHOT_SEARCH") {
+            ws.update(cx, |this, cx| {
+                this.find.text = Some(text);
+                this.refilter();
+                this.recompute_matches();
+                cx.notify();
+            });
+            wait(800).await;
+        }
+        if versions {
+            ws.update(cx, |this, cx| {
+                if this.versions.len() > 1 {
+                    this.select_versions(0, this.versions.len() - 1, cx);
+                }
+            });
+            wait(1500).await;
+        }
+        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("interdiff")) {
+            ws.update(cx, |this, cx| this.select_interdiff(0, cx));
+            wait(1500).await;
+        }
+        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("worktree")) {
+            ws.update(cx, |this, cx| this.select_working_tree(cx));
+            wait(2500).await;
+        }
         if let Ok(spec) = std::env::var("GITLANCE_SNAPSHOT_COMPARE") {
-            window
-                .update(cx, |this, _, cx| {
-                    let repo = this.root.as_ref().and_then(|r| Repo::open(r).ok());
-                    let mut sides = spec
-                        .split(',')
-                        .filter_map(|s| Some((s.to_owned(), repo.as_ref()?.resolve(s).ok()?)));
-                    if let (Some(base), Some(head)) = (sides.next(), sides.next()) {
-                        this.run_compare(base, head, true, cx);
-                    }
-                })
-                .ok();
+            ws.update(cx, |this, cx| {
+                let repo = this.root.as_ref().and_then(|r| Repo::open(r).ok());
+                let mut sides = spec
+                    .split(',')
+                    .filter_map(|s| Some((s.to_owned(), repo.as_ref()?.resolve(s).ok()?)));
+                if let (Some(base), Some(head)) = (sides.next(), sides.next()) {
+                    this.run_compare(base, head, true, cx);
+                }
+            });
             wait(1500).await;
         }
         if let Ok(query) = std::env::var("GITLANCE_SNAPSHOT_PALETTE") {
-            window
-                .update(cx, |this, _, cx| {
-                    let kind = if query.starts_with("compare:") {
-                        palette::Kind::Base
-                    } else {
-                        palette::Kind::Jump
-                    };
-                    this.open_palette(kind, cx);
-                    this.type_in_palette(query.trim_start_matches("compare:"));
-                })
-                .ok();
+            ws.update(cx, |this, cx| {
+                let kind = if query.starts_with("compare:") {
+                    palette::Kind::Base
+                } else {
+                    palette::Kind::Jump
+                };
+                this.open_palette(kind, cx);
+                this.type_in_palette(query.trim_start_matches("compare:"));
+            });
             wait(500).await;
         }
         // A hidden window gets no display-link frames: draw one by hand.
@@ -580,6 +608,8 @@ pub struct Workspace {
     palette: Option<palette::Palette>,
     wt: WorkingState,
     fetch: fetch::Fetch,
+    shell: Option<gpui::WeakEntity<shell::Shell>>,
+    tabs: shell::TabModel,
     diff: Option<Diff>,
     file: usize,
     options: ViewOptions,
@@ -655,12 +685,18 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    fn new(path: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// `open_recent`: with no `path`, open the most recent repository.
+    fn new(
+        path: Option<PathBuf>,
+        open_recent: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let recent = storage::recent();
         let settings = Settings::load();
-        let start = path.or_else(|| recent.first().cloned());
+        let start = path.or_else(|| open_recent.then(|| recent.first().cloned()).flatten());
         let mut this = Self {
             focus,
             layout: Layout::load(),
@@ -678,6 +714,8 @@ impl Workspace {
             palette: None,
             wt: WorkingState::default(),
             fetch: fetch::Fetch::default(),
+            shell: None,
+            tabs: Default::default(),
             diff: None,
             file: 0,
             options: ViewOptions::load(&settings),
@@ -1810,7 +1848,7 @@ impl Workspace {
             )
     }
 
-    /// The rail on the window's left edge: one button per hideable island (⌘1, ⌘2).
+    /// The rail on the window's left edge: one button per hideable island (⌥⌘1, ⌥⌘2).
     fn render_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let button = |id: &'static str, icon: &'static str, on: bool, tip: &'static str| {
             div()
@@ -1843,14 +1881,14 @@ impl Workspace {
                     "rail-sidebar",
                     "sidebar",
                     self.layout.show_sidebar,
-                    "Branches and commits  ⌘1",
+                    "Branches and commits  ⌥⌘1",
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_sidebar(&ToggleSidebar, window, cx)
                 })),
             )
             .child(
-                button("rail-files", "files", self.layout.show_files, "Files  ⌘2").on_click(
+                button("rail-files", "files", self.layout.show_files, "Files  ⌥⌘2").on_click(
                     cx.listener(|this, _, window, cx| this.toggle_files(&ToggleFiles, window, cx)),
                 ),
             )
@@ -3012,6 +3050,51 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::previous_change))
             .on_action(cx.listener(Self::next_match))
             .on_action(cx.listener(Self::previous_match))
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| {
+                this.with_shell(cx, |s, cx| s.new_tab(window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                this.with_shell(cx, |s, cx| {
+                    let active = s.active_ix();
+                    s.close(active, window, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ReopenTab, window, cx| {
+                this.with_shell(cx, |s, cx| s.reopen(window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &NextTab, window, cx| {
+                this.with_shell(cx, |s, cx| s.step(true, window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &PreviousTab, window, cx| {
+                this.with_shell(cx, |s, cx| s.step(false, window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &Tab1, window, cx| {
+                this.with_shell(cx, |s, cx| s.select(0, window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &Tab2, window, cx| {
+                this.with_shell(cx, |s, cx| s.select(1, window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &Tab3, window, cx| {
+                this.with_shell(cx, |s, cx| s.select(2, window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &Tab4, window, cx| {
+                this.with_shell(cx, |s, cx| s.select(3, window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &Tab5, window, cx| {
+                this.with_shell(cx, |s, cx| s.select(4, window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &Tab6, window, cx| {
+                this.with_shell(cx, |s, cx| s.select(5, window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &Tab7, window, cx| {
+                this.with_shell(cx, |s, cx| s.select(6, window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &Tab8, window, cx| {
+                this.with_shell(cx, |s, cx| s.select(7, window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &Tab9, window, cx| {
+                this.with_shell(cx, |s, cx| s.select(8, window, cx))
+            }))
             .on_action(cx.listener(Self::open_palette_action))
             .on_action(cx.listener(Self::compare_action))
             .on_action(cx.listener(Self::palette_up))
@@ -3051,6 +3134,7 @@ impl Render for Workspace {
             .font_family(theme::UI_FONT)
             .text_size(px(13.))
             .child(self.render_title_bar(cx))
+            .children(self.render_tab_strip(cx))
             .children(self.error.clone().map(|e| {
                 div()
                     .flex_none()
