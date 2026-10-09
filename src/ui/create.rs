@@ -77,6 +77,9 @@ impl Workspace {
         self.find.text = None;
         self.palette = None;
         self.ctx_menu = None;
+        // The picker it was opened from closes with it.
+        self.picker_open = false;
+        self.bfilter.clear();
         self.field_all = false;
         self.newreq = Some(NewRequest {
             source,

@@ -222,7 +222,8 @@ pub fn run(path: Option<PathBuf>) {
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.set_menus(menus(&ViewOptions::load(&Settings::load())));
 
-            let bounds = gpui::Bounds::centered(None, size(px(1480.), px(920.)), cx);
+            let (width, height) = window_size();
+            let bounds = gpui::Bounds::centered(None, size(px(width), px(height)), cx);
             // A snapshot renders offscreen: no window shown, no focus taken.
             let offscreen =
                 cfg!(feature = "snapshot") && std::env::var_os("GITLANCE_SNAPSHOT").is_some();
@@ -251,6 +252,20 @@ pub fn run(path: Option<PathBuf>) {
             #[cfg(not(feature = "snapshot"))]
             let _ = window;
         });
+}
+
+/// The window's size: 1480 × 920, or `GITLANCE_SNAPSHOT_SIZE=WxH` in a snapshot (to check the
+/// layout of a small window).
+fn window_size() -> (f32, f32) {
+    #[cfg(feature = "snapshot")]
+    if let Some((w, h)) = std::env::var("GITLANCE_SNAPSHOT_SIZE")
+        .ok()
+        .and_then(|v| v.split_once('x').map(|(w, h)| (w.to_owned(), h.to_owned())))
+        .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+    {
+        return (w, h);
+    }
+    (1480., 920.)
 }
 
 /// The menu bar; View items carry a check mark for the options in effect.
@@ -2295,21 +2310,15 @@ impl Workspace {
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| this.set_zone(zones::Zone::Commits, cx)),
                     )
-                    .child(
-                        div()
+                    .child({
+                        // A narrow sidebar has no room for the label and the chips on one line.
+                        let stacked = self.layout.sidebar < 300.;
+                        let chips = div()
                             .flex()
                             .items_center()
                             .gap_1()
-                            .pr(px(8.))
-                            .child(
-                                island_label(format!(
-                                    "Commits · {}{}",
-                                    self.commits.len(),
-                                    self.zone_tag(zones::Zone::Commits)
-                                ))
-                                .flex_none(),
-                            )
-                            .child(div().flex_1())
+                            .when(stacked, |s| s.px(px(8.)).pb(px(4.)))
+                            .when(!stacked, |s| s.pr(px(8.)))
                             .children(self.render_request_chip(cx))
                             .children(self.render_working_chip(cx))
                             .child(
@@ -2317,8 +2326,25 @@ impl Workspace {
                                     .child("⌕")
                                     .tooltip(|_, cx| cx.new(|_| Tip("Search commits  ⌘⇧F")).into())
                                     .on_click(cx.listener(|this, _, _, cx| this.start_find(cx))),
-                            ),
-                    )
+                            );
+                        let label = island_label(format!(
+                            "Commits · {}{}",
+                            self.commits.len(),
+                            self.zone_tag(zones::Zone::Commits)
+                        ))
+                        .flex_none();
+                        if stacked {
+                            div().flex().flex_col().child(label).child(chips)
+                        } else {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(label)
+                                .child(div().flex_1())
+                                .child(chips)
+                        }
+                    })
                     .children(self.find.text.is_some().then(|| self.render_find(cx)))
                     .children(self.render_pill(cx))
                     .child(if self.find.shown.as_ref().is_some_and(Vec::is_empty) {
@@ -2657,7 +2683,7 @@ impl Workspace {
                             .child(format::short(commit.id)),
                     )
                     .child(
-                        div().flex().flex_none().gap_2().children(
+                        div().flex().min_w_0().flex_shrink(1.).gap_2().children(
                             self.decor
                                 .get(&commit.id)
                                 .map(|d| {
@@ -2666,12 +2692,14 @@ impl Workspace {
                                 .unwrap_or_default(),
                         ),
                     )
-                    .child(
-                        div().flex_1().min_w_0().truncate().children(
-                            (several && !self.decor.contains_key(&commit.id))
-                                .then(|| commit.author.clone()),
-                        ),
-                    )
+                    .children((several && !self.decor.contains_key(&commit.id)).then(|| {
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(commit.author.clone())
+                    }))
+                    .child(div().flex_1())
                     .child(
                         div()
                             .flex_none()
@@ -2861,7 +2889,9 @@ impl Workspace {
                     .child(
                         div()
                             .flex()
-                            .gap_3()
+                            .flex_wrap()
+                            .gap_x(px(12.))
+                            .gap_y(px(2.))
                             .text_size(px(12.))
                             .text_color(theme::muted())
                             .child(
@@ -2921,7 +2951,9 @@ impl Workspace {
                         div()
                             .flex()
                             .items_center()
-                            .gap_3()
+                            .flex_wrap()
+                            .gap_x(px(12.))
+                            .gap_y(px(4.))
                             .child(
                                 div()
                                     .text_size(px(15.))
@@ -2968,7 +3000,9 @@ impl Workspace {
                         div()
                             .flex()
                             .items_center()
-                            .gap_3()
+                            .flex_wrap()
+                            .gap_x(px(12.))
+                            .gap_y(px(4.))
                             .child(
                                 div()
                                     .text_size(px(15.))
@@ -3015,7 +3049,9 @@ impl Workspace {
                         div()
                             .flex()
                             .items_center()
-                            .gap_3()
+                            .flex_wrap()
+                            .gap_x(px(12.))
+                            .gap_y(px(4.))
                             .child(chip("back-to-commits", "← Commits", false).on_click(
                                 cx.listener(move |this, _: &ClickEvent, _, cx| {
                                     this.select_versions(from, to, cx)
@@ -3957,8 +3993,38 @@ fn button(
 
 fn plural(n: usize, noun: &str) -> String {
     if n == 1 {
-        format!("1 {noun}")
-    } else {
-        format!("{n} {noun}s")
+        return format!("1 {noun}");
+    }
+    // "reply" → "replies", not "replys".
+    match noun.strip_suffix('y') {
+        Some(stem) if stem.ends_with(|c: char| !"aeiou".contains(c)) => format!("{n} {stem}ies"),
+        _ => format!("{n} {noun}s"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trailers_are_told_from_prose() {
+        assert!(is_trailer("Co-Authored-By: Someone <a@b.c>"));
+        assert!(is_trailer("signed-off-by: Someone"));
+        assert!(!is_trailer("Fixes: the retry loop"));
+        assert!(!is_trailer("A sentence: with a colon."));
+        assert!(!is_trailer("no colon at all"));
+    }
+
+    #[test]
+    fn plurals_read_naturally() {
+        assert_eq!(plural(1, "file"), "1 file");
+        assert_eq!(plural(3, "commit"), "3 commits");
+        assert_eq!(plural(2, "reply"), "2 replies");
+        assert_eq!(plural(2, "day"), "2 days");
+    }
+
+    #[test]
+    fn the_window_has_a_default_size() {
+        assert_eq!(window_size(), (1480., 920.));
     }
 }

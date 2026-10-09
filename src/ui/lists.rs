@@ -120,8 +120,10 @@ impl Workspace {
 /// "HEAD → main", "origin/main", "v1.2": the first label and a count of the rest.
 pub fn deco_tags(decos: &[Deco]) -> Vec<gpui::AnyElement> {
     let tag = |text: String, color: gpui::Rgba| {
+        // The pill gives way (its text is cut with …) before the time beside it does.
         div()
-            .flex_none()
+            .flex_shrink(1.)
+            .min_w_0()
             .px(px(6.))
             .rounded_full()
             .border_1()
