@@ -23,6 +23,8 @@ pub struct Shell {
     active: usize,
     closed: Vec<PathBuf>,
     model: TabModel,
+    /// The session as last written, so it is written again only when it changes.
+    saved: String,
 }
 
 impl Shell {
@@ -33,9 +35,24 @@ impl Shell {
             active: 0,
             closed: Vec::new(),
             model,
+            saved: String::new(),
         };
-        let ws = cx.new(|cx| Workspace::new(path, true, window, cx));
-        shell.attach(ws, window, cx);
+        // An explicit path opens just that; otherwise the tabs of the last session come back.
+        let (tabs, active) = if path.is_some() {
+            (Vec::new(), 0)
+        } else {
+            crate::storage::session()
+        };
+        if tabs.is_empty() {
+            let ws = cx.new(|cx| Workspace::new(path, true, window, cx));
+            shell.attach(ws, window, cx);
+        } else {
+            for tab in tabs {
+                let ws = cx.new(|cx| Workspace::new(Some(tab), false, window, cx));
+                shell.attach(ws, window, cx);
+            }
+            shell.select(active.min(shell.tabs.len() - 1), window, cx);
+        }
         shell
     }
 
@@ -118,6 +135,32 @@ impl Shell {
         cx.notify();
     }
 
+    /// Writes the open repositories and the active tab when they differ from what was written.
+    fn save_session(&mut self, cx: &mut Context<Self>) {
+        if cfg!(feature = "snapshot") && std::env::var_os("GITLANCE_SNAPSHOT").is_some() {
+            return;
+        }
+        let mut roots = Vec::new();
+        let mut active = 0;
+        for (ix, tab) in self.tabs.iter().enumerate() {
+            // A tab still loading has no root yet; it keeps the last session's place.
+            if let Some(root) = tab.read(cx).root.clone() {
+                if ix == self.active {
+                    active = roots.len();
+                }
+                roots.push(root);
+            }
+        }
+        if roots.is_empty() {
+            return;
+        }
+        let key = format!("{active} {roots:?}");
+        if key != self.saved {
+            crate::storage::save_session(&roots, active);
+            self.saved = key;
+        }
+    }
+
     pub(super) fn reopen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(path) = self.closed.pop() {
             let ws = cx.new(|cx| Workspace::new(Some(path), false, window, cx));
@@ -142,6 +185,7 @@ impl Render for Shell {
             })
             .collect();
         *self.model.borrow_mut() = infos;
+        self.save_session(cx);
         div().size_full().child(self.tabs[self.active].clone())
     }
 }

@@ -18,6 +18,8 @@ pub enum Side {
 #[derive(Default)]
 pub struct Requests {
     pub available: bool,
+    /// A GitLab project without a token: the rail offers to connect instead of listing.
+    pub connectable: bool,
     pub list: Vec<Mr>,
     pub loading: bool,
     pub error: Option<String>,
@@ -42,12 +44,14 @@ impl Workspace {
             return;
         };
         let available = mr::available(&remote);
-        let side = if available {
+        let connectable = !available && !remote.github;
+        let side = if available || connectable {
             self.requests.side
         } else {
             Side::Branches
         };
         self.requests.available = available;
+        self.requests.connectable = connectable;
         self.requests.side = side;
         if !available {
             self.requests.list.clear();
@@ -697,6 +701,9 @@ impl Workspace {
 
     /// The island's label: which of the two lists the rail's button chose.
     pub(super) fn render_branches_header(&self) -> impl IntoElement {
+        if self.requests.connectable && self.requests.side == Side::Requests {
+            return super::island_label("Connect GitLab").into_any_element();
+        }
         if self.requests.available && self.requests.side == Side::Requests {
             let n = self.requests.list.len();
             let label = if self.requests.loading && n == 0 {
@@ -707,6 +714,124 @@ impl Workspace {
             return super::island_label(label).into_any_element();
         }
         super::island_label("Branches").into_any_element()
+    }
+
+    /// Keeps the typed token, asks GitLab who it is, and starts listing on success.
+    pub(super) fn submit_token(&mut self, cx: &mut Context<Self>) {
+        let Some(remote) = self.web.clone() else {
+            return;
+        };
+        let token = self.token_input.trim().to_owned();
+        if token.len() < 8 || token.contains(char::is_whitespace) {
+            self.gitlab_check = Some(Err("That does not look like a token.".to_owned()));
+            return cx.notify();
+        }
+        if let Err(e) = mr::save_token(&remote, &token) {
+            self.gitlab_check = Some(Err(format!("{e:#}")));
+            return cx.notify();
+        }
+        self.gitlab_check = None;
+        self.testing = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let check = remote.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { mr::me(&check) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.testing = false;
+                match result {
+                    Ok(who) => {
+                        this.gitlab_check = Some(Ok(who));
+                        this.token_input.clear();
+                        this.field = None;
+                        this.load_requests(cx);
+                    }
+                    Err(e) => {
+                        mr::forget_token(&remote);
+                        this.gitlab_check = Some(Err(format!("{e:#}")));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The sidebar's top island for a GitLab project without a token.
+    pub(super) fn render_connect(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let Some(remote) = self.web.clone() else {
+            return div().into_any_element();
+        };
+        let host = mr::host(&remote);
+        let page = mr::token_page(&remote);
+        let active = self.field == Some(super::lists::Field::Token);
+        let masked = "•".repeat(self.token_input.chars().count().min(40));
+        let field = self.render_field(
+            "token-field",
+            active.then_some(masked.as_str()),
+            &masked,
+            "Paste your token",
+            cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.start_field(super::lists::Field::Token, cx)
+            }),
+        );
+        let note = match (&self.gitlab_check, self.testing) {
+            (_, true) => Some(("Checking…".to_owned(), theme::muted())),
+            (Some(Err(e)), _) => Some((e.clone(), theme::removed())),
+            (Some(Ok(who)), _) => Some((format!("Connected as {who}"), theme::added())),
+            _ => None,
+        };
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .px(px(8.))
+            .child(
+                div()
+                    .px(px(6.))
+                    .text_size(px(12.))
+                    .text_color(theme::muted())
+                    .child(format!(
+                        "See the merge requests of {host}: comment, reply and resolve here. GitLance needs a personal access token with the api scope. It stays on this Mac."
+                    )),
+            )
+            .child(
+                div()
+                    .id("token-create")
+                    .mx(px(6.))
+                    .px_2()
+                    .py(px(4.))
+                    .rounded(px(super::ROW_RADIUS))
+                    .border_1()
+                    .border_color(theme::island_border())
+                    .text_size(px(12.))
+                    .text_color(theme::accent())
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::hover()))
+                    .child(format!("1 · Create a token on {host} ↗"))
+                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&page))),
+            )
+            .child(
+                div()
+                    .px(px(6.))
+                    .text_size(px(12.))
+                    .text_color(theme::muted())
+                    .child("2 · Paste it here and press ↵"),
+            )
+            .child(field)
+            .children(note.map(|(text, color)| {
+                div()
+                    .px(px(6.))
+                    .text_size(px(12.))
+                    .text_color(color)
+                    .child(text)
+            }))
+            .into_any_element()
     }
 
     pub(super) fn render_requests(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {

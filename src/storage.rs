@@ -35,6 +35,24 @@ pub fn recent() -> Vec<PathBuf> {
         .collect()
 }
 
+/// The tabs open when the window last changed, and which one was in front.
+pub fn session() -> (Vec<PathBuf>, usize) {
+    let text = read("session.txt");
+    let mut lines = text.lines();
+    let active = lines.next().and_then(|l| l.parse().ok()).unwrap_or(0);
+    let tabs: Vec<PathBuf> = lines.map(PathBuf::from).filter(|p| p.is_dir()).collect();
+    (tabs, active)
+}
+
+/// Keeps the open tabs (repository roots, in order) and the one in front.
+pub fn save_session(tabs: &[PathBuf], active: usize) {
+    let mut body = format!("{active}\n");
+    for t in tabs {
+        body.push_str(&format!("{}\n", t.display()));
+    }
+    save("session.txt", body);
+}
+
 /// Moves `path` to the front of the recent list and saves it.
 pub fn remember(path: &Path) -> Vec<PathBuf> {
     let mut list = recent();

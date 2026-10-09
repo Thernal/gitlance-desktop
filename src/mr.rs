@@ -120,6 +120,19 @@ pub fn save_token(remote: &WebRemote, token: &str) -> Result<()> {
     Ok(())
 }
 
+/// Removes the token this app saved for the host of `remote` (a wrong one, after a failed test).
+pub fn forget_token(remote: &WebRemote) {
+    if let (Some(home), Ok((host, _))) = (std::env::home_dir(), api(remote)) {
+        let _ = std::fs::remove_file(token_file(&home, &host));
+    }
+}
+
+/// Where a token for this host is made, with the name and the scope filled in.
+pub fn token_page(remote: &WebRemote) -> String {
+    let (host, _) = api(remote).unwrap_or_default();
+    format!("{host}/-/user_settings/personal_access_tokens?name=GitLance&scopes=api")
+}
+
 /// The host the requests go to, without the scheme.
 pub fn host(remote: &WebRemote) -> String {
     api(remote)

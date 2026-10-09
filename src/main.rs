@@ -15,12 +15,11 @@ mod worddiff;
 use std::path::PathBuf;
 
 fn main() {
-    // An explicit path, else the directory it was started in when that is a repository; with
-    // neither, the window opens the most recent repository or offers to open one.
+    // An explicit path opens just that repository; without one the window comes back as it was
+    // left (the tabs of the last session), or offers to open one.
     let path = std::env::args_os()
         .nth(1)
         .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
         .filter(|p| git::Repo::open(p).is_ok());
     ui::run(path);
 }

@@ -687,6 +687,10 @@ pub struct Workspace {
     open_request: Option<PendingCompare>,
     /// What the last "Test" of the GitLab connection in Settings found.
     gitlab_check: Option<Result<String, String>>,
+    /// The token being entered in the connect panel; shown as dots.
+    token_input: String,
+    /// A token is being checked against GitLab.
+    testing: bool,
     /// The line number being typed for a quick comment.
     goline: Option<String>,
     /// The diff row the `c` marker stands on.
@@ -804,6 +808,8 @@ impl Workspace {
             pending_compare: None,
             open_request: None,
             gitlab_check: None,
+            token_input: String::new(),
+            testing: false,
             goline: None,
             goline_row: None,
             jump_line: None,
@@ -1544,7 +1550,7 @@ impl Workspace {
     /// ⌥⌘3 or the rail's third button: the sidebar's top island shows the merge requests; again,
     /// the branches.
     fn toggle_requests(&mut self, _: &ToggleRequests, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.requests.available {
+        if !self.requests.available && !self.requests.connectable {
             return;
         }
         self.layout.show_sidebar = true;
@@ -1553,6 +1559,10 @@ impl Workspace {
             requests::Side::Branches => requests::Side::Requests,
         };
         self.layout.save();
+        // The connect panel is ready for the token to be pasted.
+        if self.requests.connectable && self.requests.side == requests::Side::Requests {
+            self.start_field(lists::Field::Token, cx);
+        }
         cx.notify();
     }
 
@@ -1990,36 +2000,39 @@ impl Workspace {
                     cx.listener(|this, _, window, cx| this.toggle_files(&ToggleFiles, window, cx)),
                 ),
             )
-            .children(self.requests.available.then(|| {
-                let on = self.layout.show_sidebar && self.requests.side == requests::Side::Requests;
-                let n = self.requests.list.len();
-                div()
-                    .relative()
-                    .child(
-                        button("rail-requests", "pull-request", on, "Merge requests  ⌥⌘3")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_requests(&ToggleRequests, window, cx)
-                            })),
-                    )
-                    .children((n > 0).then(|| {
-                        div()
-                            .absolute()
-                            .top(px(-2.))
-                            .right(px(-2.))
-                            .min_w(px(16.))
-                            .h(px(16.))
-                            .px(px(4.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .bg(theme::accent())
-                            .text_color(theme::editor())
-                            .text_size(px(10.))
-                            .font_weight(FontWeight::BOLD)
-                            .child(n.to_string())
-                    }))
-            }))
+            .children(
+                (self.requests.available || self.requests.connectable).then(|| {
+                    let on =
+                        self.layout.show_sidebar && self.requests.side == requests::Side::Requests;
+                    let n = self.requests.list.len();
+                    div()
+                        .relative()
+                        .child(
+                            button("rail-requests", "pull-request", on, "Merge requests  ⌥⌘3")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_requests(&ToggleRequests, window, cx)
+                                })),
+                        )
+                        .children((n > 0 && self.requests.available).then(|| {
+                            div()
+                                .absolute()
+                                .top(px(-2.))
+                                .right(px(-2.))
+                                .min_w(px(16.))
+                                .h(px(16.))
+                                .px(px(4.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .bg(theme::accent())
+                                .text_color(theme::editor())
+                                .text_size(px(10.))
+                                .font_weight(FontWeight::BOLD)
+                                .child(n.to_string())
+                        }))
+                }),
+            )
     }
 
     fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2084,7 +2097,15 @@ impl Workspace {
                     .h(px(self.layout.branches))
                     // Gives way when comments and versions need the room, so Commits stays.
                     .flex_shrink(1.)
-                    .min_h(px(140.))
+                    .min_h(px(
+                        if self.requests.connectable
+                            && self.requests.side == requests::Side::Requests
+                        {
+                            300.
+                        } else {
+                            140.
+                        },
+                    ))
                     .border_color(self.zone_border(zones::Zone::Branches))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -2092,7 +2113,12 @@ impl Workspace {
                     )
                     .child(self.render_branches_header())
                     .child(
-                        if self.requests.side == requests::Side::Requests && self.requests.available
+                        if self.requests.side == requests::Side::Requests
+                            && self.requests.connectable
+                        {
+                            self.render_connect(cx).into_any_element()
+                        } else if self.requests.side == requests::Side::Requests
+                            && self.requests.available
                         {
                             self.render_requests(cx).into_any_element()
                         } else {

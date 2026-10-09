@@ -346,11 +346,16 @@ impl Workspace {
         let text = match field {
             Field::Branches => &mut self.bfilter,
             Field::Files => &mut self.pfilter,
+            Field::Token => &mut self.token_input,
         };
         match input::edit(text, &mut self.field_all, &event.keystroke, cx) {
             Edit::Escape => {
                 text.clear();
                 self.field = None;
+            }
+            Edit::Enter { .. } if field == Field::Token => {
+                self.submit_token(cx);
+                return true;
             }
             Edit::Changed | Edit::Selected | Edit::Enter { .. } | Edit::Ignored => {}
         }
@@ -364,6 +369,8 @@ impl Workspace {
 pub enum Field {
     Branches,
     Files,
+    /// The GitLab token being typed or pasted in the connect panel.
+    Token,
 }
 
 // ---- changed files ----------------------------------------------------------------------

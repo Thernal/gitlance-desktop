@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds GitLance (release) and opens it.
-#   ./run.sh              the repository this is run from, else the last opened one
+#   ./run.sh              the tabs of the last session
 #   ./run.sh <path>       the repository at <path>
 #   ./run.sh --debug ...  a debug build, faster to compile
 set -eu
@@ -22,8 +22,10 @@ if ! command -v cargo >/dev/null 2>&1; then
     exit 1
 fi
 
-case "${1:-$caller}" in
-    /*) repo=${1:-$caller} ;;
+repo=
+case "${1:-}" in
+    "") ;;
+    /*) repo=$1 ;;
     *) repo=$caller/$1 ;;
 esac
 
@@ -32,4 +34,7 @@ if [ "$profile" = release ]; then
 else
     cargo build
 fi
-exec "target/$profile/gitlance" "$repo"
+if [ -n "$repo" ]; then
+    exec "target/$profile/gitlance" "$repo"
+fi
+exec "target/$profile/gitlance"
