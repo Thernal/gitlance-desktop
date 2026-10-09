@@ -180,6 +180,19 @@ impl Workspace {
             },
         ));
 
+        let zoom = diff_view::group()
+            .child(
+                chip("zoom-out", "−", false)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.zoom_by(-1, cx))),
+            )
+            .child(
+                chip("zoom-reset", format!("{}%", s.zoom), s.zoom != 100)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.set_zoom(100, cx))),
+            )
+            .child(
+                chip("zoom-in", "+", false)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.zoom_by(1, cx))),
+            );
         let fold = switch("fold-generated", s.fold_generated).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.change_settings(
@@ -254,6 +267,11 @@ impl Workspace {
                                 "Default mode",
                                 "What a diff opens in. Lines, Words and Structural are also in the toolbar and the View menu.",
                                 modes,
+                            ))
+                            .child(item(
+                                "Code size",
+                                "How big the code in a diff is, 60 % to 250 %. ⌘+ and ⌘− change it anywhere, ⌘0 puts it back; the click on the percentage does the same. The rest of the window keeps its size.",
+                                zoom,
                             ))
                             .child(item(
                                 "Fold generated files",

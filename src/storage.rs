@@ -283,6 +283,8 @@ pub struct Settings {
     pub auto_refresh: bool,
     /// Lock files and other generated files start folded in a diff.
     pub fold_generated: bool,
+    /// The size of the code in a diff, in percent of the normal size (⌘+ ⌘− ⌘0).
+    pub zoom: u16,
 }
 
 impl Default for Settings {
@@ -294,11 +296,16 @@ impl Default for Settings {
             default_mode: DiffMode::default(),
             auto_refresh: true,
             fold_generated: true,
+            zoom: 100,
         }
     }
 }
 
 impl Settings {
+    pub const ZOOM_MIN: u16 = 60;
+    pub const ZOOM_MAX: u16 = 250;
+    pub const ZOOM_STEP: u16 = 10;
+
     pub fn load() -> Self {
         Self::parse(&read("settings.txt"))
     }
@@ -319,6 +326,11 @@ impl Settings {
                 }
                 "auto_refresh" => settings.auto_refresh = value != "false",
                 "fold_generated" => settings.fold_generated = value != "false",
+                "zoom" => {
+                    settings.zoom = value.parse().map_or(100, |z: u16| {
+                        z.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX)
+                    })
+                }
                 "editor" => settings.editor = crate::editor::Editor::from_key(value),
                 "appearance" => {
                     settings.appearance = Appearance::from_key(value).unwrap_or_default()
@@ -336,6 +348,7 @@ impl std::fmt::Display for Settings {
         writeln!(f, "default_mode={}", self.default_mode.key())?;
         writeln!(f, "auto_refresh={}", self.auto_refresh)?;
         writeln!(f, "fold_generated={}", self.fold_generated)?;
+        writeln!(f, "zoom={}", self.zoom)?;
         writeln!(f, "appearance={}", self.appearance.key())?;
         if let Some(editor) = self.editor {
             writeln!(f, "editor={}", editor.key())?;
@@ -422,6 +435,7 @@ mod tests {
             default_mode: DiffMode::Structural,
             auto_refresh: false,
             fold_generated: false,
+            zoom: 130,
         };
         assert_eq!(Settings::parse(&settings.to_string()), settings);
     }

@@ -57,6 +57,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌥⌘B", "annotate: who wrote each line"),
             ("⌥⌘1 ⌥⌘2 ⌥⌘3", "branches, files, merge requests"),
             ("⌘.", "the diff alone"),
+            ("⌘+  ⌘−  ⌘0", "code bigger, smaller, actual size"),
             ("⌘T ⌘W ⌘1…9", "tabs"),
             ("⌥⌘M", "new merge request"),
             ("?", "this card"),

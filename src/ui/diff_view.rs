@@ -34,6 +34,8 @@ pub struct RowStyle<'a> {
     pub sel: Option<Sel>,
     /// The lines of this file that have comments.
     pub notes: &'a [LineNote],
+    /// The height of a line of code, in pixels (the zoom applied).
+    pub row: f32,
     /// The annotation column is on; its cells (empty until blame is read).
     pub annot: Option<&'a [AnnCell]>,
     /// The file is added or deleted as a whole: its lines keep the gutter bar but no fill.
@@ -126,7 +128,7 @@ pub fn row(
     match row {
         Row::Gap { segment, count } => div()
             .id(("gap", segment))
-            .h(px(DIFF_ROW))
+            .h(px(style.row))
             .my(px(2.))
             .flex()
             .items_center()
@@ -146,7 +148,7 @@ pub fn row(
             .into_any_element(),
         Row::Split { left, right } => div()
             .w_full()
-            .min_h(px(DIFF_ROW))
+            .min_h(px(style.row))
             .flex()
             .group("diff-row")
             .child(half(&data.old, left, true, style, events.clone()))
@@ -172,7 +174,7 @@ pub fn row(
             };
             div()
                 .w_full()
-                .min_h(px(DIFF_ROW))
+                .min_h(px(style.row))
                 .flex()
                 .when_some(line_bg, |s, bg| s.bg(bg))
                 .group("diff-row")

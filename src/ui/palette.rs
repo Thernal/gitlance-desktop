@@ -53,6 +53,9 @@ pub enum Cmd {
     Recent,
     Structure,
     Bookmarks,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
 }
 
 const COMMANDS: &[(&str, &str, Cmd)] = &[
@@ -70,6 +73,9 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
         Cmd::Structure,
     ),
     ("Bookmarks", "⌘F3", Cmd::Bookmarks),
+    ("Zoom in — bigger code", "⌘+", Cmd::ZoomIn),
+    ("Zoom out — smaller code", "⌘−", Cmd::ZoomOut),
+    ("Actual size", "⌘0", Cmd::ZoomReset),
     (
         "Changes in this file — functions and types",
         "⌘⇧O",
@@ -686,5 +692,8 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::Recent => Box::new(OpenRecent),
         Cmd::Structure => Box::new(ShowStructure),
         Cmd::Bookmarks => Box::new(ShowBookmarks),
+        Cmd::ZoomIn => Box::new(ZoomIn),
+        Cmd::ZoomOut => Box::new(ZoomOut),
+        Cmd::ZoomReset => Box::new(ZoomReset),
     }
 }

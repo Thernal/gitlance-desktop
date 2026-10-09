@@ -91,6 +91,9 @@ actions!(
         ToggleComments,
         MarkReviewed,
         OpenRecent,
+        ZoomIn,
+        ZoomOut,
+        ZoomReset,
         ToggleBookmark,
         ShowBookmarks,
         ShowStructure,
@@ -177,6 +180,12 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("cmd-shift-r", ToggleComments, Some("Workspace && !Typing")),
                 KeyBinding::new("v", MarkReviewed, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-e", OpenRecent, Some("Workspace")),
+                KeyBinding::new("cmd-=", ZoomIn, Some("Workspace")),
+                KeyBinding::new("cmd-+", ZoomIn, Some("Workspace")),
+                KeyBinding::new("cmd-shift-=", ZoomIn, Some("Workspace")),
+                KeyBinding::new("cmd--", ZoomOut, Some("Workspace")),
+                KeyBinding::new("cmd-_", ZoomOut, Some("Workspace")),
+                KeyBinding::new("cmd-0", ZoomReset, Some("Workspace")),
                 KeyBinding::new("f3", ToggleBookmark, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-f3", ShowBookmarks, Some("Workspace")),
                 KeyBinding::new("cmd-shift-o", ShowStructure, Some("Workspace")),
@@ -329,6 +338,10 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
             MenuItem::action("Show Branches and Commits", ToggleSidebar),
             MenuItem::action("Show Files", ToggleFiles),
             MenuItem::action("Focus on the Diff", FocusDiff),
+            MenuItem::separator(),
+            MenuItem::action("Zoom In", ZoomIn),
+            MenuItem::action("Zoom Out", ZoomOut),
+            MenuItem::action("Actual Size", ZoomReset),
             MenuItem::separator(),
             MenuItem::action("Unified Diff", ToggleUnified).checked(options.unified),
             MenuItem::action("Line Diff", SetLines).checked(options.mode == DiffMode::Lines),
@@ -1598,6 +1611,35 @@ impl Workspace {
         }
     }
 
+    /// The code's font size and line height with the zoom applied.
+    fn code_size(&self) -> f32 {
+        (CODE_SIZE * f32::from(self.settings.zoom) / 100.).round()
+    }
+
+    fn row_height(&self) -> f32 {
+        (DIFF_ROW * f32::from(self.settings.zoom) / 100.).round()
+    }
+
+    /// ⌘+ and ⌘−: one step bigger or smaller.
+    pub(super) fn zoom_by(&mut self, steps: i32, cx: &mut Context<Self>) {
+        let step = i32::from(Settings::ZOOM_STEP);
+        let next = i32::from(self.settings.zoom) + steps * step;
+        self.set_zoom(next.max(0) as u16, cx);
+    }
+
+    pub(super) fn set_zoom(&mut self, percent: u16, cx: &mut Context<Self>) {
+        let zoom = percent.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX);
+        if zoom == self.settings.zoom {
+            return;
+        }
+        self.settings.zoom = zoom;
+        self.settings.save();
+        // The width of a character is measured again at the new size; the rows change height.
+        self.char_width = 0.;
+        self.relayout();
+        cx.notify();
+    }
+
     /// The options the rows are laid out with: a diff under 700 px wide is unified.
     fn view_options(&self) -> ViewOptions {
         let mut options = self.options;
@@ -1656,6 +1698,7 @@ impl Workspace {
             sel: self.sel,
             notes: &self.notes,
             annot: self.annotate.then_some(&self.annotations[..]),
+            row: self.row_height(),
             // Room for the comment mark (16 px) left of the number.
             gutter: digits.max(3) as f32 * self.char_width + 30.,
             whole: self
@@ -1686,7 +1729,7 @@ impl Workspace {
         if self.options.wrap {
             return;
         }
-        let delta = f32::from(event.delta.pixel_delta(px(DIFF_ROW)).x);
+        let delta = f32::from(event.delta.pixel_delta(px(self.row_height())).x);
         if delta == 0. {
             return;
         }
@@ -3632,8 +3675,8 @@ impl Workspace {
             .flex_col()
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.scroll_horizontally(event, cx)))
             .font_family(theme::CODE_FONT)
-            .text_size(px(CODE_SIZE))
-            .line_height(px(DIFF_ROW))
+            .text_size(px(self.code_size()))
+            .line_height(px(self.row_height()))
             .child(rows)
             .child(
                 canvas(
@@ -3675,7 +3718,7 @@ impl Render for Workspace {
             let text = window.text_system();
             let id = text.resolve_font(&font(theme::CODE_FONT));
             self.char_width = text
-                .advance(id, px(CODE_SIZE), 'm')
+                .advance(id, px(self.code_size()), 'm')
                 .map_or(7.2, |size| f32::from(size.width));
         }
 
@@ -3746,6 +3789,9 @@ impl Render for Workspace {
                     this.open_palette(palette::Kind::Bookmarks, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| this.zoom_by(1, cx)))
+            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| this.zoom_by(-1, cx)))
+            .on_action(cx.listener(|this, _: &ZoomReset, _, cx| this.set_zoom(100, cx)))
             .on_action(cx.listener(|this, _: &ShowStructure, _, cx| {
                 if this.palette.is_some() {
                     this.close_palette(cx);
