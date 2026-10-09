@@ -2,6 +2,7 @@
 
 mod comments;
 mod diff_view;
+mod fetch;
 mod find;
 mod format;
 mod icons;
@@ -578,6 +579,7 @@ pub struct Workspace {
     version_tab: VersionTab,
     palette: Option<palette::Palette>,
     wt: WorkingState,
+    fetch: fetch::Fetch,
     diff: Option<Diff>,
     file: usize,
     options: ViewOptions,
@@ -675,6 +677,7 @@ impl Workspace {
             version_tab: VersionTab::Files,
             palette: None,
             wt: WorkingState::default(),
+            fetch: fetch::Fetch::default(),
             diff: None,
             file: 0,
             options: ViewOptions::load(&settings),
@@ -727,6 +730,12 @@ impl Workspace {
             this.open_repo(path, None, cx);
         }
         Self::start_watching(cx);
+        cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.window_activated(cx);
+            }
+        })
+        .detach();
         this
     }
 
@@ -774,6 +783,7 @@ impl Workspace {
                         }
                         this.watch.watch(git_dir, fingerprint);
                         this.start_working_poll(cx);
+                        this.start_fetching(cx);
                         this.root = Some(root);
                         this.branches = branches;
                         let (refname, commit) = keep.unzip();
@@ -1693,6 +1703,7 @@ impl Workspace {
                             .child(b)
                     })),
             )
+            .children(self.render_fetch(cx))
             .children(self.render_status(cx))
             .child(
                 icon_button("settings-open", "settings", "Settings  ⌘,")

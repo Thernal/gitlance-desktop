@@ -46,6 +46,25 @@ pub fn remember(path: &Path) -> Vec<PathBuf> {
     list
 }
 
+/// Whether background fetch is on for this repository (opt-in, per repository).
+pub fn fetch_enabled(root: &Path) -> bool {
+    let want = root.display().to_string();
+    read("fetch.txt").lines().any(|l| l == want)
+}
+
+pub fn set_fetch_enabled(root: &Path, on: bool) {
+    let want = root.display().to_string();
+    let mut lines: Vec<String> = read("fetch.txt")
+        .lines()
+        .filter(|l| !l.is_empty() && *l != want)
+        .map(str::to_owned)
+        .collect();
+    if on {
+        lines.push(want);
+    }
+    save("fetch.txt", lines.join("\n") + "\n");
+}
+
 /// Pane sizes in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layout {

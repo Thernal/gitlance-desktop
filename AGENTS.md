@@ -9,7 +9,7 @@ Feature specs, UI mockups and design decisions: the sibling repo `../Design` —
 - **UI first.** GitLance is the app; the binary takes at most an optional repository path. A real CLI is
   outside the MVP — ask first.
 - **Read-only towards the reviewed repository.** GitLance reads git state and never changes the index, the
-  working tree, refs or reflogs; it writes nothing there. Review comments are kept in its application support directory and copied to the clipboard; a `.misc/review.md` file or an MCP server for agents is a later, separate decision. A feature that would
+  working tree, refs or reflogs; it writes nothing there. Review comments are kept in its application support directory and copied to the clipboard; a `.misc/review.md` file or an MCP server for agents is a later, separate decision. The one named exception is the opt-in background fetch (`ui/fetch.rs`, the `git` CLI): it writes remote-tracking refs and objects, nothing else. A feature that would
   stage or commit is outside scope — ask first.
 - **No worktrees, no checkouts.** Branch and range diffs are read from objects, not from a second working tree.
 - **GPUI is pre-1.0.** Pin it to an exact version (or Zed commit) in `Cargo.toml`; an upgrade is its own
@@ -22,6 +22,6 @@ Feature specs, UI mockups and design decisions: the sibling repo `../Design` —
 - Layout: `src/git/` (read-only git layer, tested on temp repos), `src/highlight.rs` (syntect, One Dark), `src/structural.rs` (difftastic), `src/worddiff.rs` (changed words), `src/search.rs` (commit search),
   `src/ui/` (GPUI views), `src/storage.rs` (recent repos, pane sizes, view options, Settings).
   Icons are Lucide, embedded in `src/ui/icons.rs` (one set, drawn in the text colour; set `.text_color` on the svg itself).
-  `src/ui/` splits into `find.rs` (search field), `watch.rs` (auto-refresh: polls `.git`, read-only), `settings.rs`, `palette.rs` (⌘K palette and the compare picker), `working.rs` (working tree against HEAD, polled every 2 s; VIEW token `worktree`). `./run.sh` builds and opens it.
+  `src/ui/` splits into `find.rs` (search field), `watch.rs` (auto-refresh: polls `.git`, read-only), `settings.rs`, `palette.rs` (⌘K palette and the compare picker), `fetch.rs` (opt-in background fetch), `working.rs` (working tree against HEAD, polled every 2 s; VIEW token `worktree`). `./run.sh` builds and opens it.
 - Commits: Conventional Commits — `<type>(<scope>): <subject>`, imperative, lowercase, no trailing period.
 - Agent scratch files go in `.misc/` (ignored).

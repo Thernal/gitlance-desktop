@@ -64,6 +64,13 @@ impl Workspace {
             },
         ));
 
+        let fetch = switch("fetch", self.fetch.enabled).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                let on = !this.fetch.enabled;
+                this.set_fetch_enabled(on, cx)
+            },
+        ));
+
         div()
             .flex_1()
             .min_w_0()
@@ -145,15 +152,8 @@ impl Workspace {
                             ))
                             .child(item(
                                 "Fetch in the background",
-                                "Brings other people’s force pushes in as versions. It writes remote-tracking refs, so it will be opt-in. Not built yet.",
-                                div()
-                                    .px(px(6.))
-                                    .rounded_full()
-                                    .border_1()
-                                    .border_color(theme::faint())
-                                    .text_size(px(10.))
-                                    .text_color(theme::faint())
-                                    .child("later"),
+                                "Runs git fetch --all --prune for this repository every 5 minutes and when the window comes back to the front, so other people’s force pushes show up as versions. It writes remote-tracking refs and objects — the one exception to the read-only rule — and uses your own git, SSH agent and VPN. Off until you turn it on, per repository.",
+                                fetch,
                             )),
                     ),
             )
