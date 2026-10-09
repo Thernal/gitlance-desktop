@@ -14,6 +14,10 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("j k", "next / previous commit"),
             ("h l  ← →", "previous / next file"),
             ("n p", "next / previous change"),
+            (
+                "v  ⇧v",
+                "mark the file reviewed and go on · toggle the mark",
+            ),
             ("⇧n ⇧p", "next / previous discussion"),
             ("Space ⇧Space", "page down / up"),
             ("⌘[ ⌘]", "back / forward"),

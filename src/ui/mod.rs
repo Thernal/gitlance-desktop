@@ -12,6 +12,7 @@ mod lists;
 mod menu;
 mod palette;
 mod requests;
+mod reviewed;
 mod rows;
 mod select;
 mod settings;
@@ -84,6 +85,8 @@ actions!(
         ShowShortcuts,
         ToggleThread,
         ToggleComments,
+        MarkReviewed,
+        ToggleReviewed,
         NextThread,
         PreviousThread,
         ReplyThread,
@@ -162,6 +165,8 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("x", ResolveThread, Some("Workspace && !Typing")),
                 KeyBinding::new("o", ToggleThread, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-shift-r", ToggleComments, Some("Workspace && !Typing")),
+                KeyBinding::new("v", MarkReviewed, Some("Workspace && !Typing")),
+                KeyBinding::new("shift-v", ToggleReviewed, Some("Workspace && !Typing")),
                 KeyBinding::new("tab", NextZone, Some("Workspace && !Typing")),
                 KeyBinding::new("shift-tab", PreviousZone, Some("Workspace && !Typing")),
                 KeyBinding::new("enter", Activate, Some("Workspace && !Typing")),
@@ -722,6 +727,10 @@ pub struct Workspace {
     newreq: Option<create::NewRequest>,
     /// The keyboard card is open.
     shortcuts: bool,
+    /// The marks of files read, and the scope and file fingerprints of the open diff.
+    reviewed: reviewed::Store,
+    review_scope: Option<String>,
+    fps: Vec<u64>,
     /// Generated files the reader asked to see in full.
     unfolded: HashSet<String>,
     /// The branch / merge request picker hangs from the title bar.
@@ -862,6 +871,9 @@ impl Workspace {
             gitlab_check: None,
             newreq: None,
             shortcuts: false,
+            reviewed: reviewed::Store::load(),
+            review_scope: None,
+            fps: Vec::new(),
             unfolded: HashSet::new(),
             picker_open: false,
             win_width: 1480.,
@@ -1209,6 +1221,7 @@ impl Workspace {
                             keep.and_then(|path| diff.files.iter().position(|f| f.path() == path));
                         let empty = diff.files.is_empty();
                         this.diff = Some(diff);
+                        this.index_review();
                         // The first file as the island lists it (a tree sorts folders first), so
                         // → walks on from the top.
                         let ix = ix
@@ -3324,6 +3337,7 @@ impl Workspace {
                     }))
                     .child(change_badge(f.change))
                     .child(div().flex_1().min_w_0().truncate().child(path))
+                    .children(self.render_review_chip(cx))
                     .children(
                         (!f.hunks.is_empty())
                             .then_some(f.note.clone())
@@ -3663,6 +3677,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ReplyThread, _, cx| this.reply_focused(cx)))
             .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))
             .on_action(cx.listener(|this, _: &ToggleThread, _, cx| this.toggle_focused(cx)))
+            .on_action(cx.listener(|this, _: &MarkReviewed, _, cx| this.mark_and_advance(cx)))
+            .on_action(cx.listener(|this, _: &ToggleReviewed, _, cx| this.toggle_reviewed(cx)))
             .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
                 this.set_comments_open(!this.layout.comments_open, cx)
             }))
@@ -3826,6 +3842,8 @@ pub(super) fn render_file_row(
     tag: Option<&&'static str>,
     ix: usize,
     selected: bool,
+    review: Option<gpui::AnyElement>,
+    done: bool,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement + use<> {
     let path = file.path();
@@ -3836,6 +3854,8 @@ pub(super) fn render_file_row(
     let item = row(("file", ix), selected)
         .h(px(40.))
         .gap_2()
+        .when(done, |s| s.text_color(theme::muted()))
+        .children(review)
         .child(change_badge(file.change))
         .child(
             div()

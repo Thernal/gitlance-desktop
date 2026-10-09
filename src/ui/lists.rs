@@ -599,6 +599,7 @@ impl Workspace {
                             ))),
                     ),
             )
+            .children(self.render_review_progress())
             .child(self.render_field(
                 "file-filter",
                 (self.field == Some(Field::Files)).then_some(self.pfilter.as_str()),
@@ -646,6 +647,11 @@ impl Workspace {
                             .h(px(26.))
                             .gap_2()
                             .pl(px(8. + *depth as f32 * 14.))
+                            .when(
+                                self.review_state(ix) == Some(super::reviewed::State::Done),
+                                |s| s.text_color(theme::muted()),
+                            )
+                            .children(self.review_box(ix, cx))
                             .child(change_badge(file.change))
                             .child(div().flex_1().min_w_0().truncate().child(name))
                             .children(super::generated_tag(file))
@@ -666,6 +672,8 @@ impl Workspace {
                 diff.tags.get(diff.files[*ix].path()),
                 *ix,
                 self.file == *ix,
+                self.review_box(*ix, cx).map(IntoElement::into_any_element),
+                self.review_state(*ix) == Some(super::reviewed::State::Done),
                 cx,
             )
             .into_any_element(),
