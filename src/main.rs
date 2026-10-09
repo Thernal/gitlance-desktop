@@ -10,6 +10,7 @@ mod review;
 mod search;
 mod storage;
 mod structural;
+mod symbols;
 mod ui;
 mod worddiff;
 

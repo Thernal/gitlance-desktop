@@ -45,6 +45,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌘P", "filter files"),
             ("⌘⇧C", "compare two refs"),
             ("⌘E", "recent places"),
+            ("⌘⇧O", "functions and types this file changes"),
         ],
     ),
     (

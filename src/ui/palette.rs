@@ -14,6 +14,8 @@ pub enum Kind {
     Jump,
     /// The places opened lately, newest first (⌘E).
     Recent,
+    /// The functions and types the open file changes (⌘⇧O).
+    Structure,
     /// Picking the first side of a comparison.
     Base,
     /// Picking the second side, the first being `.0`.
@@ -47,6 +49,7 @@ pub enum Cmd {
     FindInFiles,
     Annotate,
     Recent,
+    Structure,
 }
 
 const COMMANDS: &[(&str, &str, Cmd)] = &[
@@ -58,6 +61,11 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Search in all files of the diff", "⌘⌥F", Cmd::FindInFiles),
     ("Annotate — who wrote each line", "⌥⌘B", Cmd::Annotate),
     ("Recent places", "⌘E", Cmd::Recent),
+    (
+        "Changes in this file — functions and types",
+        "⌘⇧O",
+        Cmd::Structure,
+    ),
     ("Search commits", "⌘⇧F", Cmd::FindCommits),
     ("Filter files by path", "⌘P", Cmd::FilterFiles),
     ("Refresh", "⌘R", Cmd::Refresh),
@@ -79,6 +87,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
 
 #[derive(Clone)]
 enum Pick {
+    Symbol { old: bool, line: u32 },
     Recent(super::recents::Key),
     Commit(Oid),
     File(usize),
@@ -114,7 +123,7 @@ fn matches(words: &[String], hay: &str) -> bool {
 impl Workspace {
     pub(super) fn open_palette(&mut self, kind: Kind, cx: &mut Context<Self>) {
         let refs = match (&kind, &self.root) {
-            (Kind::Jump | Kind::Recent, _) | (_, None) => Vec::new(),
+            (Kind::Jump | Kind::Recent | Kind::Structure, _) | (_, None) => Vec::new(),
             (_, Some(root)) => Repo::open(root)
                 .and_then(|r| r.compare_refs())
                 .unwrap_or_default(),
@@ -155,6 +164,33 @@ impl Workspace {
 
     fn palette_items(&self, p: &Palette) -> Vec<Item> {
         let query = p.query.trim_start();
+        if matches!(p.kind, Kind::Structure) {
+            let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+            let Some(file) = self.diff.as_ref().and_then(|d| d.files.get(self.file)) else {
+                return Vec::new();
+            };
+            let name = file
+                .path()
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            let group: &'static str = Box::leak(format!("Changes in {name}").into_boxed_str());
+            return crate::symbols::changed(file)
+                .into_iter()
+                .filter(|s| matches(&words, &s.name))
+                .map(|s| Item {
+                    group,
+                    label: format!("{}  {} {}", s.mark, s.kind, s.name),
+                    detail: format!("{}line {}", if s.old { "old " } else { "" }, s.line),
+                    key: "",
+                    pick: Pick::Symbol {
+                        old: s.old,
+                        line: s.line,
+                    },
+                })
+                .collect();
+        }
         if matches!(p.kind, Kind::Recent) {
             let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
             return self
@@ -387,6 +423,12 @@ impl Workspace {
                 self.palette = None;
                 self.open_recent(key, cx);
             }
+            Pick::Symbol { old, line } => {
+                self.palette = None;
+                if let Some(path) = self.current_path() {
+                    self.jump_to_line(&path, line, old, cx);
+                }
+            }
             Pick::Commit(id) => {
                 self.palette = None;
                 if let Some(ix) = self.commits.iter().position(|c| c.id == id) {
@@ -452,11 +494,12 @@ impl Workspace {
         let placeholder = match &p.kind {
             Kind::Jump => "Search commits, files, branches, commands   > # @",
             Kind::Recent => "Recent places — files, commits, merge requests",
+            Kind::Structure => "Functions and types this file changes",
             Kind::Base => "Compare — pick the base: a branch, a tag or a commit",
             Kind::Head(_) => "Compare — pick what to compare with it",
         };
         let title = match &p.kind {
-            Kind::Jump | Kind::Recent => None,
+            Kind::Jump | Kind::Recent | Kind::Structure => None,
             Kind::Base => Some("Compare · step 1 of 2".to_owned()),
             Kind::Head((name, _)) => Some(format!("Compare · {name} … ?")),
         };
@@ -517,6 +560,7 @@ impl Workspace {
                 .text_color(theme::muted())
                 .child(match &p.kind {
                     Kind::Recent => "Nothing opened yet.",
+                    Kind::Structure => "No function or type of this file is changed (or the language is not known).",
                     Kind::Jump if p.query.is_empty() => "Type to search.",
                     Kind::Jump => "Nothing matches.",
                     _ => "No branch, tag or commit by that name.",
@@ -600,5 +644,6 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::FindInFiles => Box::new(FindInFiles),
         Cmd::Annotate => Box::new(ToggleAnnotate),
         Cmd::Recent => Box::new(OpenRecent),
+        Cmd::Structure => Box::new(ShowStructure),
     }
 }
