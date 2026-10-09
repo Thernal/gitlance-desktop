@@ -5,7 +5,7 @@
 use super::rows::Row;
 use super::{Header, Selection, Workspace, format, island, island_label, plural, row, theme};
 use crate::git::{RefKind, Repo, Version};
-use crate::mr::{self, Draft, Mr, Thread};
+use crate::mr::{self, Draft, Mr, Pipeline, Thread};
 use gpui::{ClickEvent, Context, FontWeight, Task, WeakEntity, div, prelude::*, px};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -29,6 +29,8 @@ pub struct Requests {
     pub threads: Vec<Thread>,
     /// One's own pending comments on the current request.
     pub drafts: Vec<Draft>,
+    /// The request's newest pipeline.
+    pub pipeline: Option<Pipeline>,
     /// The pushes GitLab kept for a request, as versions of this repository.
     pub versions: Option<(u64, Vec<Version>)>,
     version_task: Option<Task<()>>,
@@ -110,6 +112,7 @@ impl Workspace {
         if iid != self.requests.current {
             self.requests.threads.clear();
             self.requests.drafts.clear();
+            self.requests.pipeline = None;
         }
         self.requests.current = iid;
         let (Some(iid), Some(remote)) = (iid, self.web.clone()) else {
@@ -121,15 +124,17 @@ impl Workspace {
                 .spawn(async move {
                     // Drafts need a recent GitLab; without them the rest still works.
                     let drafts = mr::drafts(&remote, iid).unwrap_or_default();
-                    mr::threads(&remote, iid).map(|t| (t, drafts))
+                    let pipeline = mr::pipeline(&remote, iid).ok().flatten();
+                    mr::threads(&remote, iid).map(|t| (t, drafts, pipeline))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if this.requests.current == Some(iid) {
                     match result {
-                        Ok((threads, drafts)) => {
+                        Ok((threads, drafts, pipeline)) => {
                             this.requests.threads = threads;
                             this.requests.drafts = drafts;
+                            this.requests.pipeline = pipeline;
                         }
                         Err(e) => this.requests.error = Some(format!("{e:#}")),
                     }
@@ -1184,36 +1189,91 @@ impl Workspace {
     }
 
     /// "!412 · Payment retry backoff" next to the branch in the title bar.
-    pub(super) fn render_request_title(&self) -> Option<impl IntoElement + use<>> {
+    pub(super) fn render_request_title(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
         let m = self
             .requests
             .current
             .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))?;
+        let pill = self.requests.pipeline.clone().map(|p| {
+            let (glyph, word, color) = match p.status.as_str() {
+                "success" => ("✓", "passed".to_owned(), theme::added()),
+                "failed" => (
+                    "✗",
+                    p.failed
+                        .as_ref()
+                        .map_or("failed".to_owned(), |(job, _)| format!("{job} failed")),
+                    theme::removed(),
+                ),
+                "running" => ("●", "running".to_owned(), theme::warning()),
+                "pending" | "created" | "waiting_for_resource" | "preparing" => {
+                    ("○", "pending".to_owned(), theme::muted())
+                }
+                "canceled" => ("⊘", "canceled".to_owned(), theme::muted()),
+                other => ("·", other.replace('_', " "), theme::muted()),
+            };
+            // A failure opens the job that failed; the rest open the pipeline.
+            let url = p
+                .failed
+                .as_ref()
+                .map(|(_, u)| u.clone())
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| p.url.clone());
+            let ago = (p.updated > 0).then(|| format::ago(p.updated));
+            div()
+                .id("pipeline-pill")
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .px(px(8.))
+                .h(px(22.))
+                .rounded_full()
+                .border_1()
+                .border_color(color)
+                .text_size(px(12.))
+                .text_color(color)
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::hover()))
+                .tooltip(|_, cx| cx.new(|_| super::Tip("Open the pipeline on GitLab")).into())
+                .child(format!("{glyph} {word}"))
+                .children(ago.map(|a| div().text_color(theme::faint()).child(a)))
+                .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url)))
+        });
         Some(
             div()
                 .flex()
                 .items_center()
-                .gap_2()
+                .gap_3()
                 .min_w_0()
-                .max_w(px(480.))
                 .child(
                     div()
-                        .flex_none()
-                        .text_color(theme::accent())
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(format!("!{}", m.iid)),
-                )
-                .child(
-                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
                         .min_w_0()
-                        .truncate()
-                        .text_color(theme::muted())
-                        .child(m.title.clone()),
-                ),
+                        .max_w(px(480.))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_color(theme::accent())
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format!("!{}", m.iid)),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(theme::muted())
+                                .child(m.title.clone()),
+                        ),
+                )
+                .children(pill),
         )
     }
 
-    /// The discussions on the open branch's merge request, for the review panel.
     /// Shows `line` of `path`: that file first when it is another one.
     pub(super) fn jump_to_line(
         &mut self,

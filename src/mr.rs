@@ -44,6 +44,18 @@ pub struct Thread {
     pub resolvable: bool,
 }
 
+/// The latest pipeline of a merge request, and when it failed, the job that did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pipeline {
+    /// GitLab's word: success, failed, running, pending, canceled, skipped, manual …
+    pub status: String,
+    pub url: String,
+    /// Seconds since the epoch, when it last changed.
+    pub updated: i64,
+    /// The first failed job: its name and its page.
+    pub failed: Option<(String, String)>,
+}
+
 /// A comment of one's own that is not published yet: only its author sees it until the review is
 /// submitted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,6 +210,59 @@ pub fn threads(remote: &WebRemote, iid: u64) -> Result<Vec<Thread>> {
         )?,
     };
     Ok(parse_threads(&value))
+}
+
+/// The merge request's newest pipeline; `None` when it has none.
+pub fn pipeline(remote: &WebRemote, iid: u64) -> Result<Option<Pipeline>> {
+    let value = match fixture() {
+        Some(dir) => match std::fs::read_to_string(dir.join(format!("pipeline-{iid}.json"))) {
+            Ok(text) => serde_json::from_str(&text)?,
+            Err(_) => return Ok(None),
+        },
+        None => get(
+            remote,
+            &format!("merge_requests/{iid}/pipelines?per_page=1"),
+        )?,
+    };
+    let Some(mut pipeline) = parse_pipeline(&value) else {
+        return Ok(None);
+    };
+    if pipeline.status == "failed" && pipeline.failed.is_none() && fixture().is_none() {
+        let id = value
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|p| p.get("id"))
+            .and_then(Value::as_u64);
+        if let Some(id) = id
+            && let Ok(jobs) = get(remote, &format!("pipelines/{id}/jobs?scope[]=failed"))
+        {
+            pipeline.failed = parse_failed_job(&jobs);
+        }
+    }
+    Ok(Some(pipeline))
+}
+
+/// The pipeline in an API answer (the newest of a list, or one object).
+pub fn parse_pipeline(value: &Value) -> Option<Pipeline> {
+    let p = match value {
+        Value::Array(list) => list.first()?,
+        other => other,
+    };
+    let status = text(p, "status");
+    (!status.is_empty()).then(|| Pipeline {
+        status,
+        url: text(p, "web_url"),
+        updated: epoch(&text(p, "updated_at")),
+        failed: p.get("failed_job").and_then(|j| {
+            let name = text(j, "name");
+            (!name.is_empty()).then(|| (name, text(j, "web_url")))
+        }),
+    })
+}
+
+fn parse_failed_job(jobs: &Value) -> Option<(String, String)> {
+    let job = jobs.as_array()?.first()?;
+    Some((text(job, "name"), text(job, "web_url")))
 }
 
 /// The versions (pushes) of a merge request, oldest first.
@@ -705,6 +770,22 @@ pub fn epoch(stamp: &str) -> i64 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_pipeline_is_read_from_a_list_or_an_object() {
+        let list = json!([{"id": 9, "status": "failed", "web_url": "https://g/p/9", "updated_at": "2026-10-08T00:00:00Z"}, {"id": 8, "status": "success"}]);
+        let p = parse_pipeline(&list).expect("a pipeline");
+        assert_eq!(
+            (p.status.as_str(), p.url.as_str()),
+            ("failed", "https://g/p/9")
+        );
+        let one = json!({"status": "failed", "web_url": "u", "failed_job": {"name": "test:unit", "web_url": "j"}});
+        assert_eq!(
+            parse_pipeline(&one).and_then(|p| p.failed),
+            Some(("test:unit".to_owned(), "j".to_owned()))
+        );
+        assert!(parse_pipeline(&json!([])).is_none());
+    }
 
     #[test]
     fn drafts_are_read_with_their_lines() {

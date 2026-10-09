@@ -2149,7 +2149,7 @@ impl Workspace {
                                 }
                             }))
                     }))
-                    .children(self.render_request_title()),
+                    .children(self.render_request_title(cx)),
             )
             .children(self.render_fetch(cx))
             .children(self.render_status(cx))
