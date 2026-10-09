@@ -1,5 +1,6 @@
 //! The GitLance window: branches, versions and commits on the left, the diff on the right.
 
+mod annotate;
 mod comments;
 mod create;
 mod diff_view;
@@ -87,6 +88,7 @@ actions!(
         ToggleThread,
         ToggleComments,
         MarkReviewed,
+        ToggleAnnotate,
         FindInFiles,
         ToggleReviewed,
         NextThread,
@@ -168,6 +170,7 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("o", ToggleThread, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-shift-r", ToggleComments, Some("Workspace && !Typing")),
                 KeyBinding::new("v", MarkReviewed, Some("Workspace && !Typing")),
+                KeyBinding::new("cmd-alt-b", ToggleAnnotate, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-alt-f", FindInFiles, Some("Workspace")),
                 KeyBinding::new("shift-v", ToggleReviewed, Some("Workspace && !Typing")),
                 KeyBinding::new("tab", NextZone, Some("Workspace && !Typing")),
@@ -730,6 +733,10 @@ pub struct Workspace {
     newreq: Option<create::NewRequest>,
     /// The keyboard card is open.
     shortcuts: bool,
+    /// The annotation column (who wrote each line) is on, and what blame said of the open file.
+    annotate: bool,
+    annotations: Vec<diff_view::AnnCell>,
+    annot_task: Option<Task<()>>,
     /// The search over all files of the diff, while it is open.
     ffind: Option<findfiles::FindFiles>,
     /// The marks of files read, and the scope and file fingerprints of the open diff.
@@ -876,6 +883,9 @@ impl Workspace {
             gitlab_check: None,
             newreq: None,
             shortcuts: false,
+            annotate: false,
+            annotations: Vec::new(),
+            annot_task: None,
             ffind: None,
             reviewed: reviewed::Store::load(),
             review_scope: None,
@@ -1041,6 +1051,7 @@ impl Workspace {
     }
 
     fn clear_file(&mut self) {
+        self.annotations.clear();
         self.data = None;
         self.view_task = None;
         self.rows.clear();
@@ -1267,6 +1278,7 @@ impl Workspace {
                 .await;
             this.update(cx, |this, cx| {
                 this.data = Some(Arc::new(data));
+                this.refresh_annotations(cx);
                 this.relayout();
                 this.apply_jump(cx);
                 if let Some((path, offset)) = this.restore_scroll.take()
@@ -1380,6 +1392,9 @@ impl Workspace {
                 })
                 .collect(),
             vec![
+                Entry::new("Annotate — who wrote each line", Act::Annotate)
+                    .key("⌥⌘B")
+                    .checked(self.annotate),
                 Entry::new("Wrap long lines", Act::Toggle(Opt::Wrap))
                     .key("⌥Z")
                     .checked(o.wrap),
@@ -1615,6 +1630,7 @@ impl Workspace {
             strong: false,
             sel: self.sel,
             notes: &self.notes,
+            annot: self.annotate.then_some(&self.annotations[..]),
             // Room for the comment mark (16 px) left of the number.
             gutter: digits.max(3) as f32 * self.char_width + 30.,
             whole: self
@@ -3509,7 +3525,13 @@ impl Workspace {
                 this.clone(),
             );
             let toggle = this.clone();
+            let annotate = this.clone();
             let events = diff_view::Events {
+                annotate: Box::new(move |_, line, cx| {
+                    annotate
+                        .update(cx, |this, cx| this.open_annotated_commit(line, cx))
+                        .ok();
+                }),
                 toggle: Box::new(move |old, line, cx| {
                     toggle
                         .update(cx, |this, cx| this.toggle_notes_at(old, line, cx))
@@ -3691,6 +3713,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))
             .on_action(cx.listener(|this, _: &ToggleThread, _, cx| this.toggle_focused(cx)))
             .on_action(cx.listener(|this, _: &MarkReviewed, _, cx| this.mark_and_advance(cx)))
+            .on_action(cx.listener(|this, _: &ToggleAnnotate, _, cx| this.toggle_annotate(cx)))
             .on_action(cx.listener(|this, _: &FindInFiles, _, cx| this.open_find_files(cx)))
             .on_action(cx.listener(|this, _: &ToggleReviewed, _, cx| this.toggle_reviewed(cx)))
             .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
@@ -4095,6 +4118,25 @@ fn nav_button(
 
 /// A tooltip: a small panel with a line of text.
 struct Tip(&'static str);
+
+/// A tooltip whose text is made when it is shown (blame's: the commit's title, hash and age).
+struct TipOwned(SharedString);
+
+impl Render for TipOwned {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .mt(px(6.))
+            .px_2()
+            .py_1()
+            .rounded(px(ROW_RADIUS))
+            .border_1()
+            .border_color(theme::island_border())
+            .bg(theme::hover())
+            .text_size(px(11.))
+            .text_color(theme::text())
+            .child(self.0.clone())
+    }
+}
 
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {

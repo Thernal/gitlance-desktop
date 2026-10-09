@@ -34,6 +34,8 @@ pub struct RowStyle<'a> {
     pub sel: Option<Sel>,
     /// The lines of this file that have comments.
     pub notes: &'a [LineNote],
+    /// The annotation column is on; its cells (empty until blame is read).
+    pub annot: Option<&'a [AnnCell]>,
     /// The file is added or deleted as a whole: its lines keep the gutter bar but no fill.
     pub whole: bool,
 }
@@ -41,13 +43,29 @@ pub struct RowStyle<'a> {
 impl RowStyle<'_> {
     /// The width taken by line numbers (and signs) in one row.
     pub fn chrome(&self, unified: bool) -> f32 {
+        let annot = if self.annot.is_some() { ANNOT_W } else { 0. };
         if unified {
-            2. * self.gutter + SIGN_WIDTH
+            2. * self.gutter + SIGN_WIDTH + annot
         } else {
-            2. * self.gutter + 1.
+            2. * self.gutter + 1. + annot
         }
     }
 }
+
+/// What the annotation column says about one line of the new side.
+#[derive(Clone, Debug)]
+pub struct AnnCell {
+    pub id: git2::Oid,
+    /// "Anna · 3 d" on the first line of a run by the same commit; nothing on the rest.
+    pub label: Option<SharedString>,
+    /// The commit's title, hash and age, for the tooltip.
+    pub tip: SharedString,
+    /// This line comes from the commit being viewed.
+    pub current: bool,
+}
+
+/// The width of the annotation column.
+pub const ANNOT_W: f32 = 172.;
 
 /// Whose comment sits on a line.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -84,6 +102,8 @@ pub struct Events {
     pub comment: OnLine,
     /// A gutter's comment mark was clicked: open or fold what is on that line.
     pub toggle: OnLine,
+    /// An annotation was clicked: open the commit that wrote the line.
+    pub annotate: OnLine,
     /// The mouse went down on a line.
     pub press: OnPress,
     /// The pointer moved over a line with the button down.
@@ -154,6 +174,7 @@ pub fn row(
                 .flex()
                 .when_some(line_bg, |s, bg| s.bg(bg))
                 .group("diff-row")
+                .children(annot_col(style, new_line, events.clone()))
                 .child(gutter(old_line, gutter_bg, style, None))
                 .child(gutter(
                     new_line,
@@ -189,6 +210,11 @@ fn half(
     let (line_bg, gutter_bg) = tints(cell.kind);
     let line_bg = line_bg.filter(|_| !style.whole);
     half.when_some(line_bg, |s, bg| s.bg(bg))
+        .children(if old {
+            None
+        } else {
+            annot_col(style, Some(cell.line), events.clone())
+        })
         .child(gutter(
             Some(cell.line),
             gutter_bg,
@@ -196,6 +222,37 @@ fn half(
             Some((old, cell.line, events.clone())),
         ))
         .child(code(side, cell, old, style, events))
+}
+
+/// The annotation column beside a new-side line: who wrote it; a click opens the commit.
+fn annot_col(style: RowStyle<'_>, line: Option<u32>, events: OnEvents) -> Option<AnyElement> {
+    let cells = style.annot?;
+    let n = line?;
+    let cell = cells.get(n.checked_sub(1)? as usize);
+    let col = div()
+        .w(px(ANNOT_W))
+        .flex_none()
+        .px(px(6.))
+        .text_size(px(11.));
+    let Some(cell) = cell else {
+        return Some(col.into_any_element());
+    };
+    let tip = cell.tip.clone();
+    Some(
+        col.id(("annot", u64::from(n)))
+            .truncate()
+            .text_color(if cell.current {
+                theme::accent()
+            } else {
+                theme::muted()
+            })
+            .cursor_pointer()
+            .hover(|s| s.text_color(theme::text()))
+            .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
+            .children(cell.label.clone())
+            .on_click(move |_, _, cx| (events.annotate)(false, n, cx))
+            .into_any_element(),
+    )
 }
 
 /// A line-number column; `comment` adds a + that appears on hover and starts a comment on that line.

@@ -15,6 +15,7 @@ pub enum Act {
     SetMode(DiffMode),
     Toggle(Opt),
     CreateRequest(usize),
+    Annotate,
 }
 
 #[derive(Clone)]
@@ -87,6 +88,7 @@ impl Workspace {
             Act::SetMode(mode) => self.set_mode(mode, cx),
             Act::Toggle(opt) => self.toggle(opt, cx),
             Act::CreateRequest(ix) => self.open_create(Some(ix), cx),
+            Act::Annotate => self.toggle_annotate(cx),
         }
         cx.notify();
     }

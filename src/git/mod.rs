@@ -123,6 +123,15 @@ pub struct BranchRef {
     pub is_head: bool,
 }
 
+/// Who wrote a line, and in which commit.
+#[derive(Clone, Debug)]
+pub struct BlameLine {
+    pub id: Oid,
+    pub author: String,
+    pub time: i64,
+    pub summary: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct CommitInfo {
     pub id: Oid,
@@ -501,6 +510,48 @@ impl Repo {
             start,
             commits: walk.count(),
         })
+    }
+
+    /// Who last wrote each line of `path` as of `rev`: one entry per line, 1-based line `n` at `n - 1`.
+    pub fn blame(&self, rev: Oid, path: &str) -> Result<Vec<Option<BlameLine>>> {
+        let mut opts = git2::BlameOptions::new();
+        opts.newest_commit(rev);
+        let blame = self.inner.blame_file(Path::new(path), Some(&mut opts))?;
+        let mut summaries: std::collections::HashMap<Oid, String> =
+            std::collections::HashMap::new();
+        let mut out: Vec<Option<BlameLine>> = Vec::new();
+        for hunk in blame.iter() {
+            let id = hunk.final_commit_id();
+            let summary = summaries
+                .entry(id)
+                .or_insert_with(|| {
+                    self.inner
+                        .find_commit(id)
+                        .ok()
+                        .map(|c| c.summary_bytes().map(lossy).unwrap_or_default())
+                        .unwrap_or_default()
+                })
+                .clone();
+            let sig = hunk.final_signature();
+            let line = BlameLine {
+                id,
+                author: sig
+                    .as_ref()
+                    .map(|s| lossy(s.name_bytes()))
+                    .unwrap_or_default(),
+                time: sig.as_ref().map_or(0, |s| s.when().seconds()),
+                summary,
+            };
+            let start = hunk.final_start_line().saturating_sub(1);
+            let end = start + hunk.lines_in_hunk();
+            if out.len() < end {
+                out.resize(end, None);
+            }
+            for slot in &mut out[start..end] {
+                *slot = Some(line.clone());
+            }
+        }
+        Ok(out)
     }
 
     /// The commits `head` has on top of `base` (or of their merge base), newest first.
