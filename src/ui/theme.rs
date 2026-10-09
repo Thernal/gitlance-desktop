@@ -40,11 +40,11 @@ pub fn text() -> Rgba {
 }
 
 pub fn muted() -> Rgba {
-    rgb(0x7f848e)
+    rgb(0x9da3ae)
 }
 
 pub fn faint() -> Rgba {
-    rgb(0x5c6370)
+    rgb(0x8b919c)
 }
 
 pub fn accent() -> Rgba {
@@ -106,12 +106,12 @@ pub fn scrollbar() -> Rgba {
 
 /// A changed token inside an added line.
 pub fn added_word() -> Rgba {
-    rgba(0x98c3795c)
+    rgba(0x98c3792e)
 }
 
 /// A changed token inside a removed line.
 pub fn removed_word() -> Rgba {
-    rgba(0xe06c755c)
+    rgba(0xe06c752e)
 }
 
 pub fn added_gutter() -> Rgba {

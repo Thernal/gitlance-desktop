@@ -283,17 +283,29 @@ impl Workspace {
         let can_act = self.request_target().is_some();
         let (reply, resolve) = (this.clone(), this);
         let resolved = t.resolved;
-        let action = |id: &'static str, label: &'static str| {
+        let focused = self.thread_at == Some(ix);
+        let action = |id: &'static str, label: &'static str, key: &'static str| {
             div()
                 .id((id, ix))
-                .px_2()
+                .h(px(24.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
                 .rounded(px(super::ROW_RADIUS))
-                .text_size(px(11.))
+                .bg(theme::hover())
+                .text_size(px(12.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme::muted())
                 .cursor_pointer()
-                .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                .hover(|s| s.bg(theme::selected()).text_color(theme::text()))
                 .child(label)
+                .children(focused.then(|| {
+                    div()
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(theme::faint())
+                        .child(key)
+                }))
         };
         let notes = t.notes.iter().enumerate().map(|(n, note)| {
             div()
@@ -335,7 +347,8 @@ impl Workspace {
                     .px_3()
                     .py_2()
                     .rounded(px(super::ROW_RADIUS))
-                    .border_1()
+                    .when(focused, |s| s.border_2())
+                    .when(!focused, |s| s.border_1())
                     .border_color(theme::warning())
                     .bg(theme::panel())
                     .font_family(theme::UI_FONT)
@@ -347,13 +360,16 @@ impl Workspace {
                             .flex()
                             .gap_1()
                             .pt(px(6.))
-                            .child(action("thread-reply", "Reply").on_click(move |_, _, cx| {
-                                reply.update(cx, |this, cx| this.start_reply(ix, cx)).ok();
-                            }))
+                            .child(action("thread-reply", "Reply", "r").on_click(
+                                move |_, _, cx| {
+                                    reply.update(cx, |this, cx| this.start_reply(ix, cx)).ok();
+                                },
+                            ))
                             .children(t.resolvable.then(|| {
                                 action(
                                     "thread-resolve",
                                     if resolved { "Reopen" } else { "Resolve" },
+                                    "x",
                                 )
                                 .on_click(move |_, _, cx| {
                                     resolve
@@ -364,6 +380,68 @@ impl Workspace {
                     })),
             )
             .into_any_element()
+    }
+
+    /// The discussions on lines of the files of this diff, in reading order.
+    fn thread_order(&self) -> Vec<usize> {
+        let Some(diff) = &self.diff else {
+            return Vec::new();
+        };
+        let mut order: Vec<(usize, u32, usize)> = self
+            .requests
+            .threads
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, t)| {
+                let file = diff
+                    .files
+                    .iter()
+                    .position(|f| Some(f.path()) == t.path.as_deref())?;
+                Some((file, t.new_line.or(t.old_line)?, ix))
+            })
+            .collect();
+        order.sort_unstable();
+        order.into_iter().map(|(_, _, ix)| ix).collect()
+    }
+
+    /// ⇧n / ⇧p: the next or previous discussion of the request, shown in the diff.
+    pub(super) fn step_thread(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if !self.showing_request() {
+            return;
+        }
+        let order = self.thread_order();
+        if order.is_empty() {
+            return;
+        }
+        let at = self
+            .thread_at
+            .and_then(|t| order.iter().position(|&ix| ix == t));
+        let next = match (at, forward) {
+            (None, true) => 0,
+            (None, false) => order.len() - 1,
+            (Some(i), true) => (i + 1) % order.len(),
+            (Some(i), false) => (i + order.len() - 1) % order.len(),
+        };
+        let ix = order[next];
+        self.thread_at = Some(ix);
+        let t = &self.requests.threads[ix];
+        if let Some(path) = t.path.clone() {
+            let (line, old) = (t.new_line.or(t.old_line).unwrap_or(1), t.new_line.is_none());
+            self.jump_to_line(&path, line, old, cx);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn reply_focused(&mut self, cx: &mut Context<Self>) {
+        if let Some(ix) = self.thread_at.filter(|_| self.request_target().is_some()) {
+            self.start_reply(ix, cx);
+        }
+    }
+
+    pub(super) fn resolve_focused(&mut self, cx: &mut Context<Self>) {
+        if let Some(ix) = self.thread_at.filter(|_| self.request_target().is_some()) {
+            self.toggle_resolved(ix, cx);
+        }
     }
 
     /// The pending comments of the open file: (index, old side, line).
@@ -547,6 +625,7 @@ impl Workspace {
             Vec::new()
         };
         let pending = drafts.len();
+        let folded = self.layout.fold_comments;
         let total = theirs.len() + drafts.len() + self.comments.len();
         if total == 0 {
             return None;
@@ -650,7 +729,22 @@ impl Workspace {
                     div()
                         .flex()
                         .items_center()
-                        .child(island_label(format!("Comments · {total}")).flex_1())
+                        .child(
+                            island_label(format!(
+                                "{} Comments · {total}",
+                                if folded { "▸" } else { "▾" }
+                            ))
+                            .id("fold-comments")
+                            .flex_1()
+                            .cursor_pointer()
+                            .on_click(cx.listener(
+                                |this, _: &ClickEvent, _, cx| {
+                                    this.layout.fold_comments = !this.layout.fold_comments;
+                                    this.layout.save();
+                                    cx.notify();
+                                },
+                            )),
+                        )
                         .children((pending > 0).then(|| {
                             div()
                                 .id("submit-review")
@@ -671,7 +765,7 @@ impl Workspace {
                                 )
                         })),
                 )
-                .child(
+                .children((!folded).then(|| {
                     div()
                         .id("comments-list")
                         .flex_1()
@@ -679,8 +773,8 @@ impl Workspace {
                         .overflow_y_scroll()
                         .children(request_items)
                         .children(draft_items)
-                        .children(agent_items),
-                ),
+                        .children(agent_items)
+                })),
         )
     }
 
@@ -702,7 +796,11 @@ impl Workspace {
     /// The island's label: which of the two lists the rail's button chose.
     pub(super) fn render_branches_header(&self) -> impl IntoElement {
         if self.requests.connectable && self.requests.side == Side::Requests {
-            return super::island_label("Connect GitLab").into_any_element();
+            return super::island_label(format!(
+                "Connect GitLab{}",
+                self.zone_tag(super::zones::Zone::Branches)
+            ))
+            .into_any_element();
         }
         if self.requests.available && self.requests.side == Side::Requests {
             let n = self.requests.list.len();
@@ -711,9 +809,17 @@ impl Workspace {
             } else {
                 format!("Merge requests · {n}")
             };
-            return super::island_label(label).into_any_element();
+            return super::island_label(format!(
+                "{label}{}",
+                self.zone_tag(super::zones::Zone::Branches)
+            ))
+            .into_any_element();
         }
-        super::island_label("Branches").into_any_element()
+        super::island_label(format!(
+            "Branches{}",
+            self.zone_tag(super::zones::Zone::Branches)
+        ))
+        .into_any_element()
     }
 
     /// Keeps the typed token, asks GitLab who it is, and starts listing on success.

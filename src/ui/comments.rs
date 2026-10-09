@@ -78,7 +78,18 @@ impl Workspace {
         } else {
             Vec::new()
         };
-        if here.is_empty() && compose.is_none() && theirs.is_empty() && drafts.is_empty() {
+        // The prompt of `c` hangs under the marked line, like the composer that follows it.
+        let go = if compose.is_none() && self.goline.is_some() {
+            self.goline_target()
+        } else {
+            None
+        };
+        if here.is_empty()
+            && compose.is_none()
+            && theirs.is_empty()
+            && drafts.is_empty()
+            && go.is_none()
+        {
             return rows;
         }
         let mut out = Vec::with_capacity(rows.len() + here.len() + 1);
@@ -109,7 +120,9 @@ impl Workspace {
                         .filter(|(_, o, n)| *o == old && *n == line)
                         .map(|(ix, _, _)| Row::Draft(*ix)),
                 );
-                if compose.is_some_and(|c| c.old == old && c.line == line) {
+                if compose.is_some_and(|c| c.old == old && c.line == line)
+                    || go == Some((old, line))
+                {
                     out.push(Row::Composer);
                 }
             }
@@ -410,6 +423,7 @@ impl Workspace {
             Edit::Escape => {
                 self.goline = None;
                 self.goline_row = None;
+                self.refresh_rows();
             }
             // Digits, and a minus first for a removed line.
             Edit::Changed => {
@@ -450,11 +464,13 @@ impl Workspace {
 
     /// Puts the marker on the row of the typed line and scrolls it into view.
     fn move_marker(&mut self) {
+        // The prompt row moves with the marker, so the rows are laid out again first.
+        self.refresh_rows();
         self.goline_row = self
             .goline_target()
             .and_then(|(old, line)| self.row_of_line(line, old));
         if let Some(at) = self.goline_row {
-            self.diff_list.scroll_to_reveal_item(at);
+            self.diff_list.scroll_to_reveal_item(at + 1);
         }
     }
 
@@ -511,7 +527,48 @@ impl Workspace {
         }
     }
 
+    /// The prompt of `c` under the marked line.
+    pub(super) fn render_goline_row(&self, indent: f32) -> gpui::AnyElement {
+        let Some(text) = self.goline.as_ref() else {
+            return div().into_any_element();
+        };
+        div()
+            .w_full()
+            .pl(px(indent))
+            .pr(px(12.))
+            .py(px(4.))
+            .child(
+                div()
+                    .max_w(px(640.))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px_3()
+                    .py(px(6.))
+                    .rounded(px(ROW_RADIUS))
+                    .border_2()
+                    .border_color(theme::focus())
+                    .bg(theme::panel())
+                    .font_family(theme::UI_FONT)
+                    .text_size(px(12.))
+                    .child(div().text_color(theme::muted()).child("Comment on line"))
+                    .child(div().min_w(px(56.)).font_family(theme::CODE_FONT).child(
+                        input::field_text(text, true, self.field_all, "first change"),
+                    ))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme::faint())
+                            .child("↵ write · ↑↓ step · −12 a removed line · esc"),
+                    ),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn render_goline(&self) -> Option<impl IntoElement + use<>> {
+        if self.goline_row.is_some() {
+            return None;
+        }
         let text = self.goline.as_ref()?;
         let target = self.goline_target();
         let preview = target.and_then(|(old, line)| {
@@ -1038,7 +1095,9 @@ impl Workspace {
         if let Some((line, old)) = self.jump_line.take()
             && let Some(at) = self.row_of_line(line, old)
         {
-            self.diff_list.scroll_to_reveal_item(at);
+            let thread = matches!(self.rows.get(at + 1), Some(Row::Request(_)));
+            self.diff_list
+                .scroll_to_reveal_item(if thread { at + 1 } else { at });
             cx.notify();
         }
         let Some(id) = self.jump.take() else {

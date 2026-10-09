@@ -214,7 +214,10 @@ impl Workspace {
         }
         let key = &event.keystroke;
         if key.key == "escape" {
-            if self.ctx_menu.is_some() {
+            if self.shortcuts {
+                self.shortcuts = false;
+                cx.notify();
+            } else if self.ctx_menu.is_some() {
                 self.close_menu(cx);
             } else if self.repo_menu {
                 self.repo_menu = false;

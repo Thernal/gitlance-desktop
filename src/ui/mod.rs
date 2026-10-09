@@ -16,6 +16,7 @@ mod rows;
 mod select;
 mod settings;
 mod shell;
+mod shortcuts;
 mod theme;
 mod watch;
 mod working;
@@ -80,6 +81,11 @@ actions!(
         CommentLine,
         SubmitReview,
         CreateRequest,
+        ShowShortcuts,
+        NextThread,
+        PreviousThread,
+        ReplyThread,
+        ResolveThread,
         NextZone,
         PreviousZone,
         Activate,
@@ -147,6 +153,11 @@ pub fn run(path: Option<PathBuf>) {
                     Some("Workspace && !Typing"),
                 ),
                 KeyBinding::new("cmd-alt-m", CreateRequest, Some("Workspace && !Typing")),
+                KeyBinding::new("?", ShowShortcuts, Some("Workspace && !Typing")),
+                KeyBinding::new("shift-n", NextThread, Some("Workspace && !Typing")),
+                KeyBinding::new("shift-p", PreviousThread, Some("Workspace && !Typing")),
+                KeyBinding::new("r", ReplyThread, Some("Workspace && !Typing")),
+                KeyBinding::new("x", ResolveThread, Some("Workspace && !Typing")),
                 KeyBinding::new("tab", NextZone, Some("Workspace && !Typing")),
                 KeyBinding::new("shift-tab", PreviousZone, Some("Workspace && !Typing")),
                 KeyBinding::new("enter", Activate, Some("Workspace && !Typing")),
@@ -693,6 +704,10 @@ pub struct Workspace {
     gitlab_check: Option<Result<String, String>>,
     /// The card for a new merge request, while it is open.
     newreq: Option<create::NewRequest>,
+    /// The keyboard card is open.
+    shortcuts: bool,
+    /// The discussion `r`, `x` and ⇧n / ⇧p act on (an index into the request's threads).
+    thread_at: Option<usize>,
     /// The token being entered in the connect panel; shown as dots.
     token_input: String,
     /// A token is being checked against GitLab.
@@ -815,6 +830,8 @@ impl Workspace {
             open_request: None,
             gitlab_check: None,
             newreq: None,
+            shortcuts: false,
+            thread_at: None,
             token_input: String::new(),
             testing: false,
             goline: None,
@@ -1454,6 +1471,16 @@ impl Workspace {
             strong: false,
             sel: self.sel,
             gutter: digits as f32 * self.char_width + 16.,
+            whole: self
+                .diff
+                .as_ref()
+                .and_then(|d| d.files.get(self.file))
+                .is_some_and(|f| {
+                    matches!(
+                        f.change,
+                        crate::git::ChangeKind::Added | crate::git::ChangeKind::Deleted
+                    )
+                }),
         }
     }
 
@@ -2106,7 +2133,7 @@ impl Workspace {
             .flex_col()
             .child(
                 island()
-                    .h(px(self.layout.branches))
+                    .h(px(self.branches_height()))
                     // Gives way when comments and versions need the room, so Commits stays.
                     .flex_shrink(1.)
                     .min_h(px(
@@ -2118,6 +2145,7 @@ impl Workspace {
                             140.
                         },
                     ))
+                    .border_2()
                     .border_color(self.zone_border(zones::Zone::Branches))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -2158,13 +2186,18 @@ impl Workspace {
             .child(
                 island()
                     .flex_1()
-                    .min_h(px(180.))
+                    .min_h(px(300.))
+                    .border_2()
                     .border_color(self.zone_border(zones::Zone::Commits))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| this.set_zone(zones::Zone::Commits, cx)),
                     )
-                    .child(island_label(format!("Commits · {}", self.commits.len())))
+                    .child(island_label(format!(
+                        "Commits · {}{}",
+                        self.commits.len(),
+                        self.zone_tag(zones::Zone::Commits)
+                    )))
                     .children(self.render_request_row(cx))
                     .children(self.render_working_row(cx))
                     .child(self.render_find(cx))
@@ -2189,6 +2222,20 @@ impl Workspace {
             )
     }
 
+    /// The height of the branches island: what its rows need, never more than the dragged size.
+    fn branches_height(&self) -> f32 {
+        let content = if self.requests.connectable && self.requests.side == requests::Side::Requests
+        {
+            300.
+        } else if self.requests.available && self.requests.side == requests::Side::Requests {
+            92. + 56. * self.requests.list.len() as f32 + 34.
+        } else {
+            // Label and filter, a header and a row each: roughly what `branch_items` draws.
+            92. + 34. * self.branches.len() as f32 + 28. * 2.
+        };
+        self.layout.branches.min(content.max(150.))
+    }
+
     fn render_versions(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let latest = self.versions.len() - 1;
         let (from, to) = match self.selection {
@@ -2200,136 +2247,157 @@ impl Workspace {
             .versions
             .iter()
             .any(|v| v.author != self.versions[0].author);
+        let folded = self.layout.fold_versions;
         island()
             .pb(px(6.))
-            .child(island_label(format!("Versions · {}", self.versions.len())))
-            .children(self.versions.iter().enumerate().rev().map(|(ix, v)| {
-                let role = if Some(ix) == from {
-                    Some("from")
-                } else if Some(ix) == to {
-                    Some("to")
-                } else {
-                    None
-                };
-                let chosen = role.is_some();
-                let kind = match format::reason(&v.reason) {
-                    "fetch" => "fetched",
-                    "unknown" => "version",
-                    k => k,
-                };
-                let mut detail: Vec<String> = Vec::new();
-                if several {
-                    detail.push(v.author.clone());
-                }
-                detail.push(format::ago(v.time));
-                match ix.checked_sub(1).and_then(|p| self.versions.get(p)) {
-                    None => detail.push(plural(v.commits, "commit")),
-                    Some(prev) => {
-                        if prev.base != v.base {
-                            detail.push(format!(
-                                "onto {}",
-                                v.base.map(format::short).unwrap_or_default()
-                            ));
+            .child(
+                island_label(format!(
+                    "{} Versions · {}",
+                    if folded { "▸" } else { "▾" },
+                    self.versions.len()
+                ))
+                .id("fold-versions")
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.layout.fold_versions = !this.layout.fold_versions;
+                    this.layout.save();
+                    cx.notify();
+                })),
+            )
+            .children(
+                self.versions
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .filter(|_| !folded)
+                    .map(|(ix, v)| {
+                        let role = if Some(ix) == from {
+                            Some("from")
+                        } else if Some(ix) == to {
+                            Some("to")
+                        } else {
+                            None
+                        };
+                        let chosen = role.is_some();
+                        let kind = match format::reason(&v.reason) {
+                            "fetch" => "fetched",
+                            "unknown" => "version",
+                            k => k,
+                        };
+                        let mut detail: Vec<String> = Vec::new();
+                        if several {
+                            detail.push(v.author.clone());
                         }
-                        detail.push(match v.commits.cmp(&prev.commits) {
-                            std::cmp::Ordering::Greater => {
-                                format!("+{}", plural(v.commits - prev.commits, "commit"))
+                        detail.push(format::ago(v.time));
+                        match ix.checked_sub(1).and_then(|p| self.versions.get(p)) {
+                            None => detail.push(plural(v.commits, "commit")),
+                            Some(prev) => {
+                                if prev.base != v.base {
+                                    detail.push(format!(
+                                        "onto {}",
+                                        v.base.map(format::short).unwrap_or_default()
+                                    ));
+                                }
+                                detail.push(match v.commits.cmp(&prev.commits) {
+                                    std::cmp::Ordering::Greater => {
+                                        format!("+{}", plural(v.commits - prev.commits, "commit"))
+                                    }
+                                    std::cmp::Ordering::Less => {
+                                        format!("−{}", plural(prev.commits - v.commits, "commit"))
+                                    }
+                                    std::cmp::Ordering::Equal => {
+                                        format!("same {}", plural(v.commits, "commit"))
+                                    }
+                                });
                             }
-                            std::cmp::Ordering::Less => {
-                                format!("−{}", plural(prev.commits - v.commits, "commit"))
-                            }
-                            std::cmp::Ordering::Equal => {
-                                format!("same {}", plural(v.commits, "commit"))
-                            }
-                        });
-                    }
-                }
-                // The rail: a dot per version and a line to the older one.
-                let rail = div()
-                    .flex_none()
-                    .relative()
-                    .w(px(14.))
-                    .h(px(44.))
-                    .when(ix > 0, |s| {
-                        s.child(
-                            div()
-                                .absolute()
-                                .left(px(6.5))
-                                .top(px(18.))
-                                .w(px(1.))
-                                .h(px(30.))
-                                .bg(theme::selected()),
-                        )
-                    })
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(3.))
-                            .top(px(13.))
-                            .size(px(8.))
-                            .rounded_full()
-                            .bg(if chosen {
-                                theme::accent()
-                            } else {
-                                theme::faint()
-                            }),
-                    );
-                let item = row(("version", ix), chosen)
-                    .h(px(44.))
-                    .items_start()
-                    .gap_2()
-                    .child(rail)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .justify_center()
-                            .h_full()
+                        }
+                        // The rail: a dot per version and a line to the older one.
+                        let rail = div()
+                            .flex_none()
+                            .relative()
+                            .w(px(14.))
+                            .h(px(44.))
+                            .when(ix > 0, |s| {
+                                s.child(
+                                    div()
+                                        .absolute()
+                                        .left(px(6.5))
+                                        .top(px(18.))
+                                        .w(px(1.))
+                                        .h(px(30.))
+                                        .bg(theme::selected()),
+                                )
+                            })
                             .child(
                                 div()
+                                    .absolute()
+                                    .left(px(3.))
+                                    .top(px(13.))
+                                    .size(px(8.))
+                                    .rounded_full()
+                                    .bg(if chosen {
+                                        theme::accent()
+                                    } else {
+                                        theme::faint()
+                                    }),
+                            );
+                        let item = row(("version", ix), chosen)
+                            .h(px(44.))
+                            .items_start()
+                            .gap_2()
+                            .child(rail)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
                                     .flex()
-                                    .items_center()
-                                    .gap_2()
+                                    .flex_col()
+                                    .justify_center()
+                                    .h_full()
                                     .child(
                                         div()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(theme::accent())
-                                            .child(format!("v{}", v.number)),
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(theme::accent())
+                                                    .child(format!("v{}", v.number)),
+                                            )
+                                            .child(kind.to_owned())
+                                            .child(
+                                                div()
+                                                    .font_family(theme::CODE_FONT)
+                                                    .text_size(px(11.))
+                                                    .text_color(theme::muted())
+                                                    .child(format::short(v.tip)),
+                                            )
+                                            .child(div().flex_1())
+                                            .children(role.map(|r| tag(r, theme::accent())))
+                                            .when(ix == latest && role.is_none(), |s| {
+                                                s.child(tag("latest", theme::faint()))
+                                            })
+                                            .when(
+                                                self.watch.new_from.is_some_and(|from| ix >= from),
+                                                |s| s.child(tag("new", theme::accent())),
+                                            ),
                                     )
-                                    .child(kind.to_owned())
                                     .child(
                                         div()
-                                            .font_family(theme::CODE_FONT)
+                                            .w_full()
+                                            .truncate()
                                             .text_size(px(11.))
                                             .text_color(theme::muted())
-                                            .child(format::short(v.tip)),
-                                    )
-                                    .child(div().flex_1())
-                                    .children(role.map(|r| tag(r, theme::accent())))
-                                    .when(ix == latest && role.is_none(), |s| {
-                                        s.child(tag("latest", theme::faint()))
-                                    })
-                                    .when(
-                                        self.watch.new_from.is_some_and(|from| ix >= from),
-                                        |s| s.child(tag("new", theme::accent())),
+                                            .child(detail.join(" · ")),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .w_full()
-                                    .truncate()
-                                    .text_size(px(11.))
-                                    .text_color(theme::muted())
-                                    .child(detail.join(" · ")),
-                            ),
-                    )
-                    .on_click(
-                        cx.listener(move |this, event, _, cx| this.click_version(ix, event, cx)),
-                    );
-                div().px(px(6.)).py(px(1.)).child(item)
-            }))
+                            .on_click(cx.listener(move |this, event, _, cx| {
+                                this.click_version(ix, event, cx)
+                            }));
+                        div().px(px(6.)).py(px(1.)).child(item)
+                    }),
+            )
     }
 
     /// The commits of two versions, paired; a modified pair opens its interdiff.
@@ -2439,15 +2507,23 @@ impl Workspace {
     fn render_commit_row(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let commit = &self.commits[ix];
         let selected = self.selection == Selection::Commit(ix);
+        // The author is told only when more than one person made the commits in view.
+        let several = self
+            .commits
+            .iter()
+            .any(|c| c.author != self.commits[0].author);
         let item = row(("commit", ix), selected)
-            .h(px(46.))
+            .h(px(62.))
             .flex_col()
             .items_start()
             .justify_center()
             .child(
                 div()
                     .w_full()
-                    .truncate()
+                    .h(px(34.))
+                    .line_height(px(17.))
+                    .overflow_hidden()
+                    .line_clamp(2)
                     .child(self.summary_text(&commit.summary.clone().into())),
             )
             .child(
@@ -2462,20 +2538,27 @@ impl Workspace {
                             .font_family(theme::CODE_FONT)
                             .child(format::short(commit.id)),
                     )
-                    .children(
-                        self.decor
-                            .get(&commit.id)
-                            .map(|d| lists::deco_tags(d))
-                            .unwrap_or_default(),
+                    .child(
+                        div().flex().min_w_0().overflow_hidden().gap_2().children(
+                            self.decor
+                                .get(&commit.id)
+                                .map(|d| lists::deco_tags(d))
+                                .unwrap_or_default(),
+                        ),
                     )
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .child(commit.author.clone()),
+                            .children(several.then(|| commit.author.clone())),
                     )
-                    .child(format::ago(commit.time)),
+                    .child(
+                        div()
+                            .flex_none()
+                            .whitespace_nowrap()
+                            .child(format::ago(commit.time)),
+                    ),
             )
             .on_mouse_down(
                 MouseButton::Right,
@@ -2484,7 +2567,7 @@ impl Workspace {
                 }),
             )
             .on_click(cx.listener(move |this, _, _, cx| this.select_commit(ix, cx)));
-        div().w_full().h(px(48.)).px(px(6.)).py(px(1.)).child(item)
+        div().w_full().h(px(64.)).px(px(6.)).py(px(1.)).child(item)
     }
 
     fn render_diff(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2626,11 +2709,20 @@ impl Workspace {
         let header = div().flex_1().min_w_0().flex().flex_col().gap_1();
         match &diff.header {
             Header::Commit(commit) => {
+                // The explanation under the title, without the trailers (Co-Authored-By …).
                 let body = commit
                     .message
                     .split_once('\n')
-                    .map(|(_, body)| body.trim().to_owned())
+                    .map(|(_, body)| {
+                        body.lines()
+                            .filter(|l| !is_trailer(l))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                            .trim()
+                            .to_owned()
+                    })
                     .filter(|b| !b.is_empty());
+                let (full, short) = (commit.id.to_string(), format::short(commit.id));
                 header
                     .child(
                         div()
@@ -2686,10 +2778,22 @@ impl Workspace {
                             .text_color(theme::muted())
                             .child(
                                 div()
-                                    .font_family(theme::CODE_FONT)
-                                    .child(commit.id.to_string()),
+                                    .flex()
+                                    .gap_2()
+                                    .child(div().font_family(theme::CODE_FONT).child(short))
+                                    .child(
+                                        div()
+                                            .id("copy-hash")
+                                            .text_color(theme::accent())
+                                            .cursor_pointer()
+                                            .hover(|s| s.text_color(theme::text()))
+                                            .child("copy")
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.run_act(Act::Copy(full.clone()), cx)
+                                            })),
+                                    ),
                             )
-                            .child(format!("{} <{}>", commit.author, commit.email))
+                            .child(commit.author.clone())
                             .child(format::date(commit.time))
                             .child(stats)
                             .children(self.web.as_ref().map(|web| {
@@ -2943,6 +3047,7 @@ impl Workspace {
             .flex_1()
             .min_w_0()
             .bg(theme::editor())
+            .border_2()
             .border_color(self.zone_border(zones::Zone::Diff))
             .on_mouse_down(
                 MouseButton::Left,
@@ -3108,6 +3213,9 @@ impl Workspace {
                     return workspace.render_request_thread(ix, indent, this.clone());
                 }
                 Row::Draft(ix) => return workspace.render_draft(ix, indent, this.clone()),
+                Row::Composer if workspace.compose.is_none() => {
+                    return workspace.render_goline_row(indent);
+                }
                 Row::Composer => return workspace.render_composer(indent, this.clone()),
                 _ => {}
             }
@@ -3274,6 +3382,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CommentLine, _, cx| this.open_goline(cx)))
             .on_action(cx.listener(|this, _: &SubmitReview, _, cx| this.submit_review(cx)))
             .on_action(cx.listener(|this, _: &CreateRequest, _, cx| this.open_create(None, cx)))
+            .on_action(cx.listener(|this, _: &ShowShortcuts, _, cx| this.toggle_shortcuts(cx)))
+            .on_action(cx.listener(|this, _: &NextThread, _, cx| this.step_thread(true, cx)))
+            .on_action(cx.listener(|this, _: &PreviousThread, _, cx| this.step_thread(false, cx)))
+            .on_action(cx.listener(|this, _: &ReplyThread, _, cx| this.reply_focused(cx)))
+            .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))
             .on_action(cx.listener(|this, _: &NextZone, _, cx| this.step_zone(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousZone, _, cx| this.step_zone(false, cx)))
             .on_action(cx.listener(|this, _: &Activate, _, cx| this.activate(cx)))
@@ -3416,6 +3529,7 @@ impl Render for Workspace {
             .children(self.repo_menu.then(|| self.render_repo_menu(cx)))
             .children(self.render_ctx_menu(window.viewport_size(), cx))
             .children(self.render_create(cx))
+            .children(self.render_shortcuts(cx))
             .children(self.render_palette(cx))
     }
 }
@@ -3529,6 +3643,21 @@ fn island() -> gpui::Div {
         .border_1()
         .border_color(theme::island_border())
         .bg(theme::panel())
+}
+
+/// A `Key: value` line of the kind git calls a trailer.
+fn is_trailer(line: &str) -> bool {
+    const KEYS: [&str; 7] = [
+        "co-authored-by",
+        "signed-off-by",
+        "reviewed-by",
+        "acked-by",
+        "tested-by",
+        "reported-by",
+        "cc",
+    ];
+    line.split_once(':')
+        .is_some_and(|(key, _)| KEYS.contains(&key.trim().to_lowercase().as_str()))
 }
 
 fn island_label(text: impl Into<SharedString>) -> gpui::Div {

@@ -16,7 +16,7 @@ const MAX_LINE_BYTES: usize = 4096;
 pub mod palette {
     pub const BACKGROUND: u32 = 0x282c34;
     pub const FOREGROUND: u32 = 0xabb2bf;
-    pub const COMMENT: u32 = 0x5c6370;
+    pub const COMMENT: u32 = 0x9da3ae;
     pub const RED: u32 = 0xe06c75;
     pub const GREEN: u32 = 0x98c379;
     pub const YELLOW: u32 = 0xe5c07b;

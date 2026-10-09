@@ -562,6 +562,7 @@ impl Workspace {
         super::island()
             .w(px(self.layout.files))
             .flex_none()
+            .border_2()
             .border_color(self.zone_border(super::zones::Zone::Files))
             .on_mouse_down(
                 MouseButton::Left,
@@ -573,7 +574,14 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .pr(px(8.))
-                    .child(super::island_label(super::plural(diff.files.len(), "file")).flex_1())
+                    .child(
+                        super::island_label(format!(
+                            "{}{}",
+                            super::plural(diff.files.len(), "file"),
+                            self.zone_tag(super::zones::Zone::Files)
+                        ))
+                        .flex_1(),
+                    )
                     .child(
                         super::diff_view::group()
                             .child(chip("files-tree", "Tree", !list).on_click(cx.listener(
