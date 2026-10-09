@@ -16,6 +16,8 @@ pub enum Kind {
     Recent,
     /// The functions and types the open file changes (⌘⇧O).
     Structure,
+    /// The lines marked with F3 in the open diff (⌘F3).
+    Bookmarks,
     /// Picking the first side of a comparison.
     Base,
     /// Picking the second side, the first being `.0`.
@@ -50,6 +52,7 @@ pub enum Cmd {
     Annotate,
     Recent,
     Structure,
+    Bookmarks,
 }
 
 const COMMANDS: &[(&str, &str, Cmd)] = &[
@@ -61,6 +64,12 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Search in all files of the diff", "⌘⌥F", Cmd::FindInFiles),
     ("Annotate — who wrote each line", "⌥⌘B", Cmd::Annotate),
     ("Recent places", "⌘E", Cmd::Recent),
+    (
+        "Changes in this file — functions and types",
+        "⌘⇧O",
+        Cmd::Structure,
+    ),
+    ("Bookmarks", "⌘F3", Cmd::Bookmarks),
     (
         "Changes in this file — functions and types",
         "⌘⇧O",
@@ -87,6 +96,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
 
 #[derive(Clone)]
 enum Pick {
+    Mark { path: String, line: u32 },
     Symbol { old: bool, line: u32 },
     Recent(super::recents::Key),
     Commit(Oid),
@@ -123,7 +133,9 @@ fn matches(words: &[String], hay: &str) -> bool {
 impl Workspace {
     pub(super) fn open_palette(&mut self, kind: Kind, cx: &mut Context<Self>) {
         let refs = match (&kind, &self.root) {
-            (Kind::Jump | Kind::Recent | Kind::Structure, _) | (_, None) => Vec::new(),
+            (Kind::Jump | Kind::Recent | Kind::Structure | Kind::Bookmarks, _) | (_, None) => {
+                Vec::new()
+            }
             (_, Some(root)) => Repo::open(root)
                 .and_then(|r| r.compare_refs())
                 .unwrap_or_default(),
@@ -164,6 +176,28 @@ impl Workspace {
 
     fn palette_items(&self, p: &Palette) -> Vec<Item> {
         let query = p.query.trim_start();
+        if matches!(p.kind, Kind::Bookmarks) {
+            let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+            return self
+                .bookmark_list()
+                .into_iter()
+                .filter(|m| matches(&words, &format!("{} {}", m.path, m.text)))
+                .map(|m| Item {
+                    group: "Bookmarks",
+                    label: format!(
+                        "{}:{}",
+                        m.path.rsplit('/').next().unwrap_or(&m.path),
+                        m.line
+                    ),
+                    detail: m.text.clone(),
+                    key: "",
+                    pick: Pick::Mark {
+                        path: m.path,
+                        line: m.line,
+                    },
+                })
+                .collect();
+        }
         if matches!(p.kind, Kind::Structure) {
             let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
             let Some(file) = self.diff.as_ref().and_then(|d| d.files.get(self.file)) else {
@@ -423,6 +457,10 @@ impl Workspace {
                 self.palette = None;
                 self.open_recent(key, cx);
             }
+            Pick::Mark { path, line } => {
+                self.palette = None;
+                self.jump_to_line(&path, line, false, cx);
+            }
             Pick::Symbol { old, line } => {
                 self.palette = None;
                 if let Some(path) = self.current_path() {
@@ -495,11 +533,12 @@ impl Workspace {
             Kind::Jump => "Search commits, files, branches, commands   > # @",
             Kind::Recent => "Recent places — files, commits, merge requests",
             Kind::Structure => "Functions and types this file changes",
+            Kind::Bookmarks => "Bookmarks — lines marked with F3",
             Kind::Base => "Compare — pick the base: a branch, a tag or a commit",
             Kind::Head(_) => "Compare — pick what to compare with it",
         };
         let title = match &p.kind {
-            Kind::Jump | Kind::Recent | Kind::Structure => None,
+            Kind::Jump | Kind::Recent | Kind::Structure | Kind::Bookmarks => None,
             Kind::Base => Some("Compare · step 1 of 2".to_owned()),
             Kind::Head((name, _)) => Some(format!("Compare · {name} … ?")),
         };
@@ -560,6 +599,7 @@ impl Workspace {
                 .text_color(theme::muted())
                 .child(match &p.kind {
                     Kind::Recent => "Nothing opened yet.",
+                    Kind::Bookmarks => "No bookmarks yet: click a line and press F3.",
                     Kind::Structure => "No function or type of this file is changed (or the language is not known).",
                     Kind::Jump if p.query.is_empty() => "Type to search.",
                     Kind::Jump => "Nothing matches.",
@@ -645,5 +685,6 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::Annotate => Box::new(ToggleAnnotate),
         Cmd::Recent => Box::new(OpenRecent),
         Cmd::Structure => Box::new(ShowStructure),
+        Cmd::Bookmarks => Box::new(ShowBookmarks),
     }
 }

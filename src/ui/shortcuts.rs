@@ -46,6 +46,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌘⇧C", "compare two refs"),
             ("⌘E", "recent places"),
             ("⌘⇧O", "functions and types this file changes"),
+            ("F3  ⌘F3", "bookmark a line · list the bookmarks"),
         ],
     ),
     (

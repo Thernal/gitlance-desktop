@@ -1,6 +1,7 @@
 //! The GitLance window: branches, versions and commits on the left, the diff on the right.
 
 mod annotate;
+mod bookmarks;
 mod comments;
 mod create;
 mod diff_view;
@@ -90,6 +91,8 @@ actions!(
         ToggleComments,
         MarkReviewed,
         OpenRecent,
+        ToggleBookmark,
+        ShowBookmarks,
         ShowStructure,
         ToggleAnnotate,
         FindInFiles,
@@ -174,6 +177,8 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("cmd-shift-r", ToggleComments, Some("Workspace && !Typing")),
                 KeyBinding::new("v", MarkReviewed, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-e", OpenRecent, Some("Workspace")),
+                KeyBinding::new("f3", ToggleBookmark, Some("Workspace && !Typing")),
+                KeyBinding::new("cmd-f3", ShowBookmarks, Some("Workspace")),
                 KeyBinding::new("cmd-shift-o", ShowStructure, Some("Workspace")),
                 KeyBinding::new("cmd-alt-b", ToggleAnnotate, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-alt-f", FindInFiles, Some("Workspace")),
@@ -738,6 +743,7 @@ pub struct Workspace {
     newreq: Option<create::NewRequest>,
     /// The keyboard card is open.
     shortcuts: bool,
+    bookmarks: bookmarks::Store,
     /// Places opened lately, newest first.
     recents: Vec<recents::Entry>,
     /// The annotation column (who wrote each line) is on, and what blame said of the open file.
@@ -890,6 +896,7 @@ impl Workspace {
             gitlab_check: None,
             newreq: None,
             shortcuts: false,
+            bookmarks: bookmarks::Store::load(),
             recents: Vec::new(),
             annotate: false,
             annotations: Vec::new(),
@@ -3731,6 +3738,14 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))
             .on_action(cx.listener(|this, _: &ToggleThread, _, cx| this.toggle_focused(cx)))
             .on_action(cx.listener(|this, _: &MarkReviewed, _, cx| this.mark_and_advance(cx)))
+            .on_action(cx.listener(|this, _: &ToggleBookmark, _, cx| this.toggle_bookmark(cx)))
+            .on_action(cx.listener(|this, _: &ShowBookmarks, _, cx| {
+                if this.palette.is_some() {
+                    this.close_palette(cx);
+                } else if this.diff.is_some() {
+                    this.open_palette(palette::Kind::Bookmarks, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &ShowStructure, _, cx| {
                 if this.palette.is_some() {
                     this.close_palette(cx);

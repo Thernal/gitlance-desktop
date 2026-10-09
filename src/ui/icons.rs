@@ -64,6 +64,10 @@ const ICONS: &[(&str, &str)] = &[
         ),
     ),
     (
+        "bookmark",
+        lucide!(r#"<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>"#),
+    ),
+    (
         "message",
         lucide!(r#"<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>"#),
     ),

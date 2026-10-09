@@ -57,6 +57,7 @@ impl Workspace {
                     NoteTone::Request => 0,
                     NoteTone::Draft => 1,
                     NoteTone::Agent => 2,
+                    NoteTone::Bookmark => 3,
                 };
                 if rank(tone) < rank(n.tone) {
                     n.tone = tone;
@@ -74,6 +75,9 @@ impl Workspace {
                 add(c.old, n, NoteTone::Agent);
             }
         }
+        for line in self.bookmarks_here() {
+            add(false, line, NoteTone::Bookmark);
+        }
         if self.showing_request() {
             for (_, old, line) in self.request_threads_here() {
                 add(old, line, NoteTone::Request);
@@ -87,6 +91,16 @@ impl Workspace {
 
     /// A click on a line's comment mark: folds what is open there, or opens what is folded.
     pub(super) fn toggle_notes_at(&mut self, old: bool, line: u32, cx: &mut Context<Self>) {
+        // A line with nothing but a bookmark: the click takes the mark off.
+        let only_bookmark = self.notes.iter().any(|n| {
+            n.old == old
+                && n.line == line
+                && n.tone == super::diff_view::NoteTone::Bookmark
+                && n.count == 1
+        });
+        if only_bookmark {
+            return self.toggle_bookmark_at(line, cx);
+        }
         let mine: Vec<usize> = if self.showing_request() {
             self.request_threads_here()
                 .into_iter()

@@ -76,6 +76,8 @@ pub enum NoteTone {
     Draft,
     /// A comment kept for the agent.
     Agent,
+    /// A line marked with F3.
+    Bookmark,
 }
 
 /// A line that has comments: drawn as a mark in its gutter.
@@ -282,6 +284,7 @@ fn gutter(
                 NoteTone::Request => theme::warning(),
                 NoteTone::Draft => theme::renamed(),
                 NoteTone::Agent => theme::focus(),
+                NoteTone::Bookmark => theme::renamed(),
             };
             Some(
                 div()
@@ -299,7 +302,15 @@ fn gutter(
                     .text_color(tone)
                     .cursor_pointer()
                     .hover(|s| s.bg(theme::hover()))
-                    .child(super::icons::icon("message").size(px(13.)).text_color(tone))
+                    .child(
+                        super::icons::icon(if note.tone == NoteTone::Bookmark {
+                            "bookmark"
+                        } else {
+                            "message"
+                        })
+                        .size(px(13.))
+                        .text_color(tone),
+                    )
                     .on_click(move |_, _, cx| (events.toggle)(old, line, cx)),
             )
         }))
