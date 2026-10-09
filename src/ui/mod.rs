@@ -14,7 +14,10 @@ mod settings;
 mod theme;
 mod watch;
 
-use crate::git::{BranchRef, ChangeKind, CommitInfo, DiffSettings, FileDiff, Repo, Version};
+use crate::git::{
+    BranchRef, ChangeKind, CommitInfo, DiffSettings, FileDiff, PairCommit, PairKind, RangePair,
+    Repo, Version,
+};
 use crate::storage::{self, DiffMode, Layout, Settings, ViewOptions};
 use diff_view::{RowStyle, chip};
 use gpui::{
@@ -394,6 +397,12 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                 .ok();
             wait(1500).await;
         }
+        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("interdiff")) {
+            window
+                .update(cx, |this, _, cx| this.select_interdiff(0, cx))
+                .ok();
+            wait(1500).await;
+        }
         // A hidden window gets no display-link frames: draw one by hand.
         // `update_window` leaves the root view free for the draw to render.
         let saved = cx.update_window(window.into(), |_, window, cx| {
@@ -425,6 +434,20 @@ enum Header {
         rebased: bool,
         conflicts: usize,
     },
+    /// One commit of an older version against its counterpart in a newer one.
+    Interdiff {
+        from: usize,
+        to: usize,
+        old: PairCommit,
+        new: PairCommit,
+    },
+}
+
+/// What the version comparison shows: the files that changed, or the commits paired up.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VersionTab {
+    Files,
+    Commits,
 }
 
 /// A change the user did not ask for, with the way back.
@@ -436,6 +459,8 @@ struct Notice {
 struct Diff {
     header: Header,
     files: Arc<Vec<FileDiff>>,
+    /// The commits of a version comparison, paired (empty for anything else).
+    pairs: Vec<RangePair>,
 }
 
 /// A pane boundary that can be dragged.
@@ -482,6 +507,7 @@ pub struct Workspace {
     versions: Vec<Version>,
     commits: Vec<CommitInfo>,
     selection: Selection,
+    version_tab: VersionTab,
     diff: Option<Diff>,
     file: usize,
     options: ViewOptions,
@@ -576,6 +602,7 @@ impl Workspace {
             versions: Vec::new(),
             commits: Vec::new(),
             selection: Selection::None,
+            version_tab: VersionTab::Files,
             diff: None,
             file: 0,
             options: ViewOptions::load(&settings),
@@ -789,6 +816,7 @@ impl Workspace {
             Ok(Diff {
                 header: Header::Commit(commit),
                 files: Arc::new(files),
+                pairs: Vec::new(),
             })
         });
     }
@@ -811,12 +839,21 @@ impl Workspace {
         ) else {
             return;
         };
+        if keep.is_none() {
+            self.version_tab = if b.commits > 1 {
+                VersionTab::Commits
+            } else {
+                VersionTab::Files
+            };
+        }
         self.clear_diff();
         self.selection = Selection::Versions { from, to };
         self.record();
         let settings = self.settings();
         self.load_diff(keep, cx, move || {
-            let diff = Repo::open(&root)?.version_diff(&a, &b, settings)?;
+            let repo = Repo::open(&root)?;
+            let diff = repo.version_diff(&a, &b, settings)?;
+            let pairs = repo.range_pairs(&a, &b).unwrap_or_default();
             Ok(Diff {
                 header: Header::Versions {
                     from: a,
@@ -825,6 +862,34 @@ impl Workspace {
                     conflicts: diff.conflicts.len(),
                 },
                 files: Arc::new(diff.files),
+                pairs,
+            })
+        });
+    }
+
+    /// The interdiff of one modified commit of the comparison `from`..`to`.
+    fn select_interdiff(&mut self, pair: usize, cx: &mut Context<Self>) {
+        let (Some(root), Selection::Versions { from, to }) = (self.root.clone(), self.selection)
+        else {
+            return;
+        };
+        let Some((old, new)) = self
+            .diff
+            .as_ref()
+            .and_then(|d| d.pairs.get(pair))
+            .and_then(|p| Some((p.old.clone()?, p.new.clone()?)))
+        else {
+            return;
+        };
+        self.clear_diff();
+        self.selection = Selection::Versions { from, to };
+        let settings = self.settings();
+        self.load_diff(None, cx, move || {
+            let diff = Repo::open(&root)?.interdiff(old.id, new.id, settings)?;
+            Ok(Diff {
+                header: Header::Interdiff { from, to, old, new },
+                files: Arc::new(diff.files),
+                pairs: Vec::new(),
             })
         });
     }
@@ -1786,6 +1851,11 @@ impl Workspace {
             Selection::Versions { from, to } => (Some(from), Some(to)),
             _ => (None, None),
         };
+        // Who made a version is only worth a line when more than one person did.
+        let several = self
+            .versions
+            .iter()
+            .any(|v| v.author != self.versions[0].author);
         island()
             .pb(px(6.))
             .child(island_label(format!("Versions · {}", self.versions.len())))
@@ -1797,48 +1867,229 @@ impl Workspace {
                 } else {
                     None
                 };
-                let item = row(("version", ix), role.is_some())
-                    .h(px(28.))
+                let chosen = role.is_some();
+                let kind = match format::reason(&v.reason) {
+                    "fetch" => "fetched",
+                    "unknown" => "version",
+                    k => k,
+                };
+                let mut detail: Vec<String> = Vec::new();
+                if several {
+                    detail.push(v.author.clone());
+                }
+                detail.push(format::ago(v.time));
+                match ix.checked_sub(1).and_then(|p| self.versions.get(p)) {
+                    None => detail.push(plural(v.commits, "commit")),
+                    Some(prev) => {
+                        if prev.base != v.base {
+                            detail.push(format!(
+                                "onto {}",
+                                v.base.map(format::short).unwrap_or_default()
+                            ));
+                        }
+                        detail.push(match v.commits.cmp(&prev.commits) {
+                            std::cmp::Ordering::Greater => {
+                                format!("+{}", plural(v.commits - prev.commits, "commit"))
+                            }
+                            std::cmp::Ordering::Less => {
+                                format!("−{}", plural(prev.commits - v.commits, "commit"))
+                            }
+                            std::cmp::Ordering::Equal => {
+                                format!("same {}", plural(v.commits, "commit"))
+                            }
+                        });
+                    }
+                }
+                // The rail: a dot per version and a line to the older one.
+                let rail = div()
+                    .flex_none()
+                    .relative()
+                    .w(px(14.))
+                    .h(px(44.))
+                    .when(ix > 0, |s| {
+                        s.child(
+                            div()
+                                .absolute()
+                                .left(px(6.5))
+                                .top(px(18.))
+                                .w(px(1.))
+                                .h(px(30.))
+                                .bg(theme::selected()),
+                        )
+                    })
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(3.))
+                            .top(px(13.))
+                            .size(px(8.))
+                            .rounded_full()
+                            .bg(if chosen {
+                                theme::accent()
+                            } else {
+                                theme::faint()
+                            }),
+                    );
+                let item = row(("version", ix), chosen)
+                    .h(px(44.))
+                    .items_start()
                     .gap_2()
-                    .child(
-                        div()
-                            .w(px(28.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::accent())
-                            .child(format!("v{}", v.number)),
-                    )
-                    .child(
-                        div()
-                            .font_family(theme::CODE_FONT)
-                            .text_size(px(11.))
-                            .text_color(theme::muted())
-                            .child(format::short(v.tip)),
-                    )
+                    .child(rail)
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .truncate()
-                            .text_color(theme::muted())
-                            .child(format!(
-                                "{} · {} · {}",
-                                format::reason(&v.reason),
-                                plural(v.commits, "commit"),
-                                format::ago(v.time)
-                            )),
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .h_full()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(theme::accent())
+                                            .child(format!("v{}", v.number)),
+                                    )
+                                    .child(kind.to_owned())
+                                    .child(
+                                        div()
+                                            .font_family(theme::CODE_FONT)
+                                            .text_size(px(11.))
+                                            .text_color(theme::muted())
+                                            .child(format::short(v.tip)),
+                                    )
+                                    .child(div().flex_1())
+                                    .children(role.map(|r| tag(r, theme::accent())))
+                                    .when(ix == latest && role.is_none(), |s| {
+                                        s.child(tag("latest", theme::faint()))
+                                    })
+                                    .when(
+                                        self.watch.new_from.is_some_and(|from| ix >= from),
+                                        |s| s.child(tag("new", theme::accent())),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .truncate()
+                                    .text_size(px(11.))
+                                    .text_color(theme::muted())
+                                    .child(detail.join(" · ")),
+                            ),
                     )
-                    .children(role.map(|r| tag(r, theme::accent())))
-                    .when(ix == latest && role.is_none(), |s| {
-                        s.child(tag("latest", theme::faint()))
-                    })
-                    .when(self.watch.new_from.is_some_and(|from| ix >= from), |s| {
-                        s.child(tag("new", theme::accent()))
-                    })
                     .on_click(
                         cx.listener(move |this, event, _, cx| this.click_version(ix, event, cx)),
                     );
                 div().px(px(6.)).py(px(1.)).child(item)
             }))
+    }
+
+    /// The commits of two versions, paired; a modified pair opens its interdiff.
+    fn render_pairs(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
+        island()
+            .flex_1()
+            .min_w_0()
+            .bg(theme::editor())
+            .child(island_label(
+                "Commits · = unchanged  ! modified  + new  − dropped",
+            ))
+            .child(
+                div()
+                    .id("pairs")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .px(px(6.))
+                    .pb(px(6.))
+                    .children(diff.pairs.iter().enumerate().map(|(ix, p)| {
+                        let (mark, color, label) = match p.kind {
+                            PairKind::Unchanged => ("=", theme::muted(), "unchanged"),
+                            PairKind::Modified => ("!", theme::warning(), "modified"),
+                            PairKind::New => ("+", theme::added(), "new"),
+                            PairKind::Dropped => ("−", theme::removed(), "dropped"),
+                        };
+                        let ids = match (&p.old, &p.new) {
+                            (Some(o), Some(n)) => {
+                                format!("{} → {}", format::short(o.id), format::short(n.id))
+                            }
+                            (Some(o), None) => format::short(o.id),
+                            (None, Some(n)) => {
+                                format!("{}   → {}", " ".repeat(7), format::short(n.id))
+                            }
+                            (None, None) => String::new(),
+                        };
+                        let summary = p
+                            .new
+                            .as_ref()
+                            .or(p.old.as_ref())
+                            .map(|c| c.summary.clone())
+                            .unwrap_or_default();
+                        let moved = match p.moved {
+                            0 => String::new(),
+                            n if n > 0 => format!("moved ↑{n}"),
+                            n => format!("moved ↓{}", -n),
+                        };
+                        let open = p.kind == PairKind::Modified;
+                        let item =
+                            row(("pair", ix), false)
+                                .h(px(32.))
+                                .gap_3()
+                                .when(!open, |s| s.cursor_default())
+                                .child(
+                                    div()
+                                        .w(px(14.))
+                                        .font_family(theme::CODE_FONT)
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(color)
+                                        .child(mark),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(150.))
+                                        .flex_none()
+                                        .font_family(theme::CODE_FONT)
+                                        .text_size(px(11.))
+                                        .text_color(theme::muted())
+                                        .child(ids),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .when(p.kind == PairKind::Dropped, |s| {
+                                            s.line_through().text_color(theme::muted())
+                                        })
+                                        .child(summary),
+                                )
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(px(12.))
+                                        .text_color(theme::muted())
+                                        .child(if moved.is_empty() {
+                                            label.to_owned()
+                                        } else {
+                                            format!("{label} · {moved}")
+                                        }),
+                                )
+                                .children(open.then(|| {
+                                    div()
+                                        .flex_none()
+                                        .text_color(theme::accent())
+                                        .child("interdiff →")
+                                }))
+                                .when(open, |s| {
+                                    s.on_click(cx.listener(move |this, _, _, cx| {
+                                        this.select_interdiff(ix, cx)
+                                    }))
+                                });
+                        div().w_full().py(px(1.)).child(item)
+                    })),
+            )
     }
 
     fn render_commit_row(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1908,6 +2159,8 @@ impl Workspace {
                 .child(message)
                 .into_any_element();
         };
+        let commits_tab = matches!(diff.header, Header::Versions { .. })
+            && self.version_tab == VersionTab::Commits;
         div()
             .flex_1()
             .min_w_0()
@@ -1920,15 +2173,18 @@ impl Workspace {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .children(self.layout.show_files.then(|| {
-                        div()
-                            .flex()
-                            .flex_none()
-                            .child(self.render_files(diff, cx))
-                            .child(self.handle(Split::Files, cx))
-                    }))
-                    .child(self.render_file(diff, cx))
-                    .children(self.review_open.then(|| self.render_review(cx))),
+                    .when(!commits_tab, |s| {
+                        s.children(self.layout.show_files.then(|| {
+                            div()
+                                .flex()
+                                .flex_none()
+                                .child(self.render_files(diff, cx))
+                                .child(self.handle(Split::Files, cx))
+                        }))
+                        .child(self.render_file(diff, cx))
+                        .children(self.review_open.then(|| self.render_review(cx)))
+                    })
+                    .when(commits_tab, |s| s.child(self.render_pairs(diff, cx))),
             )
             .into_any_element()
     }
@@ -2106,6 +2362,40 @@ impl Workspace {
                             })),
                     )
             }
+            Header::Interdiff { from, to, old, new } => {
+                let (from, to) = (*from, *to);
+                header
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(chip("back-to-commits", "← Commits", false).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.select_versions(from, to, cx)
+                                }),
+                            ))
+                            .child(
+                                div()
+                                    .text_size(px(15.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(format!("Interdiff · {}", new.summary)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_3()
+                            .text_size(px(12.))
+                            .text_color(theme::muted())
+                            .child(format!(
+                                "{} → {} · the old commit's patch against the new one's",
+                                format::short(old.id),
+                                format::short(new.id)
+                            ))
+                            .child(stats),
+                    )
+            }
             Header::Versions {
                 from,
                 to,
@@ -2114,9 +2404,44 @@ impl Workspace {
             } => header
                 .child(
                     div()
-                        .text_size(px(15.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(format!("Changes from v{} to v{}", from.number, to.number)),
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_size(px(15.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format!("Changes from v{} to v{}", from.number, to.number)),
+                        )
+                        .child(
+                            diff_view::group()
+                                .child(
+                                    chip(
+                                        "tab-files",
+                                        "Files",
+                                        self.version_tab == VersionTab::Files,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _: &ClickEvent, _, cx| {
+                                            this.version_tab = VersionTab::Files;
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    chip(
+                                        "tab-commits",
+                                        format!("Commits · {}", diff.pairs.len()),
+                                        self.version_tab == VersionTab::Commits,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _: &ClickEvent, _, cx| {
+                                            this.version_tab = VersionTab::Commits;
+                                            cx.notify();
+                                        },
+                                    )),
+                                ),
+                        ),
                 )
                 .child(
                     div()

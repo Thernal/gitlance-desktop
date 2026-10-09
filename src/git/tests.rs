@@ -371,3 +371,75 @@ fn decorations_label_branches_remote_branches_and_tags() {
     assert_eq!(decos[&a][0].name, "v1");
     assert_eq!(decos[&a][0].kind, DecoKind::Tag);
 }
+
+#[test]
+fn range_pairs_tell_unchanged_modified_new_and_dropped_commits() {
+    use super::PairKind::*;
+    let mut fx = Fixture::new();
+    let base = fx.commit("refs/heads/main", &[], &[("base.txt", "0\n")], "base");
+    let feature = "refs/heads/feature";
+    let c1 = fx.commit(
+        feature,
+        &[base],
+        &[("base.txt", "0\n"), ("a.txt", "1\n")],
+        "commit: feat a",
+    );
+    let c2 = fx.commit(
+        feature,
+        &[c1],
+        &[("base.txt", "0\n"), ("a.txt", "1\n"), ("b.txt", "1\n")],
+        "commit: feat b",
+    );
+    fx.commit(
+        feature,
+        &[c2],
+        &[
+            ("base.txt", "0\n"),
+            ("a.txt", "1\n"),
+            ("b.txt", "1\n"),
+            ("debug.txt", "x\n"),
+        ],
+        "commit: debug",
+    );
+    // The branch rewritten: a is edited, b is the same patch, debug is gone, a test is new.
+    let d1 = fx.commit(
+        feature,
+        &[base],
+        &[("base.txt", "0\n"), ("a.txt", "2\n")],
+        "commit (amend): feat a",
+    );
+    let d2 = fx.commit(
+        feature,
+        &[d1],
+        &[("base.txt", "0\n"), ("a.txt", "2\n"), ("b.txt", "1\n")],
+        "commit: feat b",
+    );
+    fx.commit(
+        feature,
+        &[d2],
+        &[
+            ("base.txt", "0\n"),
+            ("a.txt", "2\n"),
+            ("b.txt", "1\n"),
+            ("t.txt", "t\n"),
+        ],
+        "commit: test",
+    );
+
+    let repo = fx.open();
+    let versions = repo.versions(feature).unwrap();
+    assert_eq!(versions.len(), 2);
+    let pairs = repo.range_pairs(&versions[0], &versions[1]).unwrap();
+    let kinds: Vec<_> = pairs.iter().map(|p| p.kind).collect();
+    assert_eq!(kinds, [Modified, Unchanged, Dropped, New]);
+    assert_eq!(pairs[2].old.as_ref().unwrap().summary, "commit: debug");
+
+    let (old, new) = (
+        pairs[0].old.as_ref().unwrap(),
+        pairs[0].new.as_ref().unwrap(),
+    );
+    let inter = repo
+        .interdiff(old.id, new.id, DiffSettings::default())
+        .unwrap();
+    assert_eq!(paths(&inter.files), ["a.txt"]);
+}

@@ -10,7 +10,7 @@ mod tests;
 pub use diff::{ChangeKind, DiffSettings, FileDiff, LineKind};
 #[cfg(test)]
 pub use diff::{DiffLine, Hunk};
-pub use versions::{Version, VersionDiff};
+pub use versions::{PairCommit, PairKind, RangePair, Version, VersionDiff};
 
 use anyhow::{Context as _, Result};
 use git2::{BranchType, Oid, Repository, Sort};
@@ -313,6 +313,17 @@ impl Repo {
         // backend keeps them out of the repository.
         let scratch = Repository::open(self.inner.path())?;
         versions::version_diff(&scratch, from, to, settings)
+    }
+
+    /// The commits of two versions, paired the way `git range-diff` pairs them.
+    pub fn range_pairs(&self, from: &Version, to: &Version) -> Result<Vec<RangePair>> {
+        versions::range_pairs(&self.inner, from, to)
+    }
+
+    /// What one commit changed against its counterpart in another version.
+    pub fn interdiff(&self, old: Oid, new: Oid, settings: DiffSettings) -> Result<VersionDiff> {
+        let scratch = Repository::open(self.inner.path())?;
+        versions::interdiff(&scratch, old, new, settings)
     }
 }
 

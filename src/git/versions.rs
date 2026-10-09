@@ -34,6 +34,8 @@ pub struct Version {
     pub time: i64,
     /// The reflog message of that move: `commit (amend): …`, `rebase (finish): …`, `fetch: forced-update`.
     pub reason: String,
+    /// Who committed the tip.
+    pub author: String,
 }
 
 #[derive(Clone, Debug)]
@@ -97,6 +99,12 @@ pub(super) fn versions(repo: &Repository, refname: &str) -> Result<Vec<Version>>
                 commits: count_commits(repo, tip, base)?,
                 time,
                 reason,
+                author: repo
+                    .find_commit(tip)?
+                    .committer()
+                    .name()
+                    .unwrap_or_default()
+                    .to_owned(),
             })
         })
         .collect()
@@ -205,4 +213,203 @@ fn plain(
         rebased: false,
         conflicts: Vec::new(),
     })
+}
+
+/// How a commit of the older version relates to one of the newer version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PairKind {
+    /// The same patch.
+    Unchanged,
+    /// The same commit with a different patch.
+    Modified,
+    /// Only in the newer version.
+    New,
+    /// Only in the older version.
+    Dropped,
+}
+
+#[derive(Clone, Debug)]
+pub struct PairCommit {
+    pub id: Oid,
+    pub summary: String,
+}
+
+/// One line of a range-diff between two versions of a branch.
+#[derive(Clone, Debug)]
+pub struct RangePair {
+    pub kind: PairKind,
+    pub old: Option<PairCommit>,
+    pub new: Option<PairCommit>,
+    /// Places the commit moved up (negative: down) among the commits both versions hold.
+    pub moved: isize,
+}
+
+struct Walked {
+    commit: PairCommit,
+    patch: Option<Oid>,
+    paths: Vec<String>,
+}
+
+/// The commits of a version, oldest first, with their patch ids and the paths they touch.
+fn walk(repo: &Repository, version: &Version) -> Result<Vec<Walked>> {
+    let mut walk = repo.revwalk()?;
+    walk.push(version.tip)?;
+    if let Some(base) = version.base {
+        walk.hide(base)?;
+    }
+    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)?;
+    let mut out = Vec::new();
+    for id in walk {
+        let commit = repo.find_commit(id?)?;
+        let parent = match commit.parent_count() {
+            0 => None,
+            _ => Some(commit.parent(0)?.tree()?),
+        };
+        let diff = repo.diff_tree_to_tree(parent.as_ref(), Some(&commit.tree()?), None)?;
+        out.push(Walked {
+            commit: PairCommit {
+                id: commit.id(),
+                summary: commit.summary_bytes().map(super::lossy).unwrap_or_default(),
+            },
+            patch: diff.patchid(None).ok(),
+            paths: diff
+                .deltas()
+                .filter_map(|d| {
+                    d.new_file()
+                        .path()
+                        .map(|p| p.to_string_lossy().into_owned())
+                })
+                .collect(),
+        });
+    }
+    Ok(out)
+}
+
+/// Pairs the commits of two versions the way `git range-diff` does: the same patch first, then the
+/// same subject, then the most similar set of touched paths.
+pub(super) fn range_pairs(
+    repo: &Repository,
+    from: &Version,
+    to: &Version,
+) -> Result<Vec<RangePair>> {
+    let (old, new) = (walk(repo, from)?, walk(repo, to)?);
+    let mut matched: Vec<Option<(usize, bool)>> = vec![None; new.len()];
+    let mut taken = vec![false; old.len()];
+    for (j, n) in new.iter().enumerate() {
+        let found = old
+            .iter()
+            .enumerate()
+            .find(|(i, o)| !taken[*i] && n.patch.is_some() && o.patch == n.patch);
+        if let Some((i, _)) = found {
+            matched[j] = Some((i, true));
+            taken[i] = true;
+        }
+    }
+    for (j, n) in new.iter().enumerate() {
+        if matched[j].is_some() {
+            continue;
+        }
+        let same_subject = old
+            .iter()
+            .enumerate()
+            .find(|(i, o)| !taken[*i] && o.commit.summary == n.commit.summary);
+        let best = same_subject.map(|(i, _)| i).or_else(|| {
+            old.iter()
+                .enumerate()
+                .filter(|(i, _)| !taken[*i])
+                .map(|(i, o)| (i, similarity(&o.paths, &n.paths)))
+                .filter(|(_, score)| *score >= 0.5)
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i)
+        });
+        if let Some(i) = best {
+            matched[j] = Some((i, false));
+            taken[i] = true;
+        }
+    }
+
+    // Positions among the commits both versions hold, to say how far one moved.
+    let mut by_old: Vec<usize> = matched.iter().flatten().map(|(i, _)| *i).collect();
+    by_old.sort_unstable();
+    let rank_old = |i: usize| by_old.iter().position(|x| *x == i).unwrap_or(0) as isize;
+
+    let mut out = Vec::new();
+    let mut shown_dropped = 0;
+    let dropped: Vec<usize> = (0..old.len()).filter(|i| !taken[*i]).collect();
+    let mut rank_new = 0isize;
+    for (j, n) in new.iter().enumerate() {
+        let upto = matched[j].map_or(usize::MAX, |(i, _)| i);
+        while shown_dropped < dropped.len() && dropped[shown_dropped] < upto {
+            out.push(dropped_pair(&old[dropped[shown_dropped]]));
+            shown_dropped += 1;
+        }
+        match matched[j] {
+            Some((i, same)) => {
+                out.push(RangePair {
+                    kind: if same {
+                        PairKind::Unchanged
+                    } else {
+                        PairKind::Modified
+                    },
+                    old: Some(old[i].commit.clone()),
+                    new: Some(n.commit.clone()),
+                    moved: rank_old(i) - rank_new,
+                });
+                rank_new += 1;
+            }
+            None => out.push(RangePair {
+                kind: PairKind::New,
+                old: None,
+                new: Some(n.commit.clone()),
+                moved: 0,
+            }),
+        }
+    }
+    out.extend(
+        dropped[shown_dropped..]
+            .iter()
+            .map(|i| dropped_pair(&old[*i])),
+    );
+    Ok(out)
+}
+
+fn dropped_pair(old: &Walked) -> RangePair {
+    RangePair {
+        kind: PairKind::Dropped,
+        old: Some(old.commit.clone()),
+        new: None,
+        moved: 0,
+    }
+}
+
+/// Shared paths over all paths (Jaccard).
+fn similarity(a: &[String], b: &[String]) -> f32 {
+    if a.is_empty() && b.is_empty() {
+        return 0.0;
+    }
+    let shared = a.iter().filter(|p| b.contains(p)).count();
+    shared as f32 / (a.len() + b.len() - shared) as f32
+}
+
+/// The old commit's patch against the new commit's: the old one replayed onto the new one's parent,
+/// then compared.
+pub(super) fn interdiff(
+    repo: &Repository,
+    old: Oid,
+    new: Oid,
+    settings: DiffSettings,
+) -> Result<VersionDiff> {
+    let side = |id: Oid| -> Result<Version> {
+        let commit = repo.find_commit(id)?;
+        Ok(Version {
+            number: 0,
+            tip: id,
+            base: commit.parent_ids().next(),
+            commits: 1,
+            time: commit.committer().when().seconds(),
+            reason: String::new(),
+            author: String::new(),
+        })
+    };
+    version_diff(repo, &side(old)?, &side(new)?, settings)
 }
