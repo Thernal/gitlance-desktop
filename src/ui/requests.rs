@@ -675,10 +675,13 @@ impl Workspace {
 
     /// Every comment on the open diff, the request's in orange and the agent's in purple; a click
     /// shows it in the diff.
-    pub(super) fn render_comments_island(
+    pub(super) fn render_comments_drawer(
         &self,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
+        if !self.layout.comments_open {
+            return None;
+        }
         let theirs: Vec<(usize, &Thread)> = if self.showing_request() {
             self.requests.threads.iter().enumerate().collect()
         } else {
@@ -690,11 +693,7 @@ impl Workspace {
             Vec::new()
         };
         let pending = drafts.len();
-        let folded = self.layout.fold_comments;
         let total = theirs.len() + drafts.len() + self.comments.len();
-        if total == 0 {
-            return None;
-        }
         let item = |id: (&'static str, usize), tone, where_: String, body: String| {
             div()
                 .id(id)
@@ -725,7 +724,7 @@ impl Workspace {
                 )
                 .child(
                     div()
-                        .truncate()
+                        .line_clamp(2)
                         .pl(px(14.))
                         .text_size(px(12.))
                         .text_color(theme::muted())
@@ -785,85 +784,129 @@ impl Workspace {
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.jump_to(id, cx)))
         });
+        let copy = (!self.comments.is_empty()).then(|| {
+            div()
+                .id("copy-for-agent")
+                .px_2()
+                .h(px(24.))
+                .flex()
+                .items_center()
+                .rounded(px(super::ROW_RADIUS))
+                .border_1()
+                .border_color(theme::focus())
+                .text_color(theme::focus())
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::hover()))
+                .child(if self.copied {
+                    "Copied ✓".to_owned()
+                } else {
+                    format!("Copy for agent · {}", self.comments.len())
+                })
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.copy_for_agent(cx)))
+        });
+        let submit = (pending > 0).then(|| {
+            div()
+                .id("submit-review")
+                .px_2()
+                .h(px(24.))
+                .flex()
+                .items_center()
+                .rounded(px(super::ROW_RADIUS))
+                .bg(theme::warning())
+                .text_color(theme::base())
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .cursor_pointer()
+                .child(format!("Submit review · {pending}"))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.submit_review(cx)))
+        });
+        // Slides in over the right edge of the diff; the diff keeps its width underneath.
         Some(
             island()
-                .flex_none()
-                .max_h(px(150.))
-                .pb(px(6.))
+                .occlude()
+                .absolute()
+                .top(px(0.))
+                .bottom(px(0.))
+                .right(px(0.))
+                .w(px(380.))
+                .shadow_lg()
+                .border_2()
+                .border_color(theme::island_border())
                 .child(
                     div()
                         .flex()
                         .items_center()
+                        .child(island_label(format!("Comments · {total}")).flex_1())
                         .child(
-                            island_label(format!(
-                                "{} Comments · {total}",
-                                if folded { "▸" } else { "▾" }
-                            ))
-                            .id("fold-comments")
-                            .flex_1()
-                            .cursor_pointer()
-                            .on_click(cx.listener(
-                                |this, _: &ClickEvent, _, cx| {
-                                    this.layout.fold_comments = !this.layout.fold_comments;
-                                    this.layout.save();
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        .children((!self.comments.is_empty()).then(|| {
                             div()
-                                .id("copy-for-agent")
-                                .mr(px(6.))
+                                .id("close-comments")
+                                .mr(px(8.))
                                 .mt(px(6.))
-                                .px_2()
+                                .size(px(24.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
                                 .rounded(px(super::ROW_RADIUS))
-                                .border_1()
-                                .border_color(theme::focus())
-                                .text_color(theme::focus())
-                                .text_size(px(11.))
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme::muted())
                                 .cursor_pointer()
-                                .hover(|s| s.bg(theme::hover()))
-                                .child(if self.copied {
-                                    "Copied ✓".to_owned()
-                                } else {
-                                    format!("Copy for agent · {}", self.comments.len())
-                                })
+                                .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                                .tooltip(|_, cx| cx.new(|_| super::Tip("Close  esc")).into())
+                                .child("✕")
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.copy_for_agent(cx)
-                                }))
-                        }))
-                        .children((pending > 0).then(|| {
-                            div()
-                                .id("submit-review")
-                                .mr(px(10.))
-                                .mt(px(6.))
-                                .px_2()
-                                .rounded(px(super::ROW_RADIUS))
-                                .bg(theme::warning())
-                                .text_color(theme::base())
-                                .text_size(px(11.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .cursor_pointer()
-                                .child(format!("Submit review · {pending}"))
-                                .on_click(
-                                    cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        this.submit_review(cx)
-                                    }),
-                                )
-                        })),
+                                    this.set_comments_open(false, cx)
+                                })),
+                        ),
                 )
-                .children((!folded).then(|| {
+                .children((copy.is_some() || submit.is_some()).then(|| {
+                    div()
+                        .flex()
+                        .gap_2()
+                        .px(px(12.))
+                        .pb(px(8.))
+                        .children(copy)
+                        .children(submit)
+                }))
+                .child(
                     div()
                         .id("comments-list")
                         .flex_1()
                         .min_h_0()
                         .overflow_y_scroll()
+                        .pb(px(6.))
                         .children(request_items)
                         .children(draft_items)
                         .children(agent_items)
-                })),
+                        .children((total == 0).then(|| {
+                            div()
+                                .px(px(14.))
+                                .py(px(10.))
+                                .text_size(px(12.))
+                                .text_color(theme::muted())
+                                .child("No comments yet. Press c to comment on a line, or hover a line and press +.")
+                        })),
+                ),
         )
+    }
+
+    /// Opens or closes the comments drawer; the choice is kept.
+    pub(super) fn set_comments_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.layout.comments_open != open {
+            self.layout.comments_open = open;
+            self.layout.save();
+            cx.notify();
+        }
+    }
+
+    /// Every comment of the open diff: the request's discussions and pending ones, and the agent's.
+    pub(super) fn comments_total(&self) -> usize {
+        let theirs = if self.showing_request() {
+            self.requests.threads.len() + self.requests.drafts.len()
+        } else {
+            0
+        };
+        theirs + self.comments.len()
     }
 
     /// The requests the filter lets through, in the order the list shows them.

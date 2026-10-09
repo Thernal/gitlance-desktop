@@ -28,6 +28,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌘↵", "add or post"),
             ("⇧⌘↵", "keep pending · submit review"),
             ("r  x  o", "reply to, resolve, fold a discussion"),
+            ("⌘⇧R", "show or hide the comments drawer"),
         ],
     ),
     (

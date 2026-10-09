@@ -235,6 +235,8 @@ impl Workspace {
                 cx.notify();
             } else if self.sel.take().is_some() {
                 cx.notify();
+            } else if self.layout.comments_open {
+                self.set_comments_open(false, cx);
             }
             return;
         }

@@ -95,9 +95,9 @@ pub struct Layout {
     /// The branches/versions/commits column and the files column are shown (⌘1, ⌘2).
     pub show_sidebar: bool,
     pub show_files: bool,
-    /// The Versions and Comments islands are folded to their label.
+    /// The Versions island is folded to its label; the comments drawer is open.
     pub fold_versions: bool,
-    pub fold_comments: bool,
+    pub comments_open: bool,
 }
 
 impl Default for Layout {
@@ -109,7 +109,7 @@ impl Default for Layout {
             show_sidebar: true,
             show_files: true,
             fold_versions: false,
-            fold_comments: false,
+            comments_open: false,
         }
     }
 }
@@ -130,7 +130,7 @@ impl Layout {
                 "show_sidebar" => layout.show_sidebar = value != "false",
                 "show_files" => layout.show_files = value != "false",
                 "fold_versions" => layout.fold_versions = value == "true",
-                "fold_comments" => layout.fold_comments = value == "true",
+                "comments_open" => layout.comments_open = value == "true",
                 _ => {}
             }
             let Ok(value) = value.parse::<f32>() else {
@@ -155,7 +155,7 @@ impl std::fmt::Display for Layout {
         writeln!(f, "show_sidebar={}", self.show_sidebar)?;
         writeln!(f, "show_files={}", self.show_files)?;
         writeln!(f, "fold_versions={}", self.fold_versions)?;
-        writeln!(f, "fold_comments={}", self.fold_comments)
+        writeln!(f, "comments_open={}", self.comments_open)
     }
 }
 
@@ -425,7 +425,7 @@ mod tests {
             show_sidebar: false,
             show_files: true,
             fold_versions: true,
-            fold_comments: false,
+            comments_open: false,
         };
         assert_eq!(Layout::parse(&layout.to_string()), layout);
         assert_eq!(

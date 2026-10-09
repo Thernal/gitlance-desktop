@@ -83,6 +83,7 @@ actions!(
         CreateRequest,
         ShowShortcuts,
         ToggleThread,
+        ToggleComments,
         NextThread,
         PreviousThread,
         ReplyThread,
@@ -160,6 +161,7 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("r", ReplyThread, Some("Workspace && !Typing")),
                 KeyBinding::new("x", ResolveThread, Some("Workspace && !Typing")),
                 KeyBinding::new("o", ToggleThread, Some("Workspace && !Typing")),
+                KeyBinding::new("cmd-shift-r", ToggleComments, Some("Workspace && !Typing")),
                 KeyBinding::new("tab", NextZone, Some("Workspace && !Typing")),
                 KeyBinding::new("shift-tab", PreviousZone, Some("Workspace && !Typing")),
                 KeyBinding::new("enter", Activate, Some("Workspace && !Typing")),
@@ -2292,14 +2294,6 @@ impl Workspace {
                     .child(self.render_versions(cx))
                     .child(div().h(px(GAP)))
             }))
-            .children(self.render_comments_island(cx).map(|island| {
-                div()
-                    .flex_none()
-                    .flex()
-                    .flex_col()
-                    .child(island)
-                    .child(div().h(px(GAP)))
-            }))
             .child(
                 island()
                     .flex_1()
@@ -2772,7 +2766,8 @@ impl Workspace {
                             ),
                         )
                     })
-                    .when(commits_tab, |s| s.child(self.render_pairs(diff, cx))),
+                    .when(commits_tab, |s| s.child(self.render_pairs(diff, cx)))
+                    .children(self.render_comments_drawer(cx)),
             )
             .into_any_element()
     }
@@ -2806,6 +2801,21 @@ impl Workspace {
                 diff_view::group()
                     .child(chip("split", "Split", !o.unified).on_click(set(Opt::Unified, false)))
                     .child(chip("unified", "Unified", o.unified).on_click(set(Opt::Unified, true))),
+            )
+            .child(
+                diff_view::group().child(
+                    chip(
+                        "comments-chip",
+                        match self.comments_total() {
+                            0 => "Comments".to_owned(),
+                            n => format!("Comments · {n}"),
+                        },
+                        self.layout.comments_open,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.set_comments_open(!this.layout.comments_open, cx)
+                    })),
+                ),
             )
             .child(
                 diff_view::group().child(
@@ -3565,6 +3575,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ReplyThread, _, cx| this.reply_focused(cx)))
             .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))
             .on_action(cx.listener(|this, _: &ToggleThread, _, cx| this.toggle_focused(cx)))
+            .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
+                this.set_comments_open(!this.layout.comments_open, cx)
+            }))
             .on_action(cx.listener(|this, _: &NextZone, _, cx| this.step_zone(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousZone, _, cx| this.step_zone(false, cx)))
             .on_action(cx.listener(|this, _: &Activate, _, cx| this.activate(cx)))

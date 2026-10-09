@@ -41,12 +41,14 @@ pub enum Cmd {
     NewTab,
     CreateRequest,
     Shortcuts,
+    Comments,
 }
 
 const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Compare two refs…", "⌘⇧C", Cmd::Compare),
     ("Create merge request…", "⌥⌘M", Cmd::CreateRequest),
     ("Keyboard shortcuts", "?", Cmd::Shortcuts),
+    ("Show or hide the comments", "⌘⇧R", Cmd::Comments),
     ("Find in the diff", "⌘F", Cmd::FindInDiff),
     ("Search commits", "⌘⇧F", Cmd::FindCommits),
     ("Filter files by path", "⌘P", Cmd::FilterFiles),
@@ -563,5 +565,6 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::NewTab => Box::new(NewTab),
         Cmd::CreateRequest => Box::new(CreateRequest),
         Cmd::Shortcuts => Box::new(ShowShortcuts),
+        Cmd::Comments => Box::new(ToggleComments),
     }
 }
