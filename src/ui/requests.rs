@@ -84,6 +84,14 @@ impl Workspace {
         self.requests.list.iter().find(|m| m.source == name)
     }
 
+    /// Reads the discussions of the current request again (after posting to it).
+    pub(super) fn reload_threads(&mut self, cx: &mut Context<Self>) {
+        if let Some(ix) = self.branch {
+            self.requests.current = None;
+            self.sync_request(ix, cx);
+        }
+    }
+
     /// Follows the branch selection: the request of the branch becomes the current one and its
     /// discussions are read.
     pub(super) fn sync_request(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -116,43 +124,47 @@ impl Workspace {
         }));
     }
 
-    /// Opens the source branch of request `iid`: the remote one if it is there, else a local one.
+    /// Opens merge request `iid`: its branch in the lists and, as the diff, what the branch adds to
+    /// its target — the diff the discussions and new comments belong to.
     pub(super) fn select_request(&mut self, iid: u64, cx: &mut Context<Self>) {
-        let Some(source) = self
+        let Some((source, target)) = self
             .requests
             .list
             .iter()
             .find(|m| m.iid == iid)
-            .map(|m| m.source.clone())
+            .map(|m| (m.source.clone(), m.target.clone()))
         else {
             return;
         };
-        let pick = |kind: RefKind| {
-            self.branches.iter().position(|b| {
-                b.kind == kind
-                    && match kind {
-                        RefKind::Remote => b.name.split_once('/').is_some_and(|(_, n)| n == source),
-                        RefKind::Local => b.name == source,
-                    }
+        let pick = |name: &str| {
+            let remote = self.branches.iter().position(|b| {
+                b.kind == RefKind::Remote && b.name.split_once('/').is_some_and(|(_, n)| n == name)
+            });
+            remote.or_else(|| {
+                self.branches
+                    .iter()
+                    .position(|b| b.kind == RefKind::Local && b.name == name)
             })
         };
-        match pick(RefKind::Remote).or_else(|| pick(RefKind::Local)) {
-            Some(ix) => {
-                self.error = None;
-                self.select_branch(ix, None, cx);
-                self.record();
-                self.review_open = true;
-            }
-            None => {
-                self.error = Some(
-                    format!(
-                        "!{iid}: the branch {source} is not here yet — fetch (Settings → Fetch in the background, or git fetch)."
-                    )
-                    .into(),
-                );
-                cx.notify();
-            }
+        self.pending_compare = None;
+        let Some(src) = pick(&source) else {
+            self.error = Some(
+                format!(
+                    "!{iid}: the branch {source} is not here yet — fetch (Settings → Fetch in the background, or git fetch)."
+                )
+                .into(),
+            );
+            cx.notify();
+            return;
+        };
+        self.error = None;
+        if let Some(tgt) = pick(&target) {
+            let side = |ix: usize| (self.branches[ix].name.clone(), self.branches[ix].tip);
+            self.pending_compare = Some((side(tgt), side(src), iid));
         }
+        self.select_branch(src, None, cx);
+        self.record();
+        self.review_open = true;
     }
 
     /// The requests the filter lets through, in the order the list shows them.
@@ -419,10 +431,13 @@ impl Workspace {
                 .flex_col()
                 .border_b_1()
                 .border_color(theme::island_border())
-                .child(super::island_label(format!(
-                    "!{iid} · {} · {open} open",
-                    plural(threads.len(), "thread")
-                )))
+                .child(
+                    super::island_label(format!(
+                        "GitLab !{iid} · {} · {open} open",
+                        plural(threads.len(), "thread")
+                    ))
+                    .text_color(theme::warning()),
+                )
                 .child(
                     div()
                         .id("mr-threads")

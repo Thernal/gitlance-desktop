@@ -345,7 +345,7 @@ impl Workspace {
                     }
                     Some(Kind::Head(base)) => {
                         self.palette = None;
-                        self.run_compare(base, (name, id), true, cx);
+                        self.run_compare(base, (name, id), true, None, cx);
                     }
                     _ => self.palette = None,
                 }
@@ -379,6 +379,7 @@ impl Workspace {
         base: (String, Oid),
         head: (String, Oid),
         since_merge_base: bool,
+        request: Option<u64>,
         cx: &mut Context<Self>,
     ) {
         let Some(root) = self.root.clone() else {
@@ -396,6 +397,7 @@ impl Workspace {
                     since_merge_base,
                     start: c.start,
                     commits: c.commits,
+                    request,
                 },
                 files: Arc::new(c.files),
                 pairs: Vec::new(),

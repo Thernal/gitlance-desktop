@@ -53,6 +53,11 @@ pub fn available(remote: &WebRemote) -> bool {
     fixture().is_some() || (!remote.github && token().is_some())
 }
 
+/// Whether the checks' fixture stands in for GitLab.
+pub fn fixture_on() -> bool {
+    fixture().is_some()
+}
+
 /// `GITLANCE_MR_FIXTURE=<dir>` reads `mrs.json` and `discussions-<iid>.json` from a directory
 /// instead of the network (for UI checks).
 fn fixture() -> Option<std::path::PathBuf> {
@@ -106,9 +111,34 @@ fn api(remote: &WebRemote) -> Result<(String, String)> {
 }
 
 fn get(remote: &WebRemote, endpoint: &str) -> Result<Value> {
+    request(remote, endpoint, &[])
+}
+
+/// A value inside a curl config file's double quotes.
+fn quote(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+/// One call to the API: a GET, or a POST of `form` fields when there are any.
+fn request(remote: &WebRemote, endpoint: &str, form: &[(&str, String)]) -> Result<Value> {
     let token = token().ok_or_else(|| anyhow!("no token in ~/.config/gitlab-token"))?;
     let (host, project) = api(remote)?;
     let url = format!("{host}/api/v4/projects/{project}/{endpoint}");
+    let mut config = format!(
+        "url = \"{}\"\nheader = \"PRIVATE-TOKEN: {}\"\n",
+        quote(&url),
+        quote(&token)
+    );
+    if !form.is_empty() {
+        config.push_str("request = \"POST\"\n");
+        for (name, value) in form {
+            config.push_str(&format!("data-urlencode = \"{name}={}\"\n", quote(value)));
+        }
+    }
     // The token goes in on stdin, not on the command line, where `ps` would show it.
     let mut child = Command::new("curl")
         .args(["-sS", "--max-time", "25", "-K", "-", "-w", "\n%{http_code}"])
@@ -118,10 +148,7 @@ fn get(remote: &WebRemote, endpoint: &str) -> Result<Value> {
         .spawn()
         .map_err(|_| anyhow!("curl is not installed"))?;
     if let Some(mut stdin) = child.stdin.take() {
-        write!(
-            stdin,
-            "url = \"{url}\"\nheader = \"PRIVATE-TOKEN: {token}\"\n"
-        )?;
+        stdin.write_all(config.as_bytes())?;
     }
     let out = child.wait_with_output()?;
     if !out.status.success() {
@@ -130,11 +157,81 @@ fn get(remote: &WebRemote, endpoint: &str) -> Result<Value> {
     let text = String::from_utf8_lossy(&out.stdout);
     let (body, code) = text.rsplit_once('\n').unwrap_or((&text, ""));
     match code.trim() {
-        "200" => Ok(serde_json::from_str(body)?),
+        "200" | "201" => Ok(serde_json::from_str(body)?),
         "401" | "403" => bail!("GitLab refused the token"),
         "404" => bail!("GitLab does not know this project (or the token cannot see it)"),
+        "400" => bail!("GitLab would not take the comment there: {}", message(body)),
         other => bail!("GitLab answered {other}"),
     }
+}
+
+/// The `message` GitLab sends with an error, as text.
+fn message(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("message").map(|m| m.to_string()))
+        .unwrap_or_else(|| body.chars().take(160).collect())
+}
+
+/// Where a comment goes in a merge request's diff.
+pub struct Place<'a> {
+    pub path: &'a str,
+    pub old_path: &'a str,
+    pub new_line: Option<u32>,
+    pub old_line: Option<u32>,
+}
+
+/// Posts `body` as a new discussion on a line of merge request `iid`, whose head the reviewer sees
+/// as `head`. Refuses when GitLab's head is another commit: the line numbers would not mean the
+/// same thing there.
+pub fn post_discussion(
+    remote: &WebRemote,
+    iid: u64,
+    head: &str,
+    place: &Place<'_>,
+    body: &str,
+) -> Result<()> {
+    if let Some(dir) = fixture() {
+        // UI checks: record what would have been sent.
+        let file = dir.join("posted.txt");
+        let mut text = std::fs::read_to_string(&file).unwrap_or_default();
+        text.push_str(&format!(
+            "{iid} {} {:?} {:?} {body}\n",
+            place.path, place.new_line, place.old_line
+        ));
+        std::fs::write(file, text)?;
+        return Ok(());
+    }
+    let mr = get(remote, &format!("merge_requests/{iid}"))?;
+    let refs = mr.get("diff_refs").filter(|r| !r.is_null());
+    let sha = |key: &str| refs.map(|r| text(r, key)).unwrap_or_default();
+    let (base, theirs, start) = (sha("base_sha"), sha("head_sha"), sha("start_sha"));
+    if theirs.is_empty() {
+        bail!("GitLab has no diff for this merge request yet");
+    }
+    if !theirs.starts_with(head) && !head.starts_with(&theirs) {
+        bail!(
+            "The branch here is not the version on GitLab ({}) — fetch first",
+            &theirs[..7.min(theirs.len())]
+        );
+    }
+    let mut form = vec![
+        ("body", body.to_owned()),
+        ("position[position_type]", "text".to_owned()),
+        ("position[base_sha]", base),
+        ("position[head_sha]", theirs),
+        ("position[start_sha]", start),
+        ("position[new_path]", place.path.to_owned()),
+        ("position[old_path]", place.old_path.to_owned()),
+    ];
+    if let Some(n) = place.new_line {
+        form.push(("position[new_line]", n.to_string()));
+    }
+    if let Some(n) = place.old_line {
+        form.push(("position[old_line]", n.to_string()));
+    }
+    request(remote, &format!("merge_requests/{iid}/discussions"), &form)?;
+    Ok(())
 }
 
 fn text(value: &Value, key: &str) -> String {
@@ -323,6 +420,37 @@ mod tests {
         assert_eq!(threads[0].notes.len(), 2);
         assert!(!threads[0].resolved);
         assert_eq!(threads[1].path, None);
+    }
+
+    #[test]
+    fn a_value_is_quoted_for_a_curl_config() {
+        assert_eq!(
+            quote("say \"hi\"\nback\\slash"),
+            "say \\\"hi\\\"\\nback\\\\slash"
+        );
+    }
+
+    #[test]
+    fn a_comment_is_recorded_in_the_fixture() {
+        let dir = std::env::temp_dir().join(format!("gitlance-mr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // SAFETY: only this test sets the variable.
+        unsafe { std::env::set_var("GITLANCE_MR_FIXTURE", &dir) };
+        let remote = WebRemote {
+            base: "https://git.example.com/g/p".into(),
+            github: false,
+        };
+        let place = Place {
+            path: "a.rs",
+            old_path: "a.rs",
+            new_line: Some(3),
+            old_line: None,
+        };
+        post_discussion(&remote, 412, "abc", &place, "Why?").unwrap();
+        let posted = std::fs::read_to_string(dir.join("posted.txt")).unwrap();
+        assert!(posted.contains("412 a.rs Some(3) None Why?"));
+        unsafe { std::env::remove_var("GITLANCE_MR_FIXTURE") };
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -11,6 +11,15 @@ use gpui::{
     ClickEvent, ClipboardItem, Context, FontWeight, KeyDownEvent, WeakEntity, div, prelude::*, px,
 };
 
+/// Who a comment is for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Target {
+    /// Kept on this Mac and copied for a coding agent.
+    Agent,
+    /// Posted to a merge request on GitLab, where everyone on it sees it.
+    Request(u64),
+}
+
 /// A comment being written.
 pub struct Compose {
     path: String,
@@ -19,6 +28,10 @@ pub struct Compose {
     code: String,
     pub body: String,
     at: String,
+    target: Target,
+    /// Why the last attempt to post failed.
+    error: Option<String>,
+    posting: bool,
 }
 
 impl Workspace {
@@ -114,9 +127,40 @@ impl Workspace {
             code,
             body: String::new(),
             at,
+            target: Target::Agent,
+            error: None,
+            posting: false,
         });
         self.refresh_rows();
         cx.notify();
+    }
+
+    /// The merge request whose diff is open, when a comment can be posted to it.
+    pub(super) fn request_target(&self) -> Option<u64> {
+        match self.diff.as_ref()?.header {
+            super::Header::Compare {
+                request: Some(iid),
+                since_merge_base: true,
+                ..
+            } if self.web.is_some() && crate::mr::token().is_some() || crate::mr::fixture_on() => {
+                Some(iid)
+            }
+            _ => None,
+        }
+    }
+
+    fn toggle_target(&mut self, cx: &mut Context<Self>) {
+        let request = self.request_target();
+        if let Some(compose) = self.compose.as_mut()
+            && !compose.posting
+        {
+            compose.target = match (compose.target, request) {
+                (Target::Agent, Some(iid)) => Target::Request(iid),
+                _ => Target::Agent,
+            };
+            compose.error = None;
+            cx.notify();
+        }
     }
 
     pub(super) fn cancel_comment(&mut self, cx: &mut Context<Self>) {
@@ -127,6 +171,13 @@ impl Workspace {
     }
 
     pub(super) fn add_comment(&mut self, cx: &mut Context<Self>) {
+        if let Some(Compose {
+            target: Target::Request(iid),
+            ..
+        }) = self.compose
+        {
+            return self.post_comment(iid, cx);
+        }
         let Some(compose) = self.compose.take() else {
             return;
         };
@@ -151,6 +202,243 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Posts the comment being written to merge request `iid`, on its line.
+    fn post_comment(&mut self, iid: u64, cx: &mut Context<Self>) {
+        let (Some(remote), Some(compose)) = (self.web.clone(), self.compose.as_ref()) else {
+            return;
+        };
+        let body = compose.body.trim().to_owned();
+        let head = match self.diff.as_ref().map(|d| &d.header) {
+            Some(super::Header::Compare { head, .. }) => head.1.to_string(),
+            _ => return,
+        };
+        let file = self
+            .diff
+            .as_ref()
+            .and_then(|d| d.files.get(self.file))
+            .map(|f| (f.new_path.clone(), f.old_path.clone()));
+        if body.is_empty() || compose.posting {
+            return;
+        }
+        let Some((new_path, old_path)) = file else {
+            return;
+        };
+        let (old_line, new_line) = self.line_pair(compose.line, compose.old);
+        let path = new_path.clone().or(old_path.clone()).unwrap_or_default();
+        let old_path = old_path.or(new_path).unwrap_or_default();
+        if let Some(c) = self.compose.as_mut() {
+            c.posting = true;
+            c.error = None;
+        }
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    crate::mr::post_discussion(
+                        &remote,
+                        iid,
+                        &head,
+                        &crate::mr::Place {
+                            path: &path,
+                            old_path: &old_path,
+                            new_line,
+                            old_line,
+                        },
+                        &body,
+                    )
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(()) => {
+                        this.compose = None;
+                        this.review_open = true;
+                        this.refresh_rows();
+                        this.reload_threads(cx);
+                    }
+                    Err(e) => {
+                        if let Some(c) = this.compose.as_mut() {
+                            c.posting = false;
+                            c.error = Some(format!("{e:#}"));
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The old and the new line numbers GitLab wants for a line: both for an unchanged line, one
+    /// for an added or removed line.
+    fn line_pair(&self, line: u32, old: bool) -> (Option<u32>, Option<u32>) {
+        use crate::git::LineKind;
+        let single = if old {
+            (Some(line), None)
+        } else {
+            (None, Some(line))
+        };
+        let Some(at) = self.row_of_line(line, old) else {
+            return single;
+        };
+        match self.rows[at] {
+            Row::Split {
+                left: Some(l),
+                right: Some(r),
+            } if l.kind == LineKind::Context => (Some(l.line), Some(r.line)),
+            Row::Unified {
+                cell,
+                old_line: Some(o),
+                new_line: Some(n),
+                ..
+            } if cell.kind == LineKind::Context => (Some(o), Some(n)),
+            _ => single,
+        }
+    }
+
+    // ---- a comment by line number ------------------------------------------------------------
+
+    /// `c`: type a line number, then the comment.
+    pub(super) fn open_goline(&mut self, cx: &mut Context<Self>) {
+        if self.data.is_none() || self.settings_open || self.compose.is_some() {
+            return;
+        }
+        self.field_all = false;
+        self.zone = super::zones::Zone::Diff;
+        self.goline = Some(String::new());
+        cx.notify();
+    }
+
+    pub(super) fn goline_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let Some(text) = self.goline.as_mut() else {
+            return;
+        };
+        match input::edit(text, &mut self.field_all, &event.keystroke, cx) {
+            Edit::Escape => self.goline = None,
+            // Digits, and a minus first for a removed line.
+            Edit::Changed => {
+                let filtered: String = text
+                    .chars()
+                    .enumerate()
+                    .filter(|(i, c)| c.is_ascii_digit() || (*i == 0 && *c == '-'))
+                    .map(|(_, c)| c)
+                    .collect();
+                *text = filtered;
+            }
+            Edit::Enter { .. } => return self.finish_goline(cx),
+            Edit::Selected | Edit::Ignored => {}
+        }
+        cx.notify();
+    }
+
+    /// Opens the composer under the line that was typed; with nothing typed, under the first change.
+    fn finish_goline(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = self.goline.take() else {
+            return;
+        };
+        let Some(data) = self.data.clone() else {
+            return;
+        };
+        let (old, line) = if text.trim().is_empty() {
+            let first = self
+                .changes
+                .first()
+                .and_then(|&row| self.rows.get(row))
+                .copied();
+            match first {
+                Some(Row::Split { right: Some(c), .. }) => (false, c.line),
+                Some(Row::Split { left: Some(c), .. }) => (true, c.line),
+                Some(Row::Unified { cell, old, .. }) => (old, cell.line),
+                _ => return cx.notify(),
+            }
+        } else {
+            let old = text.starts_with('-');
+            let Ok(n) = text.trim_start_matches('-').parse::<u32>() else {
+                return cx.notify();
+            };
+            (old, n)
+        };
+        if line == 0 || line > data.side(old).count() {
+            self.error = Some(
+                format!(
+                    "This file has {} {} lines.",
+                    data.side(old).count(),
+                    if old { "old" } else { "new" }
+                )
+                .into(),
+            );
+            return cx.notify();
+        }
+        self.reveal_line(line, old);
+        self.start_comment(old, line, cx);
+        if let Some(at) = self.row_of_line(line, old) {
+            self.diff_list.scroll_to_reveal_item(at + 1);
+        }
+    }
+
+    /// Opens the collapsed run of unchanged lines that holds `line`, if there is one.
+    fn reveal_line(&mut self, line: u32, old: bool) {
+        if self.row_of_line(line, old).is_some() {
+            return;
+        }
+        let Some(data) = &self.data else {
+            return;
+        };
+        let hit = data.segments.iter().position(|s| match s {
+            super::rows::Segment::Same {
+                old: o,
+                new: n,
+                len,
+            } => {
+                let start = if old { *o } else { *n };
+                line >= start && line < start + len
+            }
+            super::rows::Segment::Change(_) => false,
+        });
+        if let Some(segment) = hit {
+            self.expanded.insert(segment);
+            self.relayout();
+        }
+    }
+
+    pub(super) fn render_goline(&self) -> Option<impl IntoElement + use<>> {
+        let text = self.goline.as_ref()?;
+        Some(
+            div()
+                .absolute()
+                .bottom(px(16.))
+                .left(px(16.))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .px_3()
+                .py_2()
+                .rounded(px(ROW_RADIUS))
+                .border_2()
+                .border_color(theme::focus())
+                .bg(theme::panel())
+                .shadow_lg()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().text_color(theme::muted()).child("Comment on line"))
+                        .child(
+                            div()
+                                .min_w(px(60.))
+                                .font_family(theme::CODE_FONT)
+                                .child(input::field_text(text, true, self.field_all, "number")),
+                        ),
+                )
+                .child(div().text_size(px(11.)).text_color(theme::faint()).child(
+                    "↵ opens the comment · −12 for a removed line · empty: the first change · esc",
+                )),
+        )
+    }
+
     pub(super) fn delete_comment(&mut self, id: u64, cx: &mut Context<Self>) {
         self.comments.retain(|c| c.id != id);
         self.save_comments();
@@ -173,6 +461,9 @@ impl Workspace {
         };
         if key.key == "enter" && key.modifiers.platform {
             return self.add_comment(cx);
+        }
+        if key.key == "tab" {
+            return self.toggle_target(cx);
         }
         if key.key == "enter" {
             if std::mem::take(&mut self.field_all) {
@@ -252,7 +543,7 @@ impl Workspace {
                             .gap_2()
                             .text_size(px(11.))
                             .text_color(theme::faint())
-                            .child(div().child("You"))
+                            .child(div().text_color(theme::focus()).child("You → agent"))
                             .child(div().flex_1().child(format!("· {}", comment.at)))
                             .child(
                                 div()
@@ -276,7 +567,31 @@ impl Workspace {
         let Some(compose) = &self.compose else {
             return div().into_any_element();
         };
-        let (add, cancel) = (this.clone(), this);
+        let (add, cancel, pick_agent, pick_request) =
+            (this.clone(), this.clone(), this.clone(), this);
+        let request = self.request_target();
+        let to_request = matches!(compose.target, Target::Request(_));
+        // Agent notes are purple, what goes to GitLab is orange: the two never look alike.
+        let tone = if to_request {
+            theme::warning()
+        } else {
+            theme::focus()
+        };
+        let target_chip = |id: &'static str, label: String, on: bool, color: gpui::Rgba| {
+            div()
+                .id(id)
+                .px_2()
+                .py(px(1.))
+                .rounded(px(ROW_RADIUS))
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .cursor_pointer()
+                .border_1()
+                .border_color(if on { color } else { theme::island_border() })
+                .text_color(if on { color } else { theme::muted() })
+                .hover(|s| s.bg(theme::hover()))
+                .child(label)
+        };
         div()
             .w_full()
             .pl(px(indent))
@@ -290,16 +605,73 @@ impl Workspace {
                     .gap_2()
                     .p_3()
                     .rounded(px(ROW_RADIUS))
-                    .border_1()
-                    .border_color(theme::focus())
+                    .border_2()
+                    .border_color(tone)
                     .bg(theme::panel())
                     .font_family(theme::UI_FONT)
                     .text_size(px(12.))
                     .line_height(px(17.))
-                    .child(if compose.body.is_empty() {
+                    .child(
                         div()
-                            .text_color(theme::faint())
-                            .child("Comment for your agent…  ⌘↵ adds it")
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                target_chip(
+                                    "target-agent",
+                                    "For your agent".to_owned(),
+                                    !to_request,
+                                    theme::focus(),
+                                )
+                                .on_click(move |_, _, cx| {
+                                    pick_agent
+                                        .update(cx, |this, cx| {
+                                            if let Some(c) = this.compose.as_mut() {
+                                                c.target = Target::Agent;
+                                                c.error = None;
+                                            }
+                                            cx.notify();
+                                        })
+                                        .ok();
+                                }),
+                            )
+                            .children(request.map(|iid| {
+                                target_chip(
+                                    "target-request",
+                                    format!("On !{iid} · GitLab"),
+                                    to_request,
+                                    theme::warning(),
+                                )
+                                .on_click(move |_, _, cx| {
+                                    pick_request
+                                        .update(cx, |this, cx| {
+                                            if let Some(c) = this.compose.as_mut() {
+                                                c.target = Target::Request(iid);
+                                                c.error = None;
+                                            }
+                                            cx.notify();
+                                        })
+                                        .ok();
+                                })
+                            }))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(px(11.))
+                                    .text_color(theme::faint())
+                                    .child(if request.is_some() {
+                                        "Tab switches"
+                                    } else {
+                                        ""
+                                    }),
+                            ),
+                    )
+                    .child(if compose.body.is_empty() {
+                        div().text_color(theme::faint()).child(if to_request {
+                            "Comment on the merge request — everyone on it will see it  ⌘↵ posts"
+                        } else {
+                            "Comment for your agent — stays on this Mac  ⌘↵ adds it"
+                        })
                     } else {
                         div()
                             .flex()
@@ -320,6 +692,12 @@ impl Workspace {
                                     .bg(theme::accent())
                             }))
                     })
+                    .children(compose.error.clone().map(|e| {
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme::removed())
+                            .child(e)
+                    }))
                     .child(
                         div()
                             .flex()
@@ -352,10 +730,16 @@ impl Workspace {
                                     .px_3()
                                     .rounded(px(ROW_RADIUS))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .bg(theme::accent())
+                                    .bg(tone)
                                     .text_color(theme::base())
                                     .cursor_pointer()
-                                    .child("Add comment  ⌘↵")
+                                    .child(match (&compose.target, compose.posting) {
+                                        (Target::Request(_), true) => "Posting…".to_owned(),
+                                        (Target::Request(iid), false) => {
+                                            format!("Post to !{iid}  ⌘↵")
+                                        }
+                                        (Target::Agent, _) => "Add for agent  ⌘↵".to_owned(),
+                                    })
                                     .on_click(move |_, _, cx| {
                                         add.update(cx, |this, cx| this.add_comment(cx)).ok();
                                     }),
@@ -410,10 +794,13 @@ impl Workspace {
             .flex_none()
             .ml(px(GAP))
             .children(threads)
-            .child(island_label(format!(
-                "Review · {count} comment{}",
-                if count == 1 { "" } else { "s" }
-            )))
+            .child(
+                island_label(format!(
+                    "For your agent · {count} comment{}",
+                    if count == 1 { "" } else { "s" }
+                ))
+                .text_color(theme::focus()),
+            )
             .child(
                 div()
                     .id("review-list")

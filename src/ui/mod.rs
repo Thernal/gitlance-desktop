@@ -75,6 +75,7 @@ actions!(
         ToggleWrap,
         ToggleFullContext,
         ToggleWhitespace,
+        CommentLine,
         NextZone,
         PreviousZone,
         Activate,
@@ -134,6 +135,7 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("cmd-]", GoForward, Some("Workspace")),
                 KeyBinding::new("cmd-alt-1", ToggleSidebar, Some("Workspace")),
                 KeyBinding::new("cmd-alt-2", ToggleFiles, Some("Workspace")),
+                KeyBinding::new("c", CommentLine, Some("Workspace && !Typing")),
                 KeyBinding::new("tab", NextZone, Some("Workspace && !Typing")),
                 KeyBinding::new("shift-tab", PreviousZone, Some("Workspace && !Typing")),
                 KeyBinding::new("enter", Activate, Some("Workspace && !Typing")),
@@ -491,7 +493,7 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                     .split(',')
                     .filter_map(|s| Some((s.to_owned(), repo.as_ref()?.resolve(s).ok()?)));
                 if let (Some(base), Some(head)) = (sides.next(), sides.next()) {
-                    this.run_compare(base, head, true, cx);
+                    this.run_compare(base, head, true, None, cx);
                 }
             });
             wait(1500).await;
@@ -571,6 +573,8 @@ enum Header {
         since_merge_base: bool,
         start: git2::Oid,
         commits: usize,
+        /// The merge request this is the diff of, so comments can go to it.
+        request: Option<u64>,
     },
     /// One commit of an older version against its counterpart in a newer one.
     Interdiff {
@@ -580,6 +584,11 @@ enum Header {
         new: PairCommit,
     },
 }
+
+/// A ref's name and the commit it points at.
+type NamedTip = (String, git2::Oid);
+/// Base, head and merge request of a diff to show.
+type PendingCompare = (NamedTip, NamedTip, u64);
 
 /// The working tree's count and fingerprint, polled while a repository is open.
 #[derive(Default)]
@@ -664,6 +673,10 @@ pub struct Workspace {
     fetch: fetch::Fetch,
     shell: Option<gpui::WeakEntity<shell::Shell>>,
     requests: requests::Requests,
+    /// A merge request's diff to show once its branch has loaded: base, head, request.
+    pending_compare: Option<PendingCompare>,
+    /// The line number being typed for a quick comment.
+    goline: Option<String>,
     jump_line: Option<(u32, bool)>,
     tabs: shell::TabModel,
     diff: Option<Diff>,
@@ -774,6 +787,8 @@ impl Workspace {
             fetch: fetch::Fetch::default(),
             shell: None,
             requests: Default::default(),
+            pending_compare: None,
+            goline: None,
             jump_line: None,
             tabs: Default::default(),
             diff: None,
@@ -965,6 +980,9 @@ impl Workspace {
                             .unwrap_or(0);
                         if !this.commits.is_empty() {
                             this.select_commit(ix, cx);
+                        }
+                        if let Some((base, head, iid)) = this.pending_compare.take() {
+                            this.run_compare(base, head, true, Some(iid), cx);
                         }
                     }
                     Err(err) => this.error = Some(format!("{err:#}").into()),
@@ -2616,8 +2634,9 @@ impl Workspace {
                 since_merge_base,
                 start,
                 commits,
+                request,
             } => {
-                let (b, h, since) = (base.clone(), head.clone(), *since_merge_base);
+                let (b, h, since, req) = (base.clone(), head.clone(), *since_merge_base, *request);
                 let (b2, h2) = (b.clone(), h.clone());
                 let (b3, h3) = (b.clone(), h.clone());
                 header
@@ -2636,18 +2655,18 @@ impl Workspace {
                                 diff_view::group()
                                     .child(chip("cmp-since", "Since merge base", since).on_click(
                                         cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                            this.run_compare(b.clone(), h.clone(), true, cx)
+                                            this.run_compare(b.clone(), h.clone(), true, req, cx)
                                         }),
                                     ))
                                     .child(chip("cmp-direct", "Direct", !since).on_click(
                                         cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                            this.run_compare(b2.clone(), h2.clone(), false, cx)
+                                            this.run_compare(b2.clone(), h2.clone(), false, req, cx)
                                         }),
                                     )),
                             )
                             .child(chip("cmp-swap", "⇄ Swap", false).on_click(cx.listener(
                                 move |this, _: &ClickEvent, _, cx| {
-                                    this.run_compare(h3.clone(), b3.clone(), since, cx)
+                                    this.run_compare(h3.clone(), b3.clone(), since, None, cx)
                                 },
                             ))),
                     )
@@ -2804,6 +2823,7 @@ impl Workspace {
         };
         let mode_note = self.data.as_ref().and_then(|d| d.mode_note.clone());
         island()
+            .relative()
             .flex_1()
             .min_w_0()
             .bg(theme::editor())
@@ -2896,6 +2916,7 @@ impl Workspace {
                     }))
             }))
             .children(self.render_dfind(cx))
+            .children(self.render_goline())
             .children(self.notice.as_ref().map(|notice| {
                 div()
                     .flex_none()
@@ -3079,6 +3100,7 @@ impl Render for Workspace {
                     || self.compose.is_some()
                     || self.field.is_some()
                     || self.palette.is_some()
+                    || self.goline.is_some()
                 {
                     if self.palette.is_some() {
                         "Workspace Typing Palette"
@@ -3116,6 +3138,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::previous_change))
             .on_action(cx.listener(Self::next_match))
             .on_action(cx.listener(Self::previous_match))
+            .on_action(cx.listener(|this, _: &CommentLine, _, cx| this.open_goline(cx)))
             .on_action(cx.listener(|this, _: &NextZone, _, cx| this.step_zone(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousZone, _, cx| this.step_zone(false, cx)))
             .on_action(cx.listener(|this, _: &Activate, _, cx| this.activate(cx)))
