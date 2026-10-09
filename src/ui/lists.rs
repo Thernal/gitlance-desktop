@@ -474,7 +474,7 @@ pub fn file_items(
 }
 
 impl Workspace {
-    fn items(&self) -> Vec<FileItem> {
+    pub(super) fn items(&self) -> Vec<FileItem> {
         match &self.diff {
             Some(diff) => file_items(
                 &diff.files,
@@ -493,6 +493,28 @@ impl Workspace {
             .filter_map(|item| match item {
                 FileItem::File { ix, .. } => Some(ix),
                 FileItem::Dir { .. } => None,
+            })
+            .collect()
+    }
+
+    /// What the files island shows, as keys for keyboard movement.
+    pub(super) fn item_keys(&self) -> Vec<super::zones::ItemKey> {
+        self.items()
+            .into_iter()
+            .map(|item| match item {
+                FileItem::File { ix, .. } => super::zones::ItemKey::File(ix),
+                FileItem::Dir { path, .. } => super::zones::ItemKey::Dir(path),
+            })
+            .collect()
+    }
+
+    /// Branch indexes in the order the list shows them.
+    pub(super) fn branch_ixs(&self) -> Vec<usize> {
+        self.branch_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                BranchItem::Branch(ix) => Some(ix),
+                BranchItem::Header(..) => None,
             })
             .collect()
     }
@@ -516,7 +538,7 @@ impl Workspace {
         }
     }
 
-    fn toggle_dir(&mut self, path: &str, cx: &mut Context<Self>) {
+    pub(super) fn toggle_dir(&mut self, path: &str, cx: &mut Context<Self>) {
         if !self.collapsed.remove(path) {
             self.collapsed.insert(path.to_owned());
         }
@@ -533,6 +555,11 @@ impl Workspace {
         super::island()
             .w(px(self.layout.files))
             .flex_none()
+            .border_color(self.zone_border(super::zones::Zone::Files))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.set_zone(super::zones::Zone::Files, cx)),
+            )
             .child(
                 div()
                     .flex_none()
@@ -633,30 +660,31 @@ impl Workspace {
                     .px(px(6.))
                     .py(px(1.))
                     .child(
-                        row(("dir", path.len() * 31 + *depth), false)
-                            .h(px(26.))
-                            .gap_2()
-                            .pl(px(8. + *depth as f32 * 14.))
-                            .text_color(theme::muted())
-                            .child(
-                                super::icons::icon(if *collapsed {
-                                    "chevron-right"
-                                } else {
-                                    "chevron"
-                                })
-                                .size(px(16.))
-                                .text_color(theme::muted()),
-                            )
-                            .child(div().flex_1().min_w_0().truncate().child(name.clone()))
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(theme::faint())
-                                    .child(count.to_string()),
-                            )
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.toggle_dir(&target, cx)),
-                            ),
+                        row(
+                            ("dir", path.len() * 31 + *depth),
+                            self.fcursor.as_deref() == Some(path.as_str()),
+                        )
+                        .h(px(26.))
+                        .gap_2()
+                        .pl(px(8. + *depth as f32 * 14.))
+                        .text_color(theme::muted())
+                        .child(
+                            super::icons::icon(if *collapsed {
+                                "chevron-right"
+                            } else {
+                                "chevron"
+                            })
+                            .size(px(16.))
+                            .text_color(theme::muted()),
+                        )
+                        .child(div().flex_1().min_w_0().truncate().child(name.clone()))
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(theme::faint())
+                                .child(count.to_string()),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| this.toggle_dir(&target, cx))),
                     )
                     .into_any_element()
             }

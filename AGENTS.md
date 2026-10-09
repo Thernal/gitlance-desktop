@@ -23,5 +23,9 @@ Feature specs, UI mockups and design decisions: the sibling repo `../Design` —
   `src/ui/` (GPUI views), `src/storage.rs` (recent repos, pane sizes, view options, Settings).
   Icons are Lucide, embedded in `src/ui/icons.rs` (one set, drawn in the text colour; set `.text_color` on the svg itself).
   `src/ui/` splits into `find.rs` (search field), `watch.rs` (auto-refresh: polls `.git`, read-only), `settings.rs`, `palette.rs` (⌘K palette and the compare picker), `src/mr.rs` (GitLab merge requests and discussions through curl and `~/.config/gitlab-token`; `GITLANCE_MR_FIXTURE=<dir>` reads `mrs.json` and `discussions-<iid>.json` instead), `requests.rs` (the merge-request list, titles, discussions in the review panel; snapshot VIEW `requests`, `GITLANCE_SNAPSHOT_MR=<iid>`), `shell.rs` (repository tabs: ⌘T ⌘W ⌘⇧T ⌘1…9; the hide-island shortcuts are ⌥⌘1 ⌥⌘2; snapshot env `GITLANCE_SNAPSHOT_TABS=<path>`), `fetch.rs` (opt-in background fetch), `working.rs` (working tree against HEAD, polled every 2 s; VIEW token `worktree`). `./run.sh` builds and opens it.
+- **Keyboard**: four focus zones (branches, commits, files, diff; `ui/zones.rs`) — the one with the keyboard has an
+  outlined island. Tab / ⇧Tab or ⌃1…4 move between them; ↑ ↓ (j k) act in the zone, ← → (h l) step files (in the file
+  tree they close and open folders), ↵ goes one step in, Space / PageUp / PageDown / Home / End move the diff. A new
+  list needs its zone arm in `zone_vertical`, and an island border from `zone_border`.
 - Commits: Conventional Commits — `<type>(<scope>): <subject>`, imperative, lowercase, no trailing period.
 - Agent scratch files go in `.misc/` (ignored).

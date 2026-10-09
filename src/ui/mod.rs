@@ -18,6 +18,7 @@ mod shell;
 mod theme;
 mod watch;
 mod working;
+mod zones;
 
 use crate::git::{
     BranchRef, ChangeKind, CommitInfo, DiffSettings, FileDiff, PairCommit, PairKind, RangePair,
@@ -74,6 +75,17 @@ actions!(
         ToggleWrap,
         ToggleFullContext,
         ToggleWhitespace,
+        NextZone,
+        PreviousZone,
+        Activate,
+        PageUp,
+        PageDown,
+        DiffStart,
+        DiffEnd,
+        FocusBranches,
+        FocusCommits,
+        FocusFiles,
+        FocusDiffZone,
         NewTab,
         CloseTab,
         ReopenTab,
@@ -122,6 +134,21 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("cmd-]", GoForward, Some("Workspace")),
                 KeyBinding::new("cmd-alt-1", ToggleSidebar, Some("Workspace")),
                 KeyBinding::new("cmd-alt-2", ToggleFiles, Some("Workspace")),
+                KeyBinding::new("tab", NextZone, Some("Workspace && !Typing")),
+                KeyBinding::new("shift-tab", PreviousZone, Some("Workspace && !Typing")),
+                KeyBinding::new("enter", Activate, Some("Workspace && !Typing")),
+                KeyBinding::new("pagedown", PageDown, Some("Workspace && !Typing")),
+                KeyBinding::new("space", PageDown, Some("Workspace && !Typing")),
+                KeyBinding::new("pageup", PageUp, Some("Workspace && !Typing")),
+                KeyBinding::new("shift-space", PageUp, Some("Workspace && !Typing")),
+                KeyBinding::new("home", DiffStart, Some("Workspace && !Typing")),
+                KeyBinding::new("end", DiffEnd, Some("Workspace && !Typing")),
+                KeyBinding::new("h", PreviousFile, Some("Workspace && !Typing")),
+                KeyBinding::new("l", NextFile, Some("Workspace && !Typing")),
+                KeyBinding::new("ctrl-1", FocusBranches, Some("Workspace")),
+                KeyBinding::new("ctrl-2", FocusCommits, Some("Workspace")),
+                KeyBinding::new("ctrl-3", FocusFiles, Some("Workspace")),
+                KeyBinding::new("ctrl-4", FocusDiffZone, Some("Workspace")),
                 KeyBinding::new("cmd-t", NewTab, Some("Workspace")),
                 KeyBinding::new("cmd-w", CloseTab, Some("Workspace")),
                 KeyBinding::new("cmd-shift-t", ReopenTab, Some("Workspace")),
@@ -631,6 +658,8 @@ pub struct Workspace {
     selection: Selection,
     version_tab: VersionTab,
     palette: Option<palette::Palette>,
+    zone: zones::Zone,
+    fcursor: Option<String>,
     wt: WorkingState,
     fetch: fetch::Fetch,
     shell: Option<gpui::WeakEntity<shell::Shell>>,
@@ -739,6 +768,8 @@ impl Workspace {
             selection: Selection::None,
             version_tab: VersionTab::Files,
             palette: None,
+            zone: zones::Zone::default(),
+            fcursor: None,
             wt: WorkingState::default(),
             fetch: fetch::Fetch::default(),
             shell: None,
@@ -1094,6 +1125,7 @@ impl Workspace {
             return;
         };
         self.file = ix;
+        self.fcursor = None;
         self.clear_file();
         self.scroll_file_into_view(ix);
         let mode = self.options.mode;
@@ -1430,47 +1462,23 @@ impl Workspace {
     }
 
     fn previous_commit(&mut self, _: &PreviousCommit, _: &mut Window, cx: &mut Context<Self>) {
-        if let Selection::Commit(ix) = self.selection
-            && let Some(row) = self.row_of(ix)
-            && row > 0
-        {
-            self.select_commit(self.commit_at(row - 1), cx);
-        }
+        self.zone_vertical(false, cx);
     }
 
     fn next_commit(&mut self, _: &NextCommit, _: &mut Window, cx: &mut Context<Self>) {
-        match self.selection {
-            Selection::Commit(ix) => {
-                if let Some(row) = self.row_of(ix)
-                    && row + 1 < self.commit_rows()
-                {
-                    self.select_commit(self.commit_at(row + 1), cx);
-                }
-            }
-            Selection::None if self.commit_rows() > 0 => self.select_commit(self.commit_at(0), cx),
-            _ => {}
-        }
+        self.zone_vertical(true, cx);
     }
 
     fn previous_file(&mut self, _: &PreviousFile, _: &mut Window, cx: &mut Context<Self>) {
-        let order = self.file_order();
-        if let Some(at) = order.iter().position(|&ix| ix == self.file)
-            && at > 0
-        {
-            self.select_file(order[at - 1], cx);
-        }
+        self.zone_horizontal(false, cx);
     }
 
     fn next_file(&mut self, _: &NextFile, _: &mut Window, cx: &mut Context<Self>) {
-        let order = self.file_order();
-        if let Some(at) = order.iter().position(|&ix| ix == self.file)
-            && at + 1 < order.len()
-        {
-            self.select_file(order[at + 1], cx);
-        }
+        self.zone_horizontal(true, cx);
     }
 
     fn filter_files_action(&mut self, _: &FilterFiles, _: &mut Window, cx: &mut Context<Self>) {
+        self.zone = zones::Zone::Files;
         self.start_field(Field::Files, cx);
     }
 
@@ -1990,6 +1998,11 @@ impl Workspace {
             .child(
                 island()
                     .h(px(self.layout.branches))
+                    .border_color(self.zone_border(zones::Zone::Branches))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| this.set_zone(zones::Zone::Branches, cx)),
+                    )
                     .child(self.render_branches_header(cx))
                     .child(
                         if self.requests.side == requests::Side::Requests && self.requests.available
@@ -2013,6 +2026,11 @@ impl Workspace {
                 island()
                     .flex_1()
                     .min_h_0()
+                    .border_color(self.zone_border(zones::Zone::Commits))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| this.set_zone(zones::Zone::Commits, cx)),
+                    )
                     .child(island_label(format!("Commits · {}", self.commits.len())))
                     .children(self.render_working_row(cx))
                     .child(self.render_find(cx))
@@ -2789,6 +2807,11 @@ impl Workspace {
             .flex_1()
             .min_w_0()
             .bg(theme::editor())
+            .border_color(self.zone_border(zones::Zone::Diff))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.set_zone(zones::Zone::Diff, cx)),
+            )
             .children(file.map(|f| {
                 let path = match (&f.old_path, &f.new_path) {
                     (Some(old), Some(new)) if old != new => format!("{old} → {new}"),
@@ -3093,6 +3116,27 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::previous_change))
             .on_action(cx.listener(Self::next_match))
             .on_action(cx.listener(Self::previous_match))
+            .on_action(cx.listener(|this, _: &NextZone, _, cx| this.step_zone(true, cx)))
+            .on_action(cx.listener(|this, _: &PreviousZone, _, cx| this.step_zone(false, cx)))
+            .on_action(cx.listener(|this, _: &Activate, _, cx| this.activate(cx)))
+            .on_action(cx.listener(|this, _: &PageDown, _, cx| this.page(true, cx)))
+            .on_action(cx.listener(|this, _: &PageUp, _, cx| this.page(false, cx)))
+            .on_action(cx.listener(|this, _: &DiffStart, _, cx| this.diff_edge(false, cx)))
+            .on_action(cx.listener(|this, _: &DiffEnd, _, cx| this.diff_edge(true, cx)))
+            .on_action(cx.listener(|this, _: &FocusBranches, _, cx| {
+                this.set_zone(zones::Zone::Branches, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &FocusCommits, _, cx| {
+                    this.set_zone(zones::Zone::Commits, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &FocusFiles, _, cx| this.set_zone(zones::Zone::Files, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &FocusDiffZone, _, cx| this.set_zone(zones::Zone::Diff, cx)),
+            )
             .on_action(cx.listener(|this, _: &NewTab, window, cx| {
                 this.with_shell(cx, |s, cx| s.new_tab(window, cx))
             }))

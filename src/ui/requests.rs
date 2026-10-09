@@ -155,6 +155,21 @@ impl Workspace {
         }
     }
 
+    /// The requests the filter lets through, in the order the list shows them.
+    pub(super) fn shown_requests(&self) -> Vec<&Mr> {
+        let filter = self.bfilter.to_lowercase();
+        let words: Vec<&str> = filter.split_whitespace().collect();
+        self.requests
+            .list
+            .iter()
+            .filter(|m| {
+                let hay =
+                    format!("!{} {} {} {}", m.iid, m.title, m.author, m.source).to_lowercase();
+                words.iter().all(|w| hay.contains(w))
+            })
+            .collect()
+    }
+
     /// "Branches | Merge requests · N" — or just the label when there are no requests to read.
     pub(super) fn render_branches_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.requests.available {
@@ -199,12 +214,6 @@ impl Workspace {
     }
 
     pub(super) fn render_requests(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let words: Vec<String> = self
-            .bfilter
-            .to_lowercase()
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect();
         let field = self.render_field(
             "branch-filter",
             (self.field == Some(super::lists::Field::Branches)).then_some(self.bfilter.as_str()),
@@ -214,16 +223,7 @@ impl Workspace {
                 this.start_field(super::lists::Field::Branches, cx)
             }),
         );
-        let shown: Vec<&Mr> = self
-            .requests
-            .list
-            .iter()
-            .filter(|m| {
-                let hay =
-                    format!("!{} {} {} {}", m.iid, m.title, m.author, m.source).to_lowercase();
-                words.iter().all(|w| hay.contains(w))
-            })
-            .collect();
+        let shown = self.shown_requests();
         let note = match (&self.requests.error, shown.is_empty()) {
             (Some(e), _) => Some(e.clone()),
             (None, true) if self.requests.loading => Some("Loading merge requests…".to_owned()),
