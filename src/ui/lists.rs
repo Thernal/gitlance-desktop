@@ -631,11 +631,15 @@ impl Workspace {
                             .gap_2()
                             .pl(px(8. + *depth as f32 * 14.))
                             .text_color(theme::muted())
-                            .child(div().w(px(10.)).text_size(px(10.)).child(if *collapsed {
-                                "▸"
-                            } else {
-                                "▾"
-                            }))
+                            .child(
+                                super::icons::icon(if *collapsed {
+                                    "chevron-right"
+                                } else {
+                                    "chevron"
+                                })
+                                .size(px(16.))
+                                .text_color(theme::muted()),
+                            )
                             .child(div().flex_1().min_w_0().truncate().child(name.clone()))
                             .child(
                                 div()

@@ -476,6 +476,18 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
             });
             wait(500).await;
         }
+        if let Ok(keys) = std::env::var("GITLANCE_SNAPSHOT_KEYS") {
+            // Keystrokes sent to the window itself (not the keyboard), e.g. `right right cmd-t`.
+            for key in keys.split_whitespace() {
+                if let Ok(keystroke) = gpui::Keystroke::parse(key) {
+                    cx.update_window(window.into(), |_, window, cx| {
+                        window.dispatch_keystroke(keystroke, cx);
+                    })
+                    .ok();
+                }
+                wait(400).await;
+            }
+        }
         // A hidden window gets no display-link frames: draw one by hand.
         // `update_window` leaves the root view free for the draw to render.
         let saved = cx.update_window(window.into(), |_, window, cx| {
@@ -1035,11 +1047,15 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 match loaded {
                     Ok(diff) => {
-                        let ix = keep
-                            .and_then(|path| diff.files.iter().position(|f| f.path() == path))
-                            .unwrap_or(0);
+                        let ix =
+                            keep.and_then(|path| diff.files.iter().position(|f| f.path() == path));
                         let empty = diff.files.is_empty();
                         this.diff = Some(diff);
+                        // The first file as the island lists it (a tree sorts folders first), so
+                        // → walks on from the top.
+                        let ix = ix
+                            .or_else(|| this.file_order().first().copied())
+                            .unwrap_or(0);
                         this.file_scroll.scroll_to_item(0, ScrollStrategy::Top);
                         if !empty {
                             this.select_file(ix, cx);
