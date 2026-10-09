@@ -55,6 +55,15 @@ const ICONS: &[(&str, &str)] = &[
         ),
     ),
     (
+        "pull-request",
+        lucide!(
+            r#"<circle cx="18" cy="18" r="3"/>"#
+            r#"<circle cx="6" cy="6" r="3"/>"#
+            r#"<path d="M13 6h3a2 2 0 0 1 2 2v7"/>"#
+            r#"<line x1="6" x2="6" y1="9" y2="21"/>"#
+        ),
+    ),
+    (
         "branch",
         lucide!(
             r#"<line x1="6" x2="6" y1="3" y2="15"/>"#

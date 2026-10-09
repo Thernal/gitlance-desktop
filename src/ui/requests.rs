@@ -2,7 +2,6 @@
 //! branch, and the discussions other people left on one, in the review panel. Read-only; GitLab
 //! only (see `crate::mr`).
 
-use super::diff_view::{self, chip};
 use super::rows::Row;
 use super::{Workspace, format, plural, row, theme};
 use crate::git::RefKind;
@@ -182,47 +181,18 @@ impl Workspace {
             .collect()
     }
 
-    /// "Branches | Merge requests · N" — or just the label when there are no requests to read.
-    pub(super) fn render_branches_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.requests.available {
-            return super::island_label("Branches").into_any_element();
+    /// The island's label: which of the two lists the rail's button chose.
+    pub(super) fn render_branches_header(&self) -> impl IntoElement {
+        if self.requests.available && self.requests.side == Side::Requests {
+            let n = self.requests.list.len();
+            let label = if self.requests.loading && n == 0 {
+                "Merge requests …".to_owned()
+            } else {
+                format!("Merge requests · {n}")
+            };
+            return super::island_label(label).into_any_element();
         }
-        let side = self.requests.side;
-        let n = self.requests.list.len();
-        div()
-            .flex_none()
-            .px(px(8.))
-            .pt(px(8.))
-            .pb(px(6.))
-            .child(
-                diff_view::group()
-                    .child(
-                        chip("side-branches", "Branches", side == Side::Branches).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.requests.side = Side::Branches;
-                                cx.notify();
-                            }),
-                        ),
-                    )
-                    .child(
-                        chip(
-                            "side-requests",
-                            if self.requests.loading && n == 0 {
-                                "Merge requests …".to_owned()
-                            } else {
-                                format!("Merge requests · {n}")
-                            },
-                            side == Side::Requests,
-                        )
-                        .on_click(cx.listener(
-                            |this, _: &ClickEvent, _, cx| {
-                                this.requests.side = Side::Requests;
-                                cx.notify();
-                            },
-                        )),
-                    ),
-            )
-            .into_any_element()
+        super::island_label("Branches").into_any_element()
     }
 
     pub(super) fn render_requests(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {

@@ -65,6 +65,7 @@ actions!(
         GoForward,
         ToggleSidebar,
         ToggleFiles,
+        ToggleRequests,
         FocusDiff,
         CopySelection,
         SelectAll,
@@ -135,6 +136,7 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("cmd-]", GoForward, Some("Workspace")),
                 KeyBinding::new("cmd-alt-1", ToggleSidebar, Some("Workspace")),
                 KeyBinding::new("cmd-alt-2", ToggleFiles, Some("Workspace")),
+                KeyBinding::new("cmd-alt-3", ToggleRequests, Some("Workspace")),
                 KeyBinding::new("c", CommentLine, Some("Workspace && !Typing")),
                 KeyBinding::new("tab", NextZone, Some("Workspace && !Typing")),
                 KeyBinding::new("shift-tab", PreviousZone, Some("Workspace && !Typing")),
@@ -677,6 +679,8 @@ pub struct Workspace {
     pending_compare: Option<PendingCompare>,
     /// The line number being typed for a quick comment.
     goline: Option<String>,
+    /// The diff row the `c` marker stands on.
+    goline_row: Option<usize>,
     jump_line: Option<(u32, bool)>,
     tabs: shell::TabModel,
     diff: Option<Diff>,
@@ -789,6 +793,7 @@ impl Workspace {
             requests: Default::default(),
             pending_compare: None,
             goline: None,
+            goline_row: None,
             jump_line: None,
             tabs: Default::default(),
             diff: None,
@@ -1520,6 +1525,21 @@ impl Workspace {
         cx.notify();
     }
 
+    /// ⌥⌘3 or the rail's third button: the sidebar's top island shows the merge requests; again,
+    /// the branches.
+    fn toggle_requests(&mut self, _: &ToggleRequests, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.requests.available {
+            return;
+        }
+        self.layout.show_sidebar = true;
+        self.requests.side = match self.requests.side {
+            requests::Side::Requests => requests::Side::Branches,
+            requests::Side::Branches => requests::Side::Requests,
+        };
+        self.layout.save();
+        cx.notify();
+    }
+
     /// ⌘.: the diff alone; pressed again, the islands come back.
     fn focus_diff(&mut self, _: &FocusDiff, _: &mut Window, cx: &mut Context<Self>) {
         let hide = self.layout.show_sidebar || self.layout.show_files;
@@ -1954,6 +1974,36 @@ impl Workspace {
                     cx.listener(|this, _, window, cx| this.toggle_files(&ToggleFiles, window, cx)),
                 ),
             )
+            .children(self.requests.available.then(|| {
+                let on = self.layout.show_sidebar && self.requests.side == requests::Side::Requests;
+                let n = self.requests.list.len();
+                div()
+                    .relative()
+                    .child(
+                        button("rail-requests", "pull-request", on, "Merge requests  ⌥⌘3")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_requests(&ToggleRequests, window, cx)
+                            })),
+                    )
+                    .children((n > 0).then(|| {
+                        div()
+                            .absolute()
+                            .top(px(-2.))
+                            .right(px(-2.))
+                            .min_w(px(16.))
+                            .h(px(16.))
+                            .px(px(4.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(theme::accent())
+                            .text_color(theme::editor())
+                            .text_size(px(10.))
+                            .font_weight(FontWeight::BOLD)
+                            .child(n.to_string())
+                    }))
+            }))
     }
 
     fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2021,7 +2071,7 @@ impl Workspace {
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| this.set_zone(zones::Zone::Branches, cx)),
                     )
-                    .child(self.render_branches_header(cx))
+                    .child(self.render_branches_header())
                     .child(
                         if self.requests.side == requests::Side::Requests && self.requests.available
                         {
@@ -2991,6 +3041,7 @@ impl Workspace {
                 Row::Composer => return workspace.render_composer(indent, this.clone()),
                 _ => {}
             }
+            let marked = workspace.goline.is_some() && workspace.goline_row == Some(ix);
             let (expand, comment, press, drag, context) = (
                 this.clone(),
                 this.clone(),
@@ -3021,7 +3072,7 @@ impl Workspace {
                         .ok();
                 }),
             };
-            diff_view::row(
+            let element = diff_view::row(
                 &data,
                 row,
                 style,
@@ -3031,7 +3082,17 @@ impl Workspace {
                         .ok();
                 },
                 std::rc::Rc::new(events),
-            )
+            );
+            if marked {
+                return div()
+                    .w_full()
+                    .border_l_2()
+                    .border_color(theme::focus())
+                    .bg(theme::hover())
+                    .child(element)
+                    .into_any_element();
+            }
+            element
         })
         .flex_1();
 
@@ -3131,6 +3192,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::go_forward_action))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::toggle_files))
+            .on_action(cx.listener(Self::toggle_requests))
             .on_action(cx.listener(Self::focus_diff))
             .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::select_all))

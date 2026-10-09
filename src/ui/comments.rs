@@ -300,7 +300,7 @@ impl Workspace {
 
     // ---- a comment by line number ------------------------------------------------------------
 
-    /// `c`: type a line number, then the comment.
+    /// `c`: a marker appears on the diff; typing a line number moves it, ↵ opens the comment there.
     pub(super) fn open_goline(&mut self, cx: &mut Context<Self>) {
         if self.data.is_none() || self.settings_open || self.compose.is_some() {
             return;
@@ -308,6 +308,7 @@ impl Workspace {
         self.field_all = false;
         self.zone = super::zones::Zone::Diff;
         self.goline = Some(String::new());
+        self.move_marker();
         cx.notify();
     }
 
@@ -315,8 +316,21 @@ impl Workspace {
         let Some(text) = self.goline.as_mut() else {
             return;
         };
+        let key = event.keystroke.key.as_str();
+        if matches!(key, "up" | "down") {
+            let step: i64 = if key == "up" { -1 } else { 1 };
+            if let Some((old, line)) = self.goline_target() {
+                let next = (i64::from(line) + step).max(1);
+                self.goline = Some(format!("{}{next}", if old { "-" } else { "" }));
+                self.move_marker();
+            }
+            return cx.notify();
+        }
         match input::edit(text, &mut self.field_all, &event.keystroke, cx) {
-            Edit::Escape => self.goline = None,
+            Edit::Escape => {
+                self.goline = None;
+                self.goline_row = None;
+            }
             // Digits, and a minus first for a removed line.
             Edit::Changed => {
                 let filtered: String = text
@@ -326,6 +340,7 @@ impl Workspace {
                     .map(|(_, c)| c)
                     .collect();
                 *text = filtered;
+                self.move_marker();
             }
             Edit::Enter { .. } => return self.finish_goline(cx),
             Edit::Selected | Edit::Ignored => {}
@@ -333,32 +348,43 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Opens the composer under the line that was typed; with nothing typed, under the first change.
-    fn finish_goline(&mut self, cx: &mut Context<Self>) {
-        let Some(text) = self.goline.take() else {
-            return;
-        };
-        let Some(data) = self.data.clone() else {
-            return;
-        };
-        let (old, line) = if text.trim().is_empty() {
+    /// The side and line the typed number stands for; with nothing typed, the first change.
+    fn goline_target(&self) -> Option<(bool, u32)> {
+        let text = self.goline.as_deref()?;
+        if text.trim().is_empty() {
             let first = self
                 .changes
                 .first()
                 .and_then(|&row| self.rows.get(row))
                 .copied();
-            match first {
-                Some(Row::Split { right: Some(c), .. }) => (false, c.line),
-                Some(Row::Split { left: Some(c), .. }) => (true, c.line),
-                Some(Row::Unified { cell, old, .. }) => (old, cell.line),
-                _ => return cx.notify(),
-            }
-        } else {
-            let old = text.starts_with('-');
-            let Ok(n) = text.trim_start_matches('-').parse::<u32>() else {
-                return cx.notify();
+            return match first {
+                Some(Row::Split { right: Some(c), .. }) => Some((false, c.line)),
+                Some(Row::Split { left: Some(c), .. }) => Some((true, c.line)),
+                Some(Row::Unified { cell, old, .. }) => Some((old, cell.line)),
+                _ => None,
             };
-            (old, n)
+        }
+        let n = text.trim_start_matches('-').parse::<u32>().ok()?;
+        Some((text.starts_with('-'), n))
+    }
+
+    /// Puts the marker on the row of the typed line and scrolls it into view.
+    fn move_marker(&mut self) {
+        self.goline_row = self
+            .goline_target()
+            .and_then(|(old, line)| self.row_of_line(line, old));
+        if let Some(at) = self.goline_row {
+            self.diff_list.scroll_to_reveal_item(at);
+        }
+    }
+
+    /// Opens the composer under the marked line.
+    fn finish_goline(&mut self, cx: &mut Context<Self>) {
+        let Some(data) = self.data.clone() else {
+            return;
+        };
+        let Some((old, line)) = self.goline_target() else {
+            return cx.notify();
         };
         if line == 0 || line > data.side(old).count() {
             self.error = Some(
@@ -371,6 +397,8 @@ impl Workspace {
             );
             return cx.notify();
         }
+        self.goline = None;
+        self.goline_row = None;
         self.reveal_line(line, old);
         self.start_comment(old, line, cx);
         if let Some(at) = self.row_of_line(line, old) {
@@ -405,11 +433,25 @@ impl Workspace {
 
     pub(super) fn render_goline(&self) -> Option<impl IntoElement + use<>> {
         let text = self.goline.as_ref()?;
+        let target = self.goline_target();
+        let preview = target.and_then(|(old, line)| {
+            let data = self.data.as_ref()?;
+            (line >= 1 && line <= data.side(old).count())
+                .then(|| data.side(old).line(line).0.trim().to_owned())
+        });
+        let hint = match (target, &preview, self.goline_row) {
+            (None, ..) if !text.is_empty() => "type a line number".to_owned(),
+            (None, ..) => "no changes in this file".to_owned(),
+            (Some(_), None, _) => "no such line in this file".to_owned(),
+            (Some(_), Some(_), None) => "inside unchanged lines · ↵ opens them".to_owned(),
+            _ => "↵ comment here".to_owned(),
+        };
         Some(
             div()
                 .absolute()
                 .bottom(px(16.))
                 .left(px(16.))
+                .max_w(px(520.))
                 .flex()
                 .flex_col()
                 .gap_1()
@@ -426,16 +468,29 @@ impl Workspace {
                         .items_center()
                         .gap_2()
                         .child(div().text_color(theme::muted()).child("Comment on line"))
+                        .child(div().min_w(px(60.)).font_family(theme::CODE_FONT).child(
+                            input::field_text(text, true, self.field_all, "first change"),
+                        ))
                         .child(
                             div()
-                                .min_w(px(60.))
-                                .font_family(theme::CODE_FONT)
-                                .child(input::field_text(text, true, self.field_all, "number")),
+                                .text_size(px(11.))
+                                .text_color(theme::faint())
+                                .child(hint),
                         ),
                 )
-                .child(div().text_size(px(11.)).text_color(theme::faint()).child(
-                    "↵ opens the comment · −12 for a removed line · empty: the first change · esc",
-                )),
+                .children(preview.map(|code| {
+                    div()
+                        .truncate()
+                        .font_family(theme::CODE_FONT)
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child(code)
+                }))
+                .child(
+                    div().text_size(px(11.)).text_color(theme::faint()).child(
+                        "digits move the marker · ↑↓ step · −12 a removed line · ↵ open · esc",
+                    ),
+                ),
         )
     }
 
