@@ -446,18 +446,34 @@ impl Workspace {
                         .child(
                             div()
                                 .flex()
-                                .items_center()
+                                // Both columns carry a label, so the two boxes stand on one line.
+                                .items_end()
                                 .gap_2()
                                 .child(
                                     div()
-                                        .px_2()
-                                        .py(px(5.))
-                                        .rounded(px(ROW_RADIUS))
-                                        .bg(theme::base())
-                                        .font_family(theme::CODE_FONT)
-                                        .child(n.source.clone()),
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(4.))
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(theme::faint())
+                                                .child("FROM"),
+                                        )
+                                        .child(
+                                            div()
+                                                .px_2()
+                                                .py(px(5.))
+                                                .border_2()
+                                                .border_color(theme::island_border())
+                                                .rounded(px(ROW_RADIUS))
+                                                .bg(theme::base())
+                                                .font_family(theme::CODE_FONT)
+                                                .child(n.source.clone()),
+                                        ),
                                 )
-                                .child(div().text_color(theme::faint()).child("→"))
+                                .child(div().pb(px(8.)).text_color(theme::faint()).child("→"))
                                 .child(div().flex_1().child(field(
                                     "create-target",
                                     "Into",
