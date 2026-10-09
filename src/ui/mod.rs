@@ -77,6 +77,7 @@ actions!(
         ToggleFullContext,
         ToggleWhitespace,
         CommentLine,
+        SubmitReview,
         NextZone,
         PreviousZone,
         Activate,
@@ -138,6 +139,11 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("cmd-alt-2", ToggleFiles, Some("Workspace")),
                 KeyBinding::new("cmd-alt-3", ToggleRequests, Some("Workspace")),
                 KeyBinding::new("c", CommentLine, Some("Workspace && !Typing")),
+                KeyBinding::new(
+                    "cmd-shift-enter",
+                    SubmitReview,
+                    Some("Workspace && !Typing"),
+                ),
                 KeyBinding::new("tab", NextZone, Some("Workspace && !Typing")),
                 KeyBinding::new("shift-tab", PreviousZone, Some("Workspace && !Typing")),
                 KeyBinding::new("enter", Activate, Some("Workspace && !Typing")),
@@ -679,6 +685,8 @@ pub struct Workspace {
     pending_compare: Option<PendingCompare>,
     /// The merge request whose diff is open (or was last opened from the list).
     open_request: Option<PendingCompare>,
+    /// What the last "Test" of the GitLab connection in Settings found.
+    gitlab_check: Option<Result<String, String>>,
     /// The line number being typed for a quick comment.
     goline: Option<String>,
     /// The diff row the `c` marker stands on.
@@ -795,6 +803,7 @@ impl Workspace {
             requests: Default::default(),
             pending_compare: None,
             open_request: None,
+            gitlab_check: None,
             goline: None,
             goline_row: None,
             jump_line: None,
@@ -3057,7 +3066,10 @@ impl Workspace {
             let indent = style.gutter + 8.;
             match row {
                 Row::Thread(id) => return workspace.render_thread(id, indent, this.clone()),
-                Row::Request(ix) => return workspace.render_request_thread(ix, indent),
+                Row::Request(ix) => {
+                    return workspace.render_request_thread(ix, indent, this.clone());
+                }
+                Row::Draft(ix) => return workspace.render_draft(ix, indent, this.clone()),
                 Row::Composer => return workspace.render_composer(indent, this.clone()),
                 _ => {}
             }
@@ -3221,6 +3233,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::next_match))
             .on_action(cx.listener(Self::previous_match))
             .on_action(cx.listener(|this, _: &CommentLine, _, cx| this.open_goline(cx)))
+            .on_action(cx.listener(|this, _: &SubmitReview, _, cx| this.submit_review(cx)))
             .on_action(cx.listener(|this, _: &NextZone, _, cx| this.step_zone(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousZone, _, cx| this.step_zone(false, cx)))
             .on_action(cx.listener(|this, _: &Activate, _, cx| this.activate(cx)))

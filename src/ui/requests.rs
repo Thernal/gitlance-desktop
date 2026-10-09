@@ -5,8 +5,8 @@
 use super::rows::Row;
 use super::{Header, Selection, Workspace, format, island, island_label, plural, row, theme};
 use crate::git::{RefKind, Repo, Version};
-use crate::mr::{self, Mr, Thread};
-use gpui::{ClickEvent, Context, FontWeight, Task, div, prelude::*, px};
+use crate::mr::{self, Draft, Mr, Thread};
+use gpui::{ClickEvent, Context, FontWeight, Task, WeakEntity, div, prelude::*, px};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Side {
@@ -25,6 +25,8 @@ pub struct Requests {
     /// The request of the open branch, when it is one's source branch.
     pub current: Option<u64>,
     pub threads: Vec<Thread>,
+    /// One's own pending comments on the current request.
+    pub drafts: Vec<Draft>,
     /// The pushes GitLab kept for a request, as versions of this repository.
     pub versions: Option<(u64, Vec<Version>)>,
     version_task: Option<Task<()>>,
@@ -103,6 +105,7 @@ impl Workspace {
         }
         if iid != self.requests.current {
             self.requests.threads.clear();
+            self.requests.drafts.clear();
         }
         self.requests.current = iid;
         let (Some(iid), Some(remote)) = (iid, self.web.clone()) else {
@@ -111,12 +114,19 @@ impl Workspace {
         self.requests.thread_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { mr::threads(&remote, iid) })
+                .spawn(async move {
+                    // Drafts need a recent GitLab; without them the rest still works.
+                    let drafts = mr::drafts(&remote, iid).unwrap_or_default();
+                    mr::threads(&remote, iid).map(|t| (t, drafts))
+                })
                 .await;
             this.update(cx, |this, cx| {
                 if this.requests.current == Some(iid) {
                     match result {
-                        Ok(threads) => this.requests.threads = threads,
+                        Ok((threads, drafts)) => {
+                            this.requests.threads = threads;
+                            this.requests.drafts = drafts;
+                        }
                         Err(e) => this.requests.error = Some(format!("{e:#}")),
                     }
                     this.refresh_rows();
@@ -257,9 +267,29 @@ impl Workspace {
     }
 
     /// A discussion of the request, drawn under its line.
-    pub(super) fn render_request_thread(&self, ix: usize, indent: f32) -> gpui::AnyElement {
+    pub(super) fn render_request_thread(
+        &self,
+        ix: usize,
+        indent: f32,
+        this: WeakEntity<Self>,
+    ) -> gpui::AnyElement {
         let Some(t) = self.requests.threads.get(ix) else {
             return div().into_any_element();
+        };
+        let can_act = self.request_target().is_some();
+        let (reply, resolve) = (this.clone(), this);
+        let resolved = t.resolved;
+        let action = |id: &'static str, label: &'static str| {
+            div()
+                .id((id, ix))
+                .px_2()
+                .rounded(px(super::ROW_RADIUS))
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme::muted())
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                .child(label)
         };
         let notes = t.notes.iter().enumerate().map(|(n, note)| {
             div()
@@ -307,9 +337,162 @@ impl Workspace {
                     .font_family(theme::UI_FONT)
                     .text_size(px(12.))
                     .line_height(px(17.))
-                    .children(notes),
+                    .children(notes)
+                    .children(can_act.then(|| {
+                        div()
+                            .flex()
+                            .gap_1()
+                            .pt(px(6.))
+                            .child(action("thread-reply", "Reply").on_click(move |_, _, cx| {
+                                reply.update(cx, |this, cx| this.start_reply(ix, cx)).ok();
+                            }))
+                            .children(t.resolvable.then(|| {
+                                action(
+                                    "thread-resolve",
+                                    if resolved { "Reopen" } else { "Resolve" },
+                                )
+                                .on_click(move |_, _, cx| {
+                                    resolve
+                                        .update(cx, |this, cx| this.toggle_resolved(ix, cx))
+                                        .ok();
+                                })
+                            }))
+                    })),
             )
             .into_any_element()
+    }
+
+    /// The pending comments of the open file: (index, old side, line).
+    pub(super) fn drafts_here(&self) -> Vec<(usize, bool, u32)> {
+        let Some(path) = self.current_path() else {
+            return Vec::new();
+        };
+        self.requests
+            .drafts
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.path.as_deref() == Some(path.as_str()))
+            .filter_map(|(ix, d)| match (d.new_line, d.old_line) {
+                (Some(n), _) => Some((ix, false, n)),
+                (None, Some(o)) => Some((ix, true, o)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A pending comment, dashed: only its author sees it until the review is submitted.
+    pub(super) fn render_draft(
+        &self,
+        ix: usize,
+        indent: f32,
+        this: WeakEntity<Self>,
+    ) -> gpui::AnyElement {
+        let Some(d) = self.requests.drafts.get(ix) else {
+            return div().into_any_element();
+        };
+        let id = d.id;
+        div()
+            .w_full()
+            .pl(px(indent))
+            .pr(px(12.))
+            .py(px(4.))
+            .child(
+                div()
+                    .max_w(px(640.))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px_3()
+                    .py_2()
+                    .rounded(px(super::ROW_RADIUS))
+                    .border_1()
+                    .border_dashed()
+                    .border_color(theme::warning())
+                    .bg(theme::panel())
+                    .font_family(theme::UI_FONT)
+                    .text_size(px(12.))
+                    .line_height(px(17.))
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .text_size(px(11.))
+                            .text_color(theme::faint())
+                            .child(
+                                div()
+                                    .text_color(theme::warning())
+                                    .child("Pending · only you see this"),
+                            )
+                            .child(div().flex_1())
+                            .child(
+                                div()
+                                    .id(("draft-delete", ix))
+                                    .cursor_pointer()
+                                    .hover(|s| s.text_color(theme::removed()))
+                                    .child("Delete")
+                                    .on_click(move |_, _, cx| {
+                                        this.update(cx, |this, cx| this.discard_draft(id, cx)).ok();
+                                    }),
+                            ),
+                    )
+                    .child(d.body.clone()),
+            )
+            .into_any_element()
+    }
+
+    /// Runs a GitLab call away from the interface; afterwards the request is read again.
+    fn request_action(
+        &mut self,
+        work: impl FnOnce(crate::git::WebRemote) -> anyhow::Result<()> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(remote) = self.web.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { work(remote) })
+                .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(()) => {
+                        this.error = None;
+                        this.reload_threads(cx);
+                    }
+                    Err(e) => this.error = Some(format!("{e:#}").into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn toggle_resolved(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let (Some(t), Some(iid)) = (self.requests.threads.get(ix), self.requests.current) else {
+            return;
+        };
+        let (id, resolved) = (t.id.clone(), !t.resolved);
+        self.request_action(move |remote| mr::resolve(&remote, iid, &id, resolved), cx);
+    }
+
+    /// Publishes every pending comment: the review is submitted.
+    pub(super) fn submit_review(&mut self, cx: &mut Context<Self>) {
+        let Some(iid) = self.requests.current else {
+            return;
+        };
+        if self.requests.drafts.is_empty() {
+            return;
+        }
+        self.request_action(move |remote| mr::publish_drafts(&remote, iid), cx);
+    }
+
+    fn discard_draft(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(iid) = self.requests.current else {
+            return;
+        };
+        self.request_action(move |remote| mr::delete_draft(&remote, iid, id), cx);
     }
 
     /// "Whole request" above the commits: back to the diff of the request after a single commit.
@@ -354,7 +537,13 @@ impl Workspace {
         } else {
             Vec::new()
         };
-        let total = theirs.len() + self.comments.len();
+        let drafts: Vec<(usize, &Draft)> = if self.showing_request() {
+            self.requests.drafts.iter().enumerate().collect()
+        } else {
+            Vec::new()
+        };
+        let pending = drafts.len();
+        let total = theirs.len() + drafts.len() + self.comments.len();
         if total == 0 {
             return None;
         }
@@ -415,6 +604,25 @@ impl Workspace {
                 }
             }))
         });
+        let draft_items = drafts.into_iter().map(|(ix, d)| {
+            let target = d.path.clone().zip(d.new_line.or(d.old_line));
+            let old = d.new_line.is_none();
+            let where_ = match &target {
+                Some((p, n)) => format!("{}:{n} · pending", p.rsplit('/').next().unwrap_or(p)),
+                None => "pending".to_owned(),
+            };
+            item(
+                ("comment-draft", ix),
+                theme::warning(),
+                where_,
+                d.body.replace('\n', " "),
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if let Some((path, line)) = target.clone() {
+                    this.jump_to_line(&path, line, old, cx)
+                }
+            }))
+        });
         let agent_items = self.comments.iter().map(|c| {
             let id = c.id;
             item(
@@ -434,7 +642,31 @@ impl Workspace {
                 .flex_none()
                 .max_h(px(150.))
                 .pb(px(6.))
-                .child(island_label(format!("Comments · {total}")))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .child(island_label(format!("Comments · {total}")).flex_1())
+                        .children((pending > 0).then(|| {
+                            div()
+                                .id("submit-review")
+                                .mr(px(10.))
+                                .mt(px(6.))
+                                .px_2()
+                                .rounded(px(super::ROW_RADIUS))
+                                .bg(theme::warning())
+                                .text_color(theme::base())
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .cursor_pointer()
+                                .child(format!("Submit review · {pending}"))
+                                .on_click(
+                                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.submit_review(cx)
+                                    }),
+                                )
+                        })),
+                )
                 .child(
                     div()
                         .id("comments-list")
@@ -442,6 +674,7 @@ impl Workspace {
                         .min_h_0()
                         .overflow_y_scroll()
                         .children(request_items)
+                        .children(draft_items)
                         .children(agent_items),
                 ),
         )

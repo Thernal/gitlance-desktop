@@ -18,6 +18,8 @@ pub enum Target {
     Agent,
     /// Posted to a merge request on GitLab, where everyone on it sees it.
     Request(u64),
+    /// A reply to discussion number `0` of the open merge request.
+    Reply(usize),
 }
 
 /// A comment being written.
@@ -71,7 +73,12 @@ impl Workspace {
         } else {
             Vec::new()
         };
-        if here.is_empty() && compose.is_none() && theirs.is_empty() {
+        let drafts = if self.showing_request() {
+            self.drafts_here()
+        } else {
+            Vec::new()
+        };
+        if here.is_empty() && compose.is_none() && theirs.is_empty() && drafts.is_empty() {
             return rows;
         }
         let mut out = Vec::with_capacity(rows.len() + here.len() + 1);
@@ -95,6 +102,12 @@ impl Workspace {
                         .iter()
                         .filter(|(_, o, n)| *o == old && *n == line)
                         .map(|(ix, _, _)| Row::Request(*ix)),
+                );
+                out.extend(
+                    drafts
+                        .iter()
+                        .filter(|(_, o, n)| *o == old && *n == line)
+                        .map(|(ix, _, _)| Row::Draft(*ix)),
                 );
                 if compose.is_some_and(|c| c.old == old && c.line == line) {
                     out.push(Row::Composer);
@@ -146,6 +159,31 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Starts a reply under discussion `ix` of the open merge request.
+    pub(super) fn start_reply(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(t) = self.requests.threads.get(ix) else {
+            return;
+        };
+        let (Some(path), Some(line)) = (t.path.clone(), t.new_line.or(t.old_line)) else {
+            return;
+        };
+        let old = t.new_line.is_none();
+        self.compose = Some(Compose {
+            path,
+            old,
+            line,
+            code: String::new(),
+            body: String::new(),
+            at: String::new(),
+            target: Target::Reply(ix),
+            error: None,
+            posting: false,
+        });
+        self.field_all = false;
+        self.refresh_rows();
+        cx.notify();
+    }
+
     /// The merge request whose diff is open, when a comment can be posted to it.
     pub(super) fn request_target(&self) -> Option<u64> {
         match self.diff.as_ref()?.header {
@@ -153,7 +191,12 @@ impl Workspace {
                 request: Some(iid),
                 since_merge_base: true,
                 ..
-            } if self.web.is_some() && crate::mr::token().is_some() || crate::mr::fixture_on() => {
+            } if self
+                .web
+                .as_ref()
+                .is_some_and(|w| crate::mr::token(w).is_some())
+                || crate::mr::fixture_on() =>
+            {
                 Some(iid)
             }
             _ => None,
@@ -166,6 +209,7 @@ impl Workspace {
             && !compose.posting
         {
             compose.target = match (compose.target, request) {
+                (Target::Reply(ix), _) => Target::Reply(ix),
                 (Target::Agent, Some(iid)) => Target::Request(iid),
                 _ => Target::Agent,
             };
@@ -182,12 +226,10 @@ impl Workspace {
     }
 
     pub(super) fn add_comment(&mut self, cx: &mut Context<Self>) {
-        if let Some(Compose {
-            target: Target::Request(iid),
-            ..
-        }) = self.compose
-        {
-            return self.post_comment(iid, cx);
+        match self.compose.as_ref().map(|c| c.target) {
+            Some(Target::Request(iid)) => return self.post_comment(iid, false, cx),
+            Some(Target::Reply(ix)) => return self.post_reply(ix, cx),
+            _ => {}
         }
         let Some(compose) = self.compose.take() else {
             return;
@@ -214,7 +256,8 @@ impl Workspace {
     }
 
     /// Posts the comment being written to merge request `iid`, on its line.
-    fn post_comment(&mut self, iid: u64, cx: &mut Context<Self>) {
+    /// With `draft`, as a pending comment that only its author sees until the review is submitted.
+    pub(super) fn post_comment(&mut self, iid: u64, draft: bool, cx: &mut Context<Self>) {
         let (Some(remote), Some(compose)) = (self.web.clone(), self.compose.as_ref()) else {
             return;
         };
@@ -237,29 +280,55 @@ impl Workspace {
         let (old_line, new_line) = self.line_pair(compose.line, compose.old);
         let path = new_path.clone().or(old_path.clone()).unwrap_or_default();
         let old_path = old_path.or(new_path).unwrap_or_default();
+        self.submit_compose(cx, move || {
+            crate::mr::post_discussion(
+                &remote,
+                iid,
+                &head,
+                &crate::mr::Place {
+                    path: &path,
+                    old_path: &old_path,
+                    new_line,
+                    old_line,
+                },
+                &body,
+                draft,
+            )
+        });
+    }
+
+    /// Writes the reply being composed to the discussion it answers.
+    fn post_reply(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let (Some(remote), Some(compose), Some(thread), Some(iid)) = (
+            self.web.clone(),
+            self.compose.as_ref(),
+            self.requests.threads.get(ix),
+            self.requests.current,
+        ) else {
+            return;
+        };
+        let (body, id) = (compose.body.trim().to_owned(), thread.id.clone());
+        if body.is_empty() || compose.posting {
+            return;
+        }
+        self.submit_compose(cx, move || crate::mr::reply(&remote, iid, &id, &body));
+    }
+
+    /// Runs `work` away from the interface while the composer shows "Posting…"; on success the
+    /// composer closes and the request's discussions are read again, on failure the reason stays in
+    /// the composer with the text.
+    fn submit_compose(
+        &mut self,
+        cx: &mut Context<Self>,
+        work: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
+    ) {
         if let Some(c) = self.compose.as_mut() {
             c.posting = true;
             c.error = None;
         }
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    crate::mr::post_discussion(
-                        &remote,
-                        iid,
-                        &head,
-                        &crate::mr::Place {
-                            path: &path,
-                            old_path: &old_path,
-                            new_line,
-                            old_line,
-                        },
-                        &body,
-                    )
-                })
-                .await;
+            let result = cx.background_executor().spawn(async move { work() }).await;
             this.update(cx, |this, cx| {
                 match result {
                     Ok(()) => {
@@ -526,6 +595,12 @@ impl Workspace {
             return;
         };
         if key.key == "enter" && key.modifiers.platform {
+            // ⇧⌘↵ on a merge request keeps the comment pending until the review is submitted.
+            if key.modifiers.shift
+                && let Some(Target::Request(iid)) = self.compose.as_ref().map(|c| c.target)
+            {
+                return self.post_comment(iid, true, cx);
+            }
             return self.add_comment(cx);
         }
         if key.key == "tab" {
@@ -636,7 +711,8 @@ impl Workspace {
         let (add, cancel, pick_agent, pick_request) =
             (this.clone(), this.clone(), this.clone(), this);
         let request = self.request_target();
-        let to_request = matches!(compose.target, Target::Request(_));
+        let reply = matches!(compose.target, Target::Reply(_));
+        let to_request = matches!(compose.target, Target::Request(_) | Target::Reply(_));
         // Agent notes are purple, what goes to GitLab is orange: the two never look alike.
         let tone = if to_request {
             theme::warning()
@@ -677,7 +753,13 @@ impl Workspace {
                     .font_family(theme::UI_FONT)
                     .text_size(px(12.))
                     .line_height(px(17.))
-                    .child(
+                    .child(if reply {
+                        div()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::warning())
+                            .child("Reply on GitLab")
+                    } else {
                         div()
                             .flex()
                             .items_center()
@@ -730,11 +812,13 @@ impl Workspace {
                                     } else {
                                         ""
                                     }),
-                            ),
-                    )
+                            )
+                    })
                     .child(if compose.body.is_empty() {
-                        div().text_color(theme::faint()).child(if to_request {
-                            "Comment on the merge request — everyone on it will see it  ⌘↵ posts"
+                        div().text_color(theme::faint()).child(if reply {
+                            "Reply — everyone on the merge request will see it  ⌘↵ sends"
+                        } else if to_request {
+                            "Comment on the merge request — everyone on it will see it  ⌘↵ posts · ⇧⌘↵ keeps it pending"
                         } else {
                             "Comment for your agent — stays on this Mac  ⌘↵ adds it"
                         })
@@ -800,7 +884,10 @@ impl Workspace {
                                     .text_color(theme::base())
                                     .cursor_pointer()
                                     .child(match (&compose.target, compose.posting) {
-                                        (Target::Request(_), true) => "Posting…".to_owned(),
+                                        (Target::Request(_) | Target::Reply(_), true) => {
+                                            "Posting…".to_owned()
+                                        }
+                                        (Target::Reply(_), false) => "Reply  ⌘↵".to_owned(),
                                         (Target::Request(iid), false) => {
                                             format!("Post to !{iid}  ⌘↵")
                                         }

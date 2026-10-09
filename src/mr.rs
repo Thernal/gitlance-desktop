@@ -32,12 +32,27 @@ pub struct Note {
 /// A discussion on a merge request: on a line of a file, or on the request as a whole.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Thread {
+    /// GitLab's id of the discussion, for replying to it and resolving it.
+    pub id: String,
     pub notes: Vec<Note>,
     pub path: Option<String>,
     /// 1-based line on the new side; `None` for a comment on a removed line or on no line.
     pub new_line: Option<u32>,
     pub old_line: Option<u32>,
     pub resolved: bool,
+    /// A discussion on code can be resolved; a plain comment cannot.
+    pub resolvable: bool,
+}
+
+/// A comment of one's own that is not published yet: only its author sees it until the review is
+/// submitted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Draft {
+    pub id: u64,
+    pub body: String,
+    pub path: Option<String>,
+    pub new_line: Option<u32>,
+    pub old_line: Option<u32>,
 }
 
 /// One push of the merge request's branch, as GitLab keeps it: the commit it ended on, the commit
@@ -49,17 +64,88 @@ pub struct Push {
     pub created: i64,
 }
 
-/// The token file, when there is one.
-pub fn token() -> Option<String> {
-    let path = std::env::home_dir()?.join(".config/gitlab-token");
-    let text = std::fs::read_to_string(path).ok()?;
-    let text = text.trim();
-    (!text.is_empty()).then(|| text.to_owned())
+/// Where the token for a GitLab host comes from, best first: `GITLAB_TOKEN`, the token saved by this
+/// app for that host, then the shared `~/.config/gitlab-token`.
+pub fn token_source(remote: &WebRemote) -> Option<(String, &'static str)> {
+    let clean = |t: String| {
+        let t = t.trim().to_owned();
+        (!t.is_empty()).then_some(t)
+    };
+    if let Some(t) = std::env::var("GITLAB_TOKEN").ok().and_then(clean) {
+        return Some((t, "the GITLAB_TOKEN variable"));
+    }
+    let home = std::env::home_dir()?;
+    if let Ok((host, _)) = api(remote)
+        && let Some(t) = std::fs::read_to_string(token_file(&home, &host))
+            .ok()
+            .and_then(clean)
+    {
+        return Some((t, "saved by this app"));
+    }
+    std::fs::read_to_string(home.join(".config/gitlab-token"))
+        .ok()
+        .and_then(clean)
+        .map(|t| (t, "~/.config/gitlab-token"))
+}
+
+pub fn token(remote: &WebRemote) -> Option<String> {
+    token_source(remote).map(|(t, _)| t)
+}
+
+fn token_file(home: &std::path::Path, host: &str) -> std::path::PathBuf {
+    let safe: String = host
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    home.join(".config/gitlance/tokens").join(safe)
+}
+
+/// Keeps `token` for the host of `remote`, readable by the owner only.
+pub fn save_token(remote: &WebRemote, token: &str) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let home = std::env::home_dir().ok_or_else(|| anyhow!("no home directory"))?;
+    let (host, _) = api(remote)?;
+    let file = token_file(&home, &host);
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&file, format!("{}\n", token.trim()))?;
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+/// The host the requests go to, without the scheme.
+pub fn host(remote: &WebRemote) -> String {
+    api(remote)
+        .map(|(h, _)| {
+            h.split_once("://")
+                .map_or(h.clone(), |(_, rest)| rest.to_owned())
+        })
+        .unwrap_or_default()
+}
+
+/// The name the token belongs to: proof that the host, the token and the network work.
+pub fn me(remote: &WebRemote) -> Result<String> {
+    if fixture().is_some() {
+        return Ok("Fixture".to_owned());
+    }
+    let user = call(remote, "/user", "GET", &[])?;
+    Ok(format!(
+        "{} (@{})",
+        text(&user, "name"),
+        text(&user, "username")
+    ))
 }
 
 /// Whether merge requests can be read for this remote at all.
 pub fn available(remote: &WebRemote) -> bool {
-    fixture().is_some() || (!remote.github && token().is_some())
+    fixture().is_some() || (!remote.github && token(remote).is_some())
 }
 
 /// Whether the checks' fixture stands in for GitLab.
@@ -146,16 +232,39 @@ fn quote(text: &str) -> String {
 
 /// One call to the API: a GET, or a POST of `form` fields when there are any.
 fn request(remote: &WebRemote, endpoint: &str, form: &[(&str, String)]) -> Result<Value> {
-    let token = token().ok_or_else(|| anyhow!("no token in ~/.config/gitlab-token"))?;
+    call(
+        remote,
+        endpoint,
+        if form.is_empty() { "GET" } else { "POST" },
+        form,
+    )
+}
+
+/// One call with any method. An endpoint starting with `/` is under `/api/v4`; any other is under
+/// the project.
+fn call(
+    remote: &WebRemote,
+    endpoint: &str,
+    method: &str,
+    form: &[(&str, String)],
+) -> Result<Value> {
+    let token = token(remote).ok_or_else(|| {
+        anyhow!("no GitLab token — add one in Settings, or put it in ~/.config/gitlab-token")
+    })?;
     let (host, project) = api(remote)?;
-    let url = format!("{host}/api/v4/projects/{project}/{endpoint}");
+    let url = match endpoint.strip_prefix('/') {
+        Some(rest) => format!("{host}/api/v4/{rest}"),
+        None => format!("{host}/api/v4/projects/{project}/{endpoint}"),
+    };
     let mut config = format!(
         "url = \"{}\"\nheader = \"PRIVATE-TOKEN: {}\"\n",
         quote(&url),
         quote(&token)
     );
+    if method != "GET" {
+        config.push_str(&format!("request = \"{method}\"\n"));
+    }
     if !form.is_empty() {
-        config.push_str("request = \"POST\"\n");
         for (name, value) in form {
             config.push_str(&format!("data-urlencode = \"{name}={}\"\n", quote(value)));
         }
@@ -179,9 +288,10 @@ fn request(remote: &WebRemote, endpoint: &str, form: &[(&str, String)]) -> Resul
     let (body, code) = text.rsplit_once('\n').unwrap_or((&text, ""));
     match code.trim() {
         "200" | "201" => Ok(serde_json::from_str(body)?),
+        "204" => Ok(Value::Null),
         "401" | "403" => bail!("GitLab refused the token"),
         "404" => bail!("GitLab does not know this project (or the token cannot see it)"),
-        "400" => bail!("GitLab would not take the comment there: {}", message(body)),
+        "400" => bail!("GitLab would not take that: {}", message(body)),
         other => bail!("GitLab answered {other}"),
     }
 }
@@ -211,14 +321,18 @@ pub fn post_discussion(
     head: &str,
     place: &Place<'_>,
     body: &str,
+    draft: bool,
 ) -> Result<()> {
     if let Some(dir) = fixture() {
         // UI checks: record what would have been sent.
         let file = dir.join("posted.txt");
         let mut text = std::fs::read_to_string(&file).unwrap_or_default();
         text.push_str(&format!(
-            "{iid} {} {:?} {:?} {body}\n",
-            place.path, place.new_line, place.old_line
+            "{iid} {}{} {:?} {:?} {body}\n",
+            if draft { "draft " } else { "" },
+            place.path,
+            place.new_line,
+            place.old_line
         ));
         std::fs::write(file, text)?;
         return Ok(());
@@ -237,7 +351,7 @@ pub fn post_discussion(
         );
     }
     let mut form = vec![
-        ("body", body.to_owned()),
+        (if draft { "note" } else { "body" }, body.to_owned()),
         ("position[position_type]", "text".to_owned()),
         ("position[base_sha]", base),
         ("position[head_sha]", theirs),
@@ -251,8 +365,122 @@ pub fn post_discussion(
     if let Some(n) = place.old_line {
         form.push(("position[old_line]", n.to_string()));
     }
-    request(remote, &format!("merge_requests/{iid}/discussions"), &form)?;
+    let endpoint = if draft { "draft_notes" } else { "discussions" };
+    request(remote, &format!("merge_requests/{iid}/{endpoint}"), &form)?;
     Ok(())
+}
+
+/// A line of the audit trail that UI checks read back: what the app would have sent.
+fn record(line: String) -> Result<bool> {
+    let Some(dir) = fixture() else {
+        return Ok(false);
+    };
+    let file = dir.join("posted.txt");
+    let mut text = std::fs::read_to_string(&file).unwrap_or_default();
+    text.push_str(&line);
+    text.push('\n');
+    std::fs::write(file, text)?;
+    Ok(true)
+}
+
+/// Marks a discussion resolved or open again.
+pub fn resolve(remote: &WebRemote, iid: u64, discussion: &str, resolved: bool) -> Result<()> {
+    if record(format!("resolve {iid} {discussion} {resolved}"))? {
+        return Ok(());
+    }
+    call(
+        remote,
+        &format!("merge_requests/{iid}/discussions/{discussion}"),
+        "PUT",
+        &[("resolved", resolved.to_string())],
+    )?;
+    Ok(())
+}
+
+/// Adds a reply to a discussion.
+pub fn reply(remote: &WebRemote, iid: u64, discussion: &str, body: &str) -> Result<()> {
+    if record(format!("reply {iid} {discussion} {body}"))? {
+        return Ok(());
+    }
+    call(
+        remote,
+        &format!("merge_requests/{iid}/discussions/{discussion}/notes"),
+        "POST",
+        &[("body", body.to_owned())],
+    )?;
+    Ok(())
+}
+
+/// The author's own unpublished comments on a request.
+pub fn drafts(remote: &WebRemote, iid: u64) -> Result<Vec<Draft>> {
+    let value = match fixture() {
+        Some(dir) => match std::fs::read_to_string(dir.join(format!("drafts-{iid}.json"))) {
+            Ok(text) => serde_json::from_str(&text)?,
+            Err(_) => Value::Array(Vec::new()),
+        },
+        None => get(remote, &format!("merge_requests/{iid}/draft_notes"))?,
+    };
+    Ok(parse_drafts(&value))
+}
+
+/// Publishes every draft of the request at once: the review is submitted.
+pub fn publish_drafts(remote: &WebRemote, iid: u64) -> Result<()> {
+    if record(format!("publish {iid}"))? {
+        return Ok(());
+    }
+    call(
+        remote,
+        &format!("merge_requests/{iid}/draft_notes/bulk_publish"),
+        "POST",
+        &[],
+    )?;
+    Ok(())
+}
+
+pub fn delete_draft(remote: &WebRemote, iid: u64, id: u64) -> Result<()> {
+    if record(format!("delete-draft {iid} {id}"))? {
+        return Ok(());
+    }
+    call(
+        remote,
+        &format!("merge_requests/{iid}/draft_notes/{id}"),
+        "DELETE",
+        &[],
+    )?;
+    Ok(())
+}
+
+pub fn parse_drafts(value: &Value) -> Vec<Draft> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|d| {
+            let position = d.get("position").filter(|p| !p.is_null());
+            let line = |key: &str| {
+                position
+                    .and_then(|p| p.get(key))
+                    .and_then(Value::as_u64)
+                    .map(|n| n as u32)
+            };
+            Some(Draft {
+                id: d.get("id")?.as_u64()?,
+                body: text(d, "note"),
+                path: position
+                    .map(|p| {
+                        let new = text(p, "new_path");
+                        if new.is_empty() {
+                            text(p, "old_path")
+                        } else {
+                            new
+                        }
+                    })
+                    .filter(|p| !p.is_empty()),
+                new_line: line("new_line"),
+                old_line: line("old_line"),
+            })
+        })
+        .collect()
 }
 
 fn text(value: &Value, key: &str) -> String {
@@ -345,6 +573,8 @@ pub fn parse_threads(value: &Value) -> Vec<Thread> {
                 .map(|n| n.get("resolved").and_then(Value::as_bool) == Some(true))
                 .collect();
             Some(Thread {
+                id: text(d, "id"),
+                resolvable: !resolvable.is_empty(),
                 notes: notes
                     .iter()
                     .map(|n| Note {
@@ -414,6 +644,33 @@ pub fn epoch(stamp: &str) -> i64 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn drafts_are_read_with_their_lines() {
+        let value = json!([
+            {"id": 7, "note": "Rename?", "position": {"new_path": "a.rs", "old_path": "a.rs", "new_line": 3, "old_line": null}},
+            {"id": 8, "note": "General"},
+            {"note": "no id"}
+        ]);
+        let drafts = parse_drafts(&value);
+        assert_eq!(drafts.len(), 2);
+        assert_eq!((drafts[0].id, drafts[0].new_line), (7, Some(3)));
+        assert_eq!(drafts[0].path.as_deref(), Some("a.rs"));
+        assert_eq!(drafts[1].path, None);
+    }
+
+    #[test]
+    fn a_token_file_name_is_one_safe_segment() {
+        let home = std::path::Path::new("/h");
+        assert_eq!(
+            token_file(home, "git.example.com:8443"),
+            std::path::Path::new("/h/.config/gitlance/tokens/git.example.com_8443")
+        );
+        assert_eq!(
+            token_file(home, "../x"),
+            std::path::Path::new("/h/.config/gitlance/tokens/.._x")
+        );
+    }
 
     #[test]
     fn versions_come_oldest_first() {
@@ -500,7 +757,7 @@ mod tests {
             new_line: Some(3),
             old_line: None,
         };
-        post_discussion(&remote, 412, "abc", &place, "Why?").unwrap();
+        post_discussion(&remote, 412, "abc", &place, "Why?", false).unwrap();
         let posted = std::fs::read_to_string(dir.join("posted.txt")).unwrap();
         assert!(posted.contains("412 a.rs Some(3) None Why?"));
         unsafe { std::env::remove_var("GITLANCE_MR_FIXTURE") };

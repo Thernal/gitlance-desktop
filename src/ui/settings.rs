@@ -15,6 +15,122 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Pastes a token from the clipboard for this repository's GitLab host and tries it.
+    fn use_clipboard_token(&mut self, cx: &mut Context<Self>) {
+        let Some(remote) = self.web.clone() else {
+            return;
+        };
+        let text = cx
+            .read_from_clipboard()
+            .and_then(|c| c.text())
+            .unwrap_or_default();
+        let token = text.trim();
+        if token.len() < 8 || token.contains(char::is_whitespace) {
+            self.gitlab_check = Some(Err(
+                "The clipboard does not hold a token — copy one from GitLab → Preferences → Access tokens (scope: api).".to_owned(),
+            ));
+            return cx.notify();
+        }
+        match crate::mr::save_token(&remote, token) {
+            Ok(()) => {
+                self.load_requests(cx);
+                self.test_gitlab(cx);
+            }
+            Err(e) => {
+                self.gitlab_check = Some(Err(format!("{e:#}")));
+                cx.notify();
+            }
+        }
+    }
+
+    /// Asks GitLab who the token belongs to.
+    fn test_gitlab(&mut self, cx: &mut Context<Self>) {
+        let Some(remote) = self.web.clone() else {
+            return;
+        };
+        self.gitlab_check = None;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { crate::mr::me(&remote) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.gitlab_check = Some(result.map_err(|e| format!("{e:#}")));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The GitLab block: which host, where the token comes from, a way to give one and to test it.
+    fn render_gitlab_settings(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let remote = self.web.as_ref()?;
+        let host = crate::mr::host(remote);
+        if remote.github {
+            return Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_5()
+                    .child(heading("Pull requests"))
+                    .child(item(
+                        "GitHub",
+                        "Pull requests of GitHub are not supported yet; GitLab merge requests are.",
+                        div(),
+                    ))
+                    .into_any_element(),
+            );
+        }
+        let source = crate::mr::token_source(remote).map(|(_, from)| from);
+        let status = match (&self.gitlab_check, source) {
+            (Some(Ok(who)), _) => (format!("Connected as {who}"), theme::added()),
+            (Some(Err(e)), _) => (e.clone(), theme::removed()),
+            (None, Some(from)) => (format!("Token from {from}"), theme::muted()),
+            (None, None) => (
+                "No token for this host yet — merge requests stay hidden.".to_owned(),
+                theme::warning(),
+            ),
+        };
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_5()
+                .child(heading("GitLab"))
+                .child(item(
+                    "Merge requests",
+                    "The host is read from this repository's origin remote, so any GitLab works — gitlab.com or your own. The token needs the api scope (to comment, reply and resolve); read_api is enough to only read. It is kept per host in ~/.config/gitlance/tokens, for you only, and sent to curl on its stdin.",
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_end()
+                        .gap_2()
+                        .child(div().text_size(px(12.)).child(host))
+                        .child(
+                            diff_view::group()
+                                .child(
+                                    chip("gitlab-paste", "Use token from clipboard", false)
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                            this.use_clipboard_token(cx)
+                                        })),
+                                )
+                                .child(chip("gitlab-test", "Test", false).on_click(cx.listener(
+                                    |this, _: &ClickEvent, _, cx| this.test_gitlab(cx),
+                                ))),
+                        )
+                        .child(
+                            div()
+                                .max_w(px(320.))
+                                .text_size(px(12.))
+                                .text_color(status.1)
+                                .child(status.0),
+                        ),
+                ))
+                .into_any_element(),
+        )
+    }
+
     fn change_settings(&mut self, change: impl FnOnce(&mut Self), cx: &mut Context<Self>) {
         change(self);
         self.settings.save();
@@ -71,6 +187,7 @@ impl Workspace {
             },
         ));
 
+        let gitlab = self.render_gitlab_settings(cx);
         div()
             .flex_1()
             .min_w_0()
@@ -154,7 +271,8 @@ impl Workspace {
                                 "Fetch in the background",
                                 "Runs git fetch --all --prune for this repository every 5 minutes and when the window comes back to the front, so other people’s force pushes show up as versions. It writes remote-tracking refs and objects — the one exception to the read-only rule — and uses your own git, SSH agent and VPN. Off until you turn it on, per repository.",
                                 fetch,
-                            )),
+                            ))
+                            .children(gitlab),
                     ),
             )
     }

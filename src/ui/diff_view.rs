@@ -106,7 +106,9 @@ pub fn row(
             .child(half(&data.new, right, false, style, events))
             .into_any_element(),
         // Drawn by the workspace, which owns the comments.
-        Row::Thread(_) | Row::Request(_) | Row::Composer => div().into_any_element(),
+        Row::Thread(_) | Row::Request(_) | Row::Draft(_) | Row::Composer => {
+            div().into_any_element()
+        }
         Row::Unified {
             cell,
             old,
