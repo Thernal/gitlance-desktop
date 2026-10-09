@@ -139,7 +139,7 @@ impl Workspace {
         let mut inside = false;
         for (ix, row) in self.rows.iter().enumerate() {
             match row {
-                Row::Thread(_) | Row::Composer => continue,
+                Row::Thread(_) | Row::Request(_) | Row::Composer => continue,
                 row if rows::is_change(row) => {
                     if !inside {
                         changes.push(ix);

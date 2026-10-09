@@ -110,6 +110,31 @@ pub(super) fn versions(repo: &Repository, refname: &str) -> Result<Vec<Version>>
         .collect()
 }
 
+/// Versions from what a code host kept per push: `(head, base, seconds)`, oldest first. A push
+/// whose commits are not in this repository (not fetched yet) is left out.
+pub(super) fn from_pushes(repo: &Repository, pushes: &[(Oid, Option<Oid>, i64)]) -> Vec<Version> {
+    pushes
+        .iter()
+        .filter(|(head, ..)| repo.find_commit(*head).is_ok())
+        .enumerate()
+        .map(|(i, &(tip, base, time))| {
+            let base = base.filter(|b| repo.find_commit(*b).is_ok());
+            Version {
+                number: i + 1,
+                tip,
+                base,
+                commits: count_commits(repo, tip, base).unwrap_or(0),
+                time,
+                reason: "push".to_owned(),
+                author: repo
+                    .find_commit(tip)
+                    .map(|c| c.committer().name().unwrap_or_default().to_owned())
+                    .unwrap_or_default(),
+            }
+        })
+        .collect()
+}
+
 /// The newest fork point of `tip` with any base candidate; the first parent when `tip` is
 /// itself on a base branch or none exists.
 fn base_of(repo: &Repository, tip: Oid, targets: &[Oid]) -> Result<Option<Oid>> {

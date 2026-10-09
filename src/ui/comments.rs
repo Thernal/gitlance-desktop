@@ -66,7 +66,12 @@ impl Workspace {
             .compose
             .as_ref()
             .filter(|c| Some(&c.path) == self.current_path().as_ref());
-        if here.is_empty() && compose.is_none() {
+        let theirs = if self.showing_request() {
+            self.request_threads_here()
+        } else {
+            Vec::new()
+        };
+        if here.is_empty() && compose.is_none() && theirs.is_empty() {
             return rows;
         }
         let mut out = Vec::with_capacity(rows.len() + here.len() + 1);
@@ -84,6 +89,12 @@ impl Workspace {
                     here.iter()
                         .filter(|(_, o, n)| *o == old && *n == line)
                         .map(|(id, _, _)| Row::Thread(*id)),
+                );
+                out.extend(
+                    theirs
+                        .iter()
+                        .filter(|(_, o, n)| *o == old && *n == line)
+                        .map(|(ix, _, _)| Row::Request(*ix)),
                 );
                 if compose.is_some_and(|c| c.old == old && c.line == line) {
                     out.push(Row::Composer);
@@ -911,7 +922,7 @@ impl Workspace {
     }
 
     /// Shows a comment: in the open file, scrolled to; in another file of the diff, that file first.
-    fn jump_to(&mut self, id: u64, cx: &mut Context<Self>) {
+    pub(super) fn jump_to(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(path) = self
             .comments
             .iter()

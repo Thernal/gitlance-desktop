@@ -40,6 +40,15 @@ pub struct Thread {
     pub resolved: bool,
 }
 
+/// One push of the merge request's branch, as GitLab keeps it: the commit it ended on, the commit
+/// the merge request was based on then, and when.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Push {
+    pub head: String,
+    pub base: String,
+    pub created: i64,
+}
+
 /// The token file, when there is one.
 pub fn token() -> Option<String> {
     let path = std::env::home_dir()?.join(".config/gitlab-token");
@@ -90,6 +99,18 @@ pub fn threads(remote: &WebRemote, iid: u64) -> Result<Vec<Thread>> {
         )?,
     };
     Ok(parse_threads(&value))
+}
+
+/// The versions (pushes) of a merge request, oldest first.
+pub fn versions(remote: &WebRemote, iid: u64) -> Result<Vec<Push>> {
+    let value = match fixture() {
+        Some(dir) => match std::fs::read_to_string(dir.join(format!("versions-{iid}.json"))) {
+            Ok(text) => serde_json::from_str(&text)?,
+            Err(_) => Value::Array(Vec::new()),
+        },
+        None => get(remote, &format!("merge_requests/{iid}/versions"))?,
+    };
+    Ok(parse_versions(&value))
 }
 
 /// `https://host`, and the project path with `/` as `%2F`.
@@ -280,6 +301,25 @@ pub fn parse_mrs(value: &Value) -> Vec<Mr> {
         .collect()
 }
 
+/// GitLab lists versions newest first; here they come oldest first.
+pub fn parse_versions(value: &Value) -> Vec<Push> {
+    let mut out: Vec<Push> = value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| {
+            let head = text(v, "head_commit_sha");
+            (!head.is_empty()).then(|| Push {
+                head,
+                base: text(v, "base_commit_sha"),
+                created: epoch(&text(v, "created_at")),
+            })
+        })
+        .collect();
+    out.reverse();
+    out
+}
+
 pub fn parse_threads(value: &Value) -> Vec<Thread> {
     value
         .as_array()
@@ -374,6 +414,20 @@ pub fn epoch(stamp: &str) -> i64 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn versions_come_oldest_first() {
+        let value = json!([
+            {"head_commit_sha": "bbb", "base_commit_sha": "000", "created_at": "2026-10-08T01:00:00Z"},
+            {"head_commit_sha": "aaa", "base_commit_sha": "000", "created_at": "2026-10-08T00:00:00Z"},
+            {"id": 3}
+        ]);
+        let pushes = parse_versions(&value);
+        assert_eq!(
+            pushes.iter().map(|p| p.head.as_str()).collect::<Vec<_>>(),
+            ["aaa", "bbb"]
+        );
+    }
 
     #[test]
     fn timestamps_become_epoch_seconds() {

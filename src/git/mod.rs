@@ -494,6 +494,30 @@ impl Repo {
         })
     }
 
+    /// The commits `head` has on top of `base` (or of their merge base), newest first.
+    pub fn range_log(
+        &self,
+        base: Oid,
+        head: Oid,
+        since_merge_base: bool,
+    ) -> Result<Vec<CommitInfo>> {
+        let start = if since_merge_base {
+            self.inner.merge_base(base, head).unwrap_or(base)
+        } else {
+            base
+        };
+        let mut walk = self.inner.revwalk()?;
+        walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
+        walk.push(head)?;
+        walk.hide(start)?;
+        walk.map(|id| self.commit(id?)).collect()
+    }
+
+    /// Versions from a code host's record of pushes: `(head, base, seconds)`, oldest first.
+    pub fn versions_from_pushes(&self, pushes: &[(Oid, Option<Oid>, i64)]) -> Vec<Version> {
+        versions::from_pushes(&self.inner, pushes)
+    }
+
     /// The versions of a branch, oldest first, read from the ref's reflog.
     pub fn versions(&self, refname: &str) -> Result<Vec<Version>> {
         versions::versions(&self.inner, refname)

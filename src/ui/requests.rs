@@ -3,8 +3,8 @@
 //! only (see `crate::mr`).
 
 use super::rows::Row;
-use super::{Workspace, format, plural, row, theme};
-use crate::git::RefKind;
+use super::{Header, Selection, Workspace, format, island, island_label, plural, row, theme};
+use crate::git::{RefKind, Repo, Version};
 use crate::mr::{self, Mr, Thread};
 use gpui::{ClickEvent, Context, FontWeight, Task, div, prelude::*, px};
 
@@ -25,6 +25,9 @@ pub struct Requests {
     /// The request of the open branch, when it is one's source branch.
     pub current: Option<u64>,
     pub threads: Vec<Thread>,
+    /// The pushes GitLab kept for a request, as versions of this repository.
+    pub versions: Option<(u64, Vec<Version>)>,
+    version_task: Option<Task<()>>,
     task: Option<Task<()>>,
     thread_task: Option<Task<()>>,
 }
@@ -116,6 +119,7 @@ impl Workspace {
                         Ok(threads) => this.requests.threads = threads,
                         Err(e) => this.requests.error = Some(format!("{e:#}")),
                     }
+                    this.refresh_rows();
                     cx.notify();
                 }
             })
@@ -135,6 +139,7 @@ impl Workspace {
         else {
             return;
         };
+        self.load_request_versions(iid, cx);
         let pick = |name: &str| {
             let remote = self.branches.iter().position(|b| {
                 b.kind == RefKind::Remote && b.name.split_once('/').is_some_and(|(_, n)| n == name)
@@ -164,6 +169,282 @@ impl Workspace {
         self.select_branch(src, None, cx);
         self.record();
         self.review_open = true;
+    }
+
+    /// Reads the pushes GitLab kept for request `iid`; they become the versions timeline once the
+    /// request's diff is open.
+    fn load_request_versions(&mut self, iid: u64, cx: &mut Context<Self>) {
+        self.requests.versions = None;
+        let (Some(remote), Some(root)) = (self.web.clone(), self.root.clone()) else {
+            return;
+        };
+        self.requests.version_task = Some(cx.spawn(async move |this, cx| {
+            let built = cx
+                .background_executor()
+                .spawn(async move {
+                    let pushes: Vec<_> = mr::versions(&remote, iid)?
+                        .iter()
+                        .filter_map(|p| {
+                            Some((
+                                git2::Oid::from_str(&p.head).ok()?,
+                                git2::Oid::from_str(&p.base).ok(),
+                                p.created,
+                            ))
+                        })
+                        .collect();
+                    anyhow::Ok(Repo::open(&root)?.versions_from_pushes(&pushes))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Ok(list) = built {
+                    this.requests.versions = Some((iid, list));
+                    this.apply_mr_versions();
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// Shows GitLab's versions of the open request in the timeline, when there is more than one.
+    pub(super) fn apply_mr_versions(&mut self) {
+        let Some(iid) = self.open_request.as_ref().map(|r| r.2) else {
+            return;
+        };
+        if let Some((for_iid, list)) = &self.requests.versions
+            && *for_iid == iid
+            && list.len() > 1
+        {
+            self.versions = list.clone();
+        }
+    }
+
+    /// The commits list of an open request: only what the request adds to its target.
+    pub(super) fn show_request_commits(&mut self, base: &super::NamedTip, head: &super::NamedTip) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        if let Ok(list) = Repo::open(&root).and_then(|r| r.range_log(base.1, head.1, true)) {
+            self.commits = list;
+            self.refilter();
+        }
+    }
+
+    /// Is the open diff the one of the request whose discussions are loaded?
+    pub(super) fn showing_request(&self) -> bool {
+        matches!(
+            self.diff.as_ref().map(|d| &d.header),
+            Some(Header::Compare { request: Some(iid), .. }) if Some(*iid) == self.requests.current
+        )
+    }
+
+    /// The discussions on lines of the open file: (index, old side, line).
+    pub(super) fn request_threads_here(&self) -> Vec<(usize, bool, u32)> {
+        let Some(path) = self.current_path() else {
+            return Vec::new();
+        };
+        self.requests
+            .threads
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.path.as_deref() == Some(path.as_str()))
+            .filter_map(|(ix, t)| match (t.new_line, t.old_line) {
+                (Some(n), _) => Some((ix, false, n)),
+                (None, Some(o)) => Some((ix, true, o)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A discussion of the request, drawn under its line.
+    pub(super) fn render_request_thread(&self, ix: usize, indent: f32) -> gpui::AnyElement {
+        let Some(t) = self.requests.threads.get(ix) else {
+            return div().into_any_element();
+        };
+        let notes = t.notes.iter().enumerate().map(|(n, note)| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .when(n > 0, |s| {
+                    s.pt(px(6.))
+                        .mt(px(4.))
+                        .border_t_1()
+                        .border_color(theme::island_border())
+                })
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .text_size(px(11.))
+                        .text_color(theme::faint())
+                        .child(
+                            div()
+                                .text_color(theme::warning())
+                                .child(note.author.clone()),
+                        )
+                        .child(format!("· {}", format::ago(note.created)))
+                        .when(n == 0 && t.resolved, |s| s.child("· resolved ✓")),
+                )
+                .child(note.body.clone())
+        });
+        div()
+            .w_full()
+            .pl(px(indent))
+            .pr(px(12.))
+            .py(px(4.))
+            .child(
+                div()
+                    .max_w(px(640.))
+                    .flex()
+                    .flex_col()
+                    .px_3()
+                    .py_2()
+                    .rounded(px(super::ROW_RADIUS))
+                    .border_1()
+                    .border_color(theme::warning())
+                    .bg(theme::panel())
+                    .font_family(theme::UI_FONT)
+                    .text_size(px(12.))
+                    .line_height(px(17.))
+                    .children(notes),
+            )
+            .into_any_element()
+    }
+
+    /// "Whole request" above the commits: back to the diff of the request after a single commit.
+    pub(super) fn render_request_row(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let (base, head, iid) = self.open_request.clone()?;
+        let selected = self.selection == Selection::None && self.showing_request();
+        let n = self.commits.len();
+        Some(
+            div().w_full().px(px(6.)).pb(px(4.)).child(
+                row("request-row", selected)
+                    .h(px(34.))
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_weight(FontWeight::MEDIUM)
+                            .truncate()
+                            .child(format!("Whole request !{iid}")),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(12.))
+                            .text_color(theme::warning())
+                            .child(plural(n, "commit")),
+                    )
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.run_compare(base.clone(), head.clone(), true, Some(iid), cx)
+                    })),
+            ),
+        )
+    }
+
+    /// Every comment on the open diff, the request's in orange and the agent's in purple; a click
+    /// shows it in the diff.
+    pub(super) fn render_comments_island(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let theirs: Vec<(usize, &Thread)> = if self.showing_request() {
+            self.requests.threads.iter().enumerate().collect()
+        } else {
+            Vec::new()
+        };
+        let total = theirs.len() + self.comments.len();
+        if total == 0 {
+            return None;
+        }
+        let item = |id: (&'static str, usize), tone, where_: String, body: String| {
+            div()
+                .id(id)
+                .mx(px(6.))
+                .px(px(8.))
+                .py(px(4.))
+                .rounded(px(super::ROW_RADIUS))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::hover()))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().flex_none().size(px(6.)).rounded_full().bg(tone))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .font_family(theme::CODE_FONT)
+                                .text_size(px(11.))
+                                .text_color(theme::faint())
+                                .child(where_),
+                        ),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .pl(px(14.))
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child(body),
+                )
+        };
+        let request_items = theirs.into_iter().map(|(ix, t)| {
+            let target = t.path.clone().zip(t.new_line.or(t.old_line));
+            let old = t.new_line.is_none();
+            let where_ = match &target {
+                Some((p, n)) => format!("{}:{n}", p.rsplit('/').next().unwrap_or(p)),
+                None => "General".to_owned(),
+            };
+            let first = &t.notes[0];
+            item(
+                ("comment-mr", ix),
+                theme::warning(),
+                where_,
+                format!("{}: {}", first.author, first.body.replace('\n', " ")),
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if let Some((path, line)) = target.clone() {
+                    this.jump_to_line(&path, line, old, cx)
+                }
+            }))
+        });
+        let agent_items = self.comments.iter().map(|c| {
+            let id = c.id;
+            item(
+                ("comment-agent", id as usize),
+                theme::focus(),
+                format!(
+                    "{}:{}",
+                    c.path.rsplit('/').next().unwrap_or(&c.path),
+                    c.line
+                ),
+                c.body.replace('\n', " "),
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.jump_to(id, cx)))
+        });
+        Some(
+            island()
+                .flex_none()
+                .max_h(px(150.))
+                .pb(px(6.))
+                .child(island_label(format!("Comments · {total}")))
+                .child(
+                    div()
+                        .id("comments-list")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .children(request_items)
+                        .children(agent_items),
+                ),
+        )
     }
 
     /// The requests the filter lets through, in the order the list shows them.

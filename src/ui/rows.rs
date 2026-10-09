@@ -53,6 +53,8 @@ pub enum Row {
     },
     /// The thread of review comment `0` under the line above.
     Thread(u64),
+    /// Thread `0` (an index into the open merge request's discussions) under the line above.
+    Request(usize),
     /// The box for writing a new comment under the line above.
     Composer,
     /// One line of a unified diff; its text is from the old side when `old`.
@@ -570,7 +572,7 @@ pub fn matching_rows(data: &FileData, rows: &[Row], words: &[String]) -> Vec<usi
     rows.iter()
         .enumerate()
         .filter(|(_, row)| match **row {
-            Row::Gap { .. } | Row::Thread(_) | Row::Composer => false,
+            Row::Gap { .. } | Row::Thread(_) | Row::Request(_) | Row::Composer => false,
             Row::Split { left, right } => hit(true, left) || hit(false, right),
             Row::Unified { cell, old, .. } => hit(old, Some(cell)),
         })

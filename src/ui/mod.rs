@@ -677,6 +677,8 @@ pub struct Workspace {
     requests: requests::Requests,
     /// A merge request's diff to show once its branch has loaded: base, head, request.
     pending_compare: Option<PendingCompare>,
+    /// The merge request whose diff is open (or was last opened from the list).
+    open_request: Option<PendingCompare>,
     /// The line number being typed for a quick comment.
     goline: Option<String>,
     /// The diff row the `c` marker stands on.
@@ -792,6 +794,7 @@ impl Workspace {
             shell: None,
             requests: Default::default(),
             pending_compare: None,
+            open_request: None,
             goline: None,
             goline_row: None,
             jump_line: None,
@@ -962,6 +965,7 @@ impl Workspace {
         };
         let (refname, tip) = (branch.refname.clone(), branch.tip);
         self.clear_branch();
+        self.open_request = None;
         self.branch = Some(ix);
         self.branch_task = Some(cx.spawn(async move |this, cx| {
             let loaded = cx
@@ -987,6 +991,9 @@ impl Workspace {
                             this.select_commit(ix, cx);
                         }
                         if let Some((base, head, iid)) = this.pending_compare.take() {
+                            this.open_request = Some((base.clone(), head.clone(), iid));
+                            this.show_request_commits(&base, &head);
+                            this.apply_mr_versions();
                             this.run_compare(base, head, true, Some(iid), cx);
                         }
                     }
@@ -2066,6 +2073,9 @@ impl Workspace {
             .child(
                 island()
                     .h(px(self.layout.branches))
+                    // Gives way when comments and versions need the room, so Commits stays.
+                    .flex_shrink(1.)
+                    .min_h(px(140.))
                     .border_color(self.zone_border(zones::Zone::Branches))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -2090,16 +2100,25 @@ impl Workspace {
                     .child(self.render_versions(cx))
                     .child(div().h(px(GAP)))
             }))
+            .children(self.render_comments_island(cx).map(|island| {
+                div()
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .child(island)
+                    .child(div().h(px(GAP)))
+            }))
             .child(
                 island()
                     .flex_1()
-                    .min_h_0()
+                    .min_h(px(180.))
                     .border_color(self.zone_border(zones::Zone::Commits))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| this.set_zone(zones::Zone::Commits, cx)),
                     )
                     .child(island_label(format!("Commits · {}", self.commits.len())))
+                    .children(self.render_request_row(cx))
                     .children(self.render_working_row(cx))
                     .child(self.render_find(cx))
                     .children(self.render_pill(cx))
@@ -3038,6 +3057,7 @@ impl Workspace {
             let indent = style.gutter + 8.;
             match row {
                 Row::Thread(id) => return workspace.render_thread(id, indent, this.clone()),
+                Row::Request(ix) => return workspace.render_request_thread(ix, indent),
                 Row::Composer => return workspace.render_composer(indent, this.clone()),
                 _ => {}
             }
