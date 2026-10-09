@@ -18,6 +18,11 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = 
 syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-onig"] }
 two-face = "0.5"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSResponder"] }
+objc2-foundation = { version = "0.3", features = ["NSData"] }
+
 [features]
 # `GITLANCE_SNAPSHOT=<file.png>` renders the window to a PNG and quits — UI checks without screen access.
 snapshot = ["dep:image", "gpui/test-support", "gpui_platform/test-support"]

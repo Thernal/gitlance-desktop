@@ -27,7 +27,7 @@ use gpui::{
 use lists::{Field, History};
 use menu::{Act, CtxMenu, Entry};
 use rows::{FileData, Row};
-use select::{Pos, Sel};
+use select::Sel;
 use std::cell::Cell as Shared;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -119,6 +119,9 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("alt-e", ToggleFullContext, Some("Workspace")),
                 KeyBinding::new("alt-w", ToggleWhitespace, Some("Workspace")),
             ]);
+            if !cfg!(feature = "snapshot") || std::env::var_os("GITLANCE_SNAPSHOT").is_none() {
+                crate::dock::set_icon();
+            }
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.set_menus(menus(&ViewOptions::load(&Settings::load())));
 
@@ -334,8 +337,8 @@ fn snapshot(window: gpui::WindowHandle<Workspace>, cx: &mut App) {
                             "linemenu" => {
                                 this.sel = Some(Sel {
                                     old: false,
-                                    anchor: Pos { line: 66, byte: 4 },
-                                    head: Pos { line: 68, byte: 12 },
+                                    anchor: select::Pos { line: 66, byte: 4 },
+                                    head: select::Pos { line: 68, byte: 12 },
                                 });
                                 this.line_context(false, 67, Point::new(px(900.), px(520.)), cx);
                                 continue;
