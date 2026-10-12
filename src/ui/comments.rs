@@ -4,9 +4,11 @@
 //! `../Design/mockups/line-comments/a-agent-comments.html`.
 
 use super::input::{self, Edit};
+use super::markdown;
 use super::px;
 use super::rows::Row;
 use super::{ROW_RADIUS, Selection, Workspace, format, theme};
+use crate::markdown::{Helper, Open};
 use crate::review::{self, Comment, Place};
 use gpui::{ClipboardItem, Context, FontWeight, KeyDownEvent, WeakEntity, div, prelude::*};
 
@@ -33,6 +35,10 @@ pub struct Compose {
     /// Why the last attempt to post failed.
     error: Option<String>,
     posting: bool,
+    /// Markdown markers the helpers opened and the writer has not closed yet.
+    open: Vec<Open>,
+    /// The text is shown formatted instead of as written (⌘⇧P).
+    preview: bool,
 }
 
 impl Workspace {
@@ -262,6 +268,8 @@ impl Workspace {
             target: Target::Agent,
             error: None,
             posting: false,
+            open: Vec::new(),
+            preview: false,
         });
         self.refresh_rows();
         cx.notify();
@@ -286,6 +294,8 @@ impl Workspace {
             target: Target::Reply(ix),
             error: None,
             posting: false,
+            open: Vec::new(),
+            preview: false,
         });
         self.field_all = false;
         self.refresh_rows();
@@ -738,15 +748,17 @@ impl Workspace {
         }
     }
 
-    /// Typing into the composer: text, ⌘A, backspace, return for a new line, ⌘↵ to add, esc to cancel.
+    /// Typing into the composer: text, ⌘A, backspace, return for a new line (a list goes on),
+    /// ⌘B ⌘I ⌘⇧X ⌘⇧E ⌘⇧K for markdown, ⌘⇧P to preview it, ⌘↵ to add, esc to cancel.
     pub(super) fn compose_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = &event.keystroke;
         let Some(compose) = self.compose.as_mut() else {
             return;
         };
-        if key.key == "enter" && key.modifiers.platform {
+        let m = key.modifiers;
+        if key.key == "enter" && m.platform {
             // ⇧⌘↵ on a merge request keeps the comment pending until the review is submitted.
-            if key.modifiers.shift
+            if m.shift
                 && let Some(Target::Request(iid)) = self.compose.as_ref().map(|c| c.target)
             {
                 return self.post_comment(iid, true, cx);
@@ -756,11 +768,40 @@ impl Workspace {
         if key.key == "tab" {
             return self.toggle_target(cx);
         }
+        if m.platform && !m.alt && !m.control {
+            let helper = match (key.key.as_str(), m.shift) {
+                ("b", false) => Some(Helper::Bold),
+                ("i", false) => Some(Helper::Italic),
+                ("x", true) => Some(Helper::Strike),
+                ("e", true) => Some(Helper::Code),
+                ("k", true) => Some(Helper::Link),
+                _ => None,
+            };
+            if let Some(helper) = helper {
+                return self.apply_helper(helper, cx);
+            }
+            if key.key == "p" && m.shift {
+                return self.toggle_preview(cx);
+            }
+        }
         if key.key == "enter" {
             if std::mem::take(&mut self.field_all) {
                 compose.body.clear();
             }
-            compose.body.push('\n');
+            // ⇧↵ is a plain new line; ↵ carries a list or a quote on.
+            if m.shift {
+                compose.body.push('\n');
+            } else {
+                crate::markdown::newline(&mut compose.body);
+            }
+        } else if key.key == "v" && m.platform && !m.shift {
+            // A comment keeps the lines of what is pasted into it (a field makes them one line).
+            if let Some(pasted) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                if std::mem::take(&mut self.field_all) {
+                    compose.body.clear();
+                }
+                compose.body.push_str(&pasted);
+            }
         } else {
             match input::edit(&mut compose.body, &mut self.field_all, key, cx) {
                 Edit::Escape => return self.cancel_comment(cx),
@@ -768,9 +809,70 @@ impl Workspace {
                 Edit::Changed | Edit::Selected | Edit::Enter { .. } => {}
             }
         }
+        compose.preview = false;
+        crate::markdown::prune(&compose.body, &mut compose.open);
         // The box grows with its text.
         self.diff_list.remeasure();
         cx.notify();
+    }
+
+    /// A markdown helper of the composer's toolbar, on its text.
+    fn apply_helper(&mut self, helper: Helper, cx: &mut Context<Self>) {
+        let Some(compose) = self.compose.as_mut().filter(|c| !c.posting) else {
+            return;
+        };
+        let all = std::mem::take(&mut self.field_all);
+        crate::markdown::apply(&mut compose.body, all, &mut compose.open, helper);
+        compose.preview = false;
+        self.diff_list.remeasure();
+        cx.notify();
+    }
+
+    fn toggle_preview(&mut self, cx: &mut Context<Self>) {
+        if let Some(compose) = self.compose.as_mut() {
+            compose.preview = !compose.preview;
+            self.diff_list.remeasure();
+            cx.notify();
+        }
+    }
+
+    /// ⌥M: comments drawn as formatted markdown, or as the text written.
+    pub(super) fn toggle_rich_comments(&mut self, cx: &mut Context<Self>) {
+        self.settings.rich_comments = !self.settings.rich_comments;
+        self.settings.save();
+        self.diff_list.remeasure();
+        cx.notify();
+    }
+
+    /// A comment on one line, for a folded thread or the drawer: without its markdown when Rich.
+    pub(super) fn one_line(&self, body: &str) -> String {
+        if self.settings.rich_comments {
+            crate::markdown::plain(body)
+        } else {
+            body.replace('\n', " ")
+        }
+    }
+
+    /// The project's web address, which relative links in a comment are relative to.
+    pub(super) fn link_base(&self) -> Option<&str> {
+        self.web.as_ref().map(|w| w.base.as_str())
+    }
+
+    /// The *Raw* / *Rich* switch beside a comment that has markdown.
+    pub(super) fn rich_switch(&self, id: impl Into<gpui::ElementId>) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .cursor_pointer()
+            .hover(|s| s.text_color(theme::text()))
+            .child(if self.settings.rich_comments {
+                "Raw"
+            } else {
+                "Rich"
+            })
+            .tooltip(|_, cx| {
+                cx.new(|_| super::Tip("Markdown as written or formatted  ⌥M"))
+                    .into()
+            })
     }
 
     /// The comments as markdown, copied for pasting into an agent.
@@ -843,7 +945,7 @@ impl Workspace {
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
-                                .child(comment.body.replace('\n', " ")),
+                                .child(self.one_line(&comment.body)),
                         )
                         .on_click(move |_, _, cx| {
                             this.update(cx, |this, cx| {
@@ -856,6 +958,7 @@ impl Workspace {
                 )
                 .into_any_element();
         }
+        let toggle = this.clone();
         div()
             .w_full()
             .pl(px(indent))
@@ -884,6 +987,14 @@ impl Workspace {
                             .text_color(theme::faint())
                             .child(div().text_color(theme::focus()).child("You → agent"))
                             .child(div().flex_1().child(format!("· {}", comment.at)))
+                            .children(markdown::has_markdown(&comment.body).then(|| {
+                                self.rich_switch(("agent-rich", id))
+                                    .on_click(move |_, _, cx| {
+                                        toggle
+                                            .update(cx, |this, cx| this.toggle_rich_comments(cx))
+                                            .ok();
+                                    })
+                            }))
                             .child(
                                 div()
                                     .id(("delete-comment", id))
@@ -896,7 +1007,12 @@ impl Workspace {
                                     }),
                             ),
                     )
-                    .child(comment.body.clone()),
+                    .child(markdown::body(
+                        &comment.body,
+                        self.settings.rich_comments,
+                        format!("md-agent-{id}"),
+                        None,
+                    )),
             )
             .into_any_element()
     }
@@ -906,8 +1022,8 @@ impl Workspace {
         let Some(compose) = &self.compose else {
             return div().into_any_element();
         };
-        let (add, cancel, pick_agent, pick_request) =
-            (this.clone(), this.clone(), this.clone(), this);
+        let (add, cancel, pick_agent, pick_request, helpers) =
+            (this.clone(), this.clone(), this.clone(), this.clone(), this);
         let request = self.request_target();
         let reply = matches!(compose.target, Target::Reply(_));
         let to_request = matches!(compose.target, Target::Request(_) | Target::Reply(_));
@@ -1012,7 +1128,19 @@ impl Workspace {
                                     }),
                             )
                     })
-                    .child(if compose.body.is_empty() {
+                    .child(self.render_markdown_bar(compose, tone, helpers))
+                    .child(if compose.preview {
+                        if compose.body.trim().is_empty() {
+                            div().text_color(theme::faint()).child("Nothing to preview")
+                        } else {
+                            div().child(markdown::body(
+                                &compose.body,
+                                true,
+                                "md-compose",
+                                self.link_base(),
+                            ))
+                        }
+                    } else if compose.body.is_empty() {
                         div().text_color(theme::faint()).child(if reply {
                             "Reply — everyone on the merge request will see it  ⌘↵ sends"
                         } else if to_request {
@@ -1098,6 +1226,101 @@ impl Workspace {
                     ),
             )
             .into_any_element()
+    }
+
+    /// The composer's markdown helpers, and Write / Preview.
+    fn render_markdown_bar(
+        &self,
+        compose: &Compose,
+        tone: gpui::Rgba,
+        this: WeakEntity<Self>,
+    ) -> impl IntoElement + use<> {
+        let button = |h: Helper, this: WeakEntity<Self>| {
+            let (icon, tip) = markdown::helper_look(h);
+            let open = compose.open.iter().any(|o| o.helper == h);
+            div()
+                .id(("md-helper", h as usize))
+                .size(px(22.))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.))
+                .cursor_pointer()
+                .when(open, |s| s.bg(theme::selected()))
+                .hover(|s| s.bg(theme::hover()))
+                .child(super::icons::icon(icon).size(px(14.)).text_color(if open {
+                    tone
+                } else {
+                    theme::muted()
+                }))
+                .tooltip(move |_, cx| cx.new(|_| super::Tip(tip)).into())
+                .on_click(move |_, _, cx| {
+                    this.update(cx, |this, cx| this.apply_helper(h, cx)).ok();
+                })
+        };
+        let groups: [&[Helper]; 3] = [
+            &[
+                Helper::Bold,
+                Helper::Italic,
+                Helper::Strike,
+                Helper::Code,
+                Helper::Link,
+            ],
+            &[Helper::Heading, Helper::Quote, Helper::CodeBlock],
+            &[Helper::Bullet, Helper::Numbered, Helper::Task],
+        ];
+        let separator = || {
+            div()
+                .w(px(1.))
+                .h(px(14.))
+                .mx(px(4.))
+                .bg(theme::island_border())
+        };
+        let mut row = div().flex().items_center().gap(px(1.));
+        for (n, group) in groups.iter().enumerate() {
+            if n > 0 {
+                row = row.child(separator());
+            }
+            row = row.children(group.iter().map(|&h| button(h, this.clone())));
+        }
+        let tab = |id: &'static str, label: &'static str, on: bool, this: WeakEntity<Self>| {
+            div()
+                .id(id)
+                .px_2()
+                .rounded(px(4.))
+                .text_size(px(11.))
+                .cursor_pointer()
+                .when(on, |s| s.bg(theme::selected()).text_color(theme::text()))
+                .when(!on, |s| s.text_color(theme::muted()))
+                .hover(|s| s.text_color(theme::text()))
+                .child(label)
+                .on_click(move |_, _, cx| {
+                    this.update(cx, |this, cx| {
+                        if this
+                            .compose
+                            .as_ref()
+                            .is_some_and(|c| c.preview != (id == "md-preview"))
+                        {
+                            this.toggle_preview(cx)
+                        }
+                    })
+                    .ok();
+                })
+        };
+        row.child(div().flex_1()).child(
+            div()
+                .flex()
+                .p(px(2.))
+                .rounded(px(5.))
+                .bg(theme::base())
+                .child(tab("md-write", "Write", !compose.preview, this.clone()))
+                .child(
+                    tab("md-preview", "Preview", compose.preview, this).tooltip(|_, cx| {
+                        cx.new(|_| super::Tip("Preview the markdown  ⌘⇧P")).into()
+                    }),
+                ),
+        )
     }
 
     /// Shows a comment: in the open file, scrolled to; in another file of the diff, that file first.

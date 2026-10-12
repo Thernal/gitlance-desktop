@@ -221,6 +221,9 @@ impl Workspace {
             },
         ));
 
+        let rich = switch("rich-comments", s.rich_comments)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_rich_comments(cx)));
+
         let fetch = switch("fetch", self.fetch.enabled).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 let on = !this.fetch.enabled;
@@ -297,6 +300,11 @@ impl Workspace {
                                 "Fold generated files",
                                 "Lock files, minified and generated code (Cargo.lock, package-lock.json, *.min.js, *.pb.go …) start folded when they change by more than 40 lines. They stay in the file list, tagged “generated”; one click shows them.",
                                 fold,
+                            ))
+                            .child(item(
+                                "Format comments as markdown",
+                                "Draws headings, lists, code, tables and links in comments — GitLab discussions are written in markdown. Off shows the text as written; ⌥M or Raw / Rich beside a comment switches it anywhere.",
+                                rich,
                             ))
                             .child(heading("General"))
                             .child(item(

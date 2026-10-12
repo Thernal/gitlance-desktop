@@ -39,6 +39,93 @@ const ICONS: &[(&str, &str)] = &[
             r#"<circle cx="12" cy="12" r="3"/>"#
         ),
     ),
+    // The composer's markdown helpers.
+    (
+        "bold",
+        lucide!(
+            r#"<path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/>"#
+        ),
+    ),
+    (
+        "italic",
+        lucide!(
+            r#"<line x1="19" x2="10" y1="4" y2="4"/>"#
+            r#"<line x1="14" x2="5" y1="20" y2="20"/>"#
+            r#"<line x1="15" x2="9" y1="4" y2="20"/>"#
+        ),
+    ),
+    (
+        "strikethrough",
+        lucide!(
+            r#"<path d="M16 4H9a3 3 0 0 0-2.83 4"/>"#
+            r#"<path d="M14 12a4 4 0 0 1 0 8H6"/>"#
+            r#"<line x1="4" x2="20" y1="12" y2="12"/>"#
+        ),
+    ),
+    (
+        "code",
+        lucide!(r#"<polyline points="16 18 22 12 16 6"/>"# r#"<polyline points="8 6 2 12 8 18"/>"#),
+    ),
+    (
+        "link",
+        lucide!(
+            r#"<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>"#
+            r#"<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>"#
+        ),
+    ),
+    (
+        "heading",
+        lucide!(r#"<path d="M6 12h12"/>"# r#"<path d="M6 20V4"/>"# r#"<path d="M18 20V4"/>"#),
+    ),
+    (
+        "quote",
+        lucide!(
+            r#"<path d="M17 6H3"/>"#
+            r#"<path d="M21 12H8"/>"#
+            r#"<path d="M21 18H8"/>"#
+            r#"<path d="M3 12v6"/>"#
+        ),
+    ),
+    (
+        "list",
+        lucide!(
+            r#"<path d="M3 12h.01"/>"#
+            r#"<path d="M3 18h.01"/>"#
+            r#"<path d="M3 6h.01"/>"#
+            r#"<path d="M8 12h13"/>"#
+            r#"<path d="M8 18h13"/>"#
+            r#"<path d="M8 6h13"/>"#
+        ),
+    ),
+    (
+        "list-ordered",
+        lucide!(
+            r#"<path d="M10 12h11"/>"#
+            r#"<path d="M10 18h11"/>"#
+            r#"<path d="M10 6h11"/>"#
+            r#"<path d="M4 10h2"/>"#
+            r#"<path d="M4 6h1v4"/>"#
+            r#"<path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>"#
+        ),
+    ),
+    (
+        "list-checks",
+        lucide!(
+            r#"<path d="m3 17 2 2 4-4"/>"#
+            r#"<path d="m3 7 2 2 4-4"/>"#
+            r#"<path d="M13 6h8"/>"#
+            r#"<path d="M13 12h8"/>"#
+            r#"<path d="M13 18h8"/>"#
+        ),
+    ),
+    (
+        "code-block",
+        lucide!(
+            r#"<path d="m10 9-3 3 3 3"/>"#
+            r#"<path d="m14 15 3-3-3-3"/>"#
+            r#"<rect x="3" y="3" width="18" height="18" rx="2"/>"#
+        ),
+    ),
     ("back", lucide!(r#"<path d="m15 18-6-6 6-6"/>"#)),
     ("forward", lucide!(r#"<path d="m9 18 6-6-6-6"/>"#)),
     ("chevron", lucide!(r#"<path d="m6 9 6 6 6-6"/>"#)),

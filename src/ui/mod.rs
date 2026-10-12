@@ -12,6 +12,7 @@ mod format;
 mod icons;
 mod input;
 mod lists;
+mod markdown;
 mod menu;
 mod palette;
 mod recents;
@@ -83,6 +84,7 @@ actions!(
         ToggleWrap,
         ToggleFullContext,
         ToggleWhitespace,
+        ToggleRichComments,
         CommentLine,
         SubmitReview,
         CreateRequest,
@@ -247,6 +249,7 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("alt-z", ToggleWrap, Some("Workspace")),
                 KeyBinding::new("alt-e", ToggleFullContext, Some("Workspace")),
                 KeyBinding::new("alt-w", ToggleWhitespace, Some("Workspace")),
+                KeyBinding::new("alt-m", ToggleRichComments, Some("Workspace && !Typing")),
             ]);
             if !cfg!(feature = "snapshot") || std::env::var_os("GITLANCE_SNAPSHOT").is_none() {
                 crate::dock::set_icon();
@@ -2031,6 +2034,15 @@ impl Workspace {
 
     fn toggle_whitespace(&mut self, _: &ToggleWhitespace, _: &mut Window, cx: &mut Context<Self>) {
         self.toggle(Opt::Whitespace, cx);
+    }
+
+    fn toggle_rich_comments_action(
+        &mut self,
+        _: &ToggleRichComments,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_rich_comments(cx);
     }
 
     /// A click compares that version with the latest; ⌘-click makes it the newer side instead.
@@ -3918,6 +3930,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_wrap))
             .on_action(cx.listener(Self::toggle_full_context))
             .on_action(cx.listener(Self::toggle_whitespace))
+            .on_action(cx.listener(Self::toggle_rich_comments_action))
             .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
                 if let Some(path) = paths.paths().first() {
                     this.open_repo(path.clone(), None, cx);

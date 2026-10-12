@@ -42,6 +42,21 @@ pub fn highlight(path: &str, text: &str) -> Vec<Vec<Span>> {
     }
     let syntaxes = syntaxes();
     let syntax = syntax_for(syntaxes, path, lines.first().copied().unwrap_or_default());
+    spans_of(syntax, lines)
+}
+
+/// The spans of a code block in a comment, by its fence's language (`rust`, `kt`, `Kotlin`).
+pub fn highlight_lang(lang: &str, text: &str) -> Vec<Vec<Span>> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let syntaxes = syntaxes();
+    match syntaxes.find_syntax_by_token(lang) {
+        Some(syntax) if lines.iter().all(|l| l.len() <= MAX_LINE_BYTES) => spans_of(syntax, lines),
+        _ => vec![Vec::new(); lines.len()],
+    }
+}
+
+fn spans_of(syntax: &SyntaxReference, lines: Vec<&str>) -> Vec<Vec<Span>> {
+    let syntaxes = syntaxes();
     let highlighter = Highlighter::new(theme());
     let mut parse = ParseState::new(syntax);
     let mut state = HighlightState::new(&highlighter, ScopeStack::new());

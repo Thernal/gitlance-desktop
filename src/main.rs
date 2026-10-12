@@ -5,6 +5,7 @@ mod editor;
 mod generated;
 mod git;
 mod highlight;
+mod markdown;
 mod mr;
 mod review;
 mod search;

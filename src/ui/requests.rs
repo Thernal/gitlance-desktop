@@ -327,7 +327,7 @@ impl Workspace {
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
-                                .child(first.body.replace('\n', " ")),
+                                .child(self.one_line(&first.body)),
                         )
                         .children((more > 0).then(|| plural(more, "reply")))
                         .children(t.resolved.then_some("resolved ✓"))
@@ -339,7 +339,7 @@ impl Workspace {
                 .into_any_element();
         }
         let can_act = self.request_target().is_some();
-        let (reply, resolve, fold) = (this.clone(), this.clone(), this);
+        let (reply, resolve, fold, raw) = (this.clone(), this.clone(), this.clone(), this);
         let resolved = t.resolved;
         let focused = self.thread_at == Some(ix);
         let action = |id: &'static str, label: &'static str, key: &'static str| {
@@ -390,8 +390,17 @@ impl Workspace {
                         .child(format!("· {}", format::ago(note.created)))
                         .when(n == 0 && t.resolved, |s| s.child("· resolved ✓")),
                 )
-                .child(note.body.clone())
+                .child(super::markdown::body(
+                    &note.body,
+                    self.settings.rich_comments,
+                    format!("md-note-{ix}-{n}"),
+                    self.link_base(),
+                ))
         });
+        let rich = t
+            .notes
+            .iter()
+            .any(|n| super::markdown::has_markdown(&n.body));
         div()
             .w_full()
             .pl(px(indent))
@@ -440,7 +449,22 @@ impl Workspace {
                                     fold.update(cx, |this, cx| this.set_thread_open(ix, false, cx))
                                         .ok();
                                 }),
-                            ),
+                            )
+                            .children(rich.then(|| {
+                                action(
+                                    "thread-rich",
+                                    if self.settings.rich_comments {
+                                        "Raw"
+                                    } else {
+                                        "Rich"
+                                    },
+                                    "⌥M",
+                                )
+                                .on_click(move |_, _, cx| {
+                                    raw.update(cx, |this, cx| this.toggle_rich_comments(cx))
+                                        .ok();
+                                })
+                            })),
                     ),
             )
             .into_any_element()
@@ -563,6 +587,7 @@ impl Workspace {
             return div().into_any_element();
         };
         let id = d.id;
+        let toggle = this.clone();
         div()
             .w_full()
             .pl(px(indent))
@@ -596,6 +621,14 @@ impl Workspace {
                                     .child("Pending · only you see this"),
                             )
                             .child(div().flex_1())
+                            .children(super::markdown::has_markdown(&d.body).then(|| {
+                                self.rich_switch(("draft-rich", ix))
+                                    .on_click(move |_, _, cx| {
+                                        toggle
+                                            .update(cx, |this, cx| this.toggle_rich_comments(cx))
+                                            .ok();
+                                    })
+                            }))
                             .child(
                                 div()
                                     .id(("draft-delete", ix))
@@ -607,7 +640,12 @@ impl Workspace {
                                     }),
                             ),
                     )
-                    .child(d.body.clone()),
+                    .child(super::markdown::body(
+                        &d.body,
+                        self.settings.rich_comments,
+                        format!("md-draft-{ix}"),
+                        self.link_base(),
+                    )),
             )
             .into_any_element()
     }
@@ -753,7 +791,7 @@ impl Workspace {
                 ("comment-mr", ix),
                 theme::warning(),
                 where_,
-                format!("{}: {}", first.author, first.body.replace('\n', " ")),
+                format!("{}: {}", first.author, self.one_line(&first.body)),
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if let Some((path, line)) = target.clone() {
@@ -772,7 +810,7 @@ impl Workspace {
                 ("comment-draft", ix),
                 theme::warning(),
                 where_,
-                d.body.replace('\n', " "),
+                self.one_line(&d.body),
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if let Some((path, line)) = target.clone() {
@@ -790,7 +828,7 @@ impl Workspace {
                     c.path.rsplit('/').next().unwrap_or(&c.path),
                     c.line
                 ),
-                c.body.replace('\n', " "),
+                self.one_line(&c.body),
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.jump_to(id, cx)))
         });

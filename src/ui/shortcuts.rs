@@ -34,6 +34,9 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⇧⌘↵", "keep pending · submit review"),
             ("r  x  o", "reply to, resolve, fold a discussion"),
             ("⌘⇧R", "show or hide the comments drawer"),
+            ("⌥M", "comments as markdown / raw text"),
+            ("⌘B ⌘I ⌘⇧X ⌘⇧E ⌘⇧K", "bold, italic, strike, code, link"),
+            ("⌘⇧P in the box", "preview the markdown"),
         ],
     ),
     (

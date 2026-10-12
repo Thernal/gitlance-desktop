@@ -287,6 +287,8 @@ pub struct Settings {
     pub zoom: u16,
     /// The size of the whole interface, in percent (⌘+ ⌘− ⌘0).
     pub ui_zoom: u16,
+    /// Comments are drawn as formatted markdown, not as the text written (⌥M).
+    pub rich_comments: bool,
 }
 
 impl Default for Settings {
@@ -300,6 +302,7 @@ impl Default for Settings {
             fold_generated: true,
             zoom: 100,
             ui_zoom: 100,
+            rich_comments: true,
         }
     }
 }
@@ -329,6 +332,7 @@ impl Settings {
                 }
                 "auto_refresh" => settings.auto_refresh = value != "false",
                 "fold_generated" => settings.fold_generated = value != "false",
+                "rich_comments" => settings.rich_comments = value != "false",
                 "ui_zoom" => {
                     settings.ui_zoom = value.parse().map_or(100, |z: u16| {
                         z.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX)
@@ -356,6 +360,7 @@ impl std::fmt::Display for Settings {
         writeln!(f, "default_mode={}", self.default_mode.key())?;
         writeln!(f, "auto_refresh={}", self.auto_refresh)?;
         writeln!(f, "fold_generated={}", self.fold_generated)?;
+        writeln!(f, "rich_comments={}", self.rich_comments)?;
         writeln!(f, "zoom={}", self.zoom)?;
         writeln!(f, "ui_zoom={}", self.ui_zoom)?;
         writeln!(f, "appearance={}", self.appearance.key())?;
@@ -437,6 +442,7 @@ mod tests {
         assert_eq!(Settings::parse(""), Settings::default());
         assert_eq!(Settings::default().default_mode, DiffMode::Words);
         assert_eq!(Settings::default().mark_style, MarkStyle::Tinted);
+        assert!(Settings::default().rich_comments);
         let settings = Settings {
             editor: Some(crate::editor::Editor::Zed),
             appearance: Appearance::Dark,
@@ -446,6 +452,7 @@ mod tests {
             fold_generated: false,
             zoom: 130,
             ui_zoom: 120,
+            rich_comments: false,
         };
         assert_eq!(Settings::parse(&settings.to_string()), settings);
     }
