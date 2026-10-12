@@ -43,6 +43,14 @@ const ICONS: &[(&str, &str)] = &[
         "search",
         lucide!(r#"<circle cx="11" cy="11" r="8"/>"# r#"<path d="m21 21-4.3-4.3"/>"#),
     ),
+    (
+        "eye",
+        lucide!(
+            r#"<path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/>"#
+            r#"<circle cx="12" cy="12" r="3"/>"#
+        ),
+    ),
+    ("check", lucide!(r#"<path d="M20 6 9 17l-5-5"/>"#)),
     // The composer's markdown helpers.
     (
         "bold",

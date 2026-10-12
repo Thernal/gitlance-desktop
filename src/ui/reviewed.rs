@@ -581,11 +581,10 @@ impl Workspace {
                     State::Stale => "↻ Changed — mark again",
                     State::Open => "Mark reviewed",
                 })
-                .child(
-                    div()
-                        .text_color(theme::faint())
-                        .child(if state == State::Done { "⇧V" } else { "V" }),
-                )
+                .child(super::keys::caps(
+                    if state == State::Done { "⇧V" } else { "V" },
+                    super::keys::On::Plain,
+                ))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     if this.review_state(this.file) == Some(State::Done) {
                         this.toggle_reviewed(cx)

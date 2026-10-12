@@ -21,7 +21,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ),
             ("⇧n ⇧p", "next / previous discussion"),
             ("⌥⇧V", "mark all files reviewed / unmark all"),
-            ("⌥↓ ⌥↑", "next / previous merge request"),
+            ("⌥↓ ⌥↑", "next unreviewed / previous merge request"),
             ("Space ⇧Space", "page down / up"),
             ("⌘[ ⌘]", "back / forward"),
         ],

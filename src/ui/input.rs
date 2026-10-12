@@ -115,3 +115,85 @@ pub fn field_text(text: &str, active: bool, all: bool, placeholder: &'static str
     )
     .children((active && !all).then(caret))
 }
+
+/// Applies `key` to a multi-line `edit`: the caret and selection move (⌥ by words, ⌘ to the line's
+/// or the text's ends, ⇧ selects), ⌥⌫ ⌘⌫ delete words and lines, ⌘A ⌘C ⌘X ⌘V ⌘Z ⇧⌘Z, and typing.
+/// Return and esc are left to the caller.
+pub fn edit_text(edit: &mut crate::textedit::TextEdit, key: &Keystroke, cx: &mut App) -> Edit {
+    use crate::textedit::Move;
+    let m = key.modifiers;
+    let movement = match (key.key.as_str(), m.platform, m.alt) {
+        ("left", true, _) | ("home", ..) => Some(Move::LineStart),
+        ("right", true, _) | ("end", ..) => Some(Move::LineEnd),
+        ("up", true, _) => Some(Move::Start),
+        ("down", true, _) => Some(Move::End),
+        ("left", _, true) => Some(Move::WordLeft),
+        ("right", _, true) => Some(Move::WordRight),
+        ("left", ..) => Some(Move::Left),
+        ("right", ..) => Some(Move::Right),
+        ("up", ..) => Some(Move::Up),
+        ("down", ..) => Some(Move::Down),
+        _ => None,
+    };
+    if let Some(motion) = movement {
+        edit.move_to(motion, m.shift);
+        return Edit::Selected;
+    }
+    match key.key.as_str() {
+        "escape" => return Edit::Escape,
+        "enter" => return Edit::Enter { shift: m.shift },
+        "backspace" => {
+            edit.delete_back(m.alt, m.platform);
+            return Edit::Changed;
+        }
+        "delete" => {
+            edit.delete_forward(m.alt);
+            return Edit::Changed;
+        }
+        _ => {}
+    }
+    if m.platform {
+        return match key.key.as_str() {
+            "a" => {
+                edit.select_all();
+                Edit::Selected
+            }
+            "c" => {
+                if let Some(text) = edit.selected_text() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_owned()));
+                }
+                Edit::Ignored
+            }
+            "x" => match edit.cut() {
+                Some(text) => {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                    Edit::Changed
+                }
+                None => Edit::Ignored,
+            },
+            "v" => match cx.read_from_clipboard().and_then(|c| c.text()) {
+                Some(pasted) => {
+                    edit.insert(&pasted);
+                    Edit::Changed
+                }
+                None => Edit::Ignored,
+            },
+            "z" if m.shift => {
+                edit.redo();
+                Edit::Changed
+            }
+            "z" => {
+                edit.undo();
+                Edit::Changed
+            }
+            _ => Edit::Ignored,
+        };
+    }
+    match &key.key_char {
+        Some(ch) if !m.control && !ch.chars().any(char::is_control) => {
+            edit.insert(ch);
+            Edit::Changed
+        }
+        _ => Edit::Ignored,
+    }
+}

@@ -3,14 +3,16 @@
 //! kept on this Mac (`crate::review`), never in the reviewed repository. Designed in
 //! `../Design/mockups/line-comments/a-agent-comments.html`.
 
+use super::discussion::{self, Kind, Source};
 use super::input::{self, Edit};
 use super::markdown;
 use super::px;
 use super::rows::Row;
 use super::{ROW_RADIUS, Selection, Workspace, format, theme};
-use crate::markdown::{Helper, Open};
+use crate::markdown::Helper;
 use crate::review::{self, Comment, Place};
-use gpui::{ClipboardItem, Context, FontWeight, KeyDownEvent, WeakEntity, div, prelude::*};
+use crate::textedit::TextEdit;
+use gpui::{ClipboardItem, Context, KeyDownEvent, WeakEntity, div, prelude::*};
 
 /// Who a comment is for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -29,15 +31,15 @@ pub struct Compose {
     old: bool,
     line: u32,
     code: String,
-    pub body: String,
+    /// The text, its caret and selection.
+    pub edit: TextEdit,
     at: String,
-    target: Target,
+    pub target: Target,
     /// Why the last attempt to post failed.
     error: Option<String>,
     posting: bool,
-    /// Markdown markers the helpers opened and the writer has not closed yet.
-    open: Vec<Open>,
-    /// The text is shown formatted instead of as written (⌘⇧P).
+    /// The text is shown formatted instead of as written (⌘⇧P); typing goes on and the preview
+    /// follows it.
     preview: bool,
 }
 
@@ -221,8 +223,9 @@ impl Workspace {
                         .filter(|(_, o, n)| *o == old && *n == line)
                         .map(|(ix, _, _)| Row::Draft(*ix)),
                 );
-                if compose.is_some_and(|c| c.old == old && c.line == line)
-                    || go == Some((old, line))
+                if compose.is_some_and(|c| {
+                    c.old == old && c.line == line && !matches!(c.target, Target::Reply(_))
+                }) || go == Some((old, line))
                 {
                     out.push(Row::Composer);
                 }
@@ -268,12 +271,11 @@ impl Workspace {
             old,
             line,
             code,
-            body: String::new(),
+            edit: TextEdit::default(),
             at,
             target,
             error: None,
             posting: false,
-            open: Vec::new(),
             preview: false,
         });
         self.refresh_rows();
@@ -294,15 +296,18 @@ impl Workspace {
             old,
             line,
             code: String::new(),
-            body: String::new(),
+            edit: TextEdit::default(),
             at: String::new(),
             target: Target::Reply(ix),
             error: None,
             posting: false,
-            open: Vec::new(),
             preview: false,
         });
         self.field_all = false;
+        self.thread_at = Some(ix);
+        if !self.mr_open(ix) {
+            self.toggled_mr.insert(ix);
+        }
         self.refresh_rows();
         cx.notify();
     }
@@ -357,7 +362,7 @@ impl Workspace {
         let Some(compose) = self.compose.take() else {
             return;
         };
-        if compose.body.trim().is_empty() {
+        if compose.edit.text().trim().is_empty() {
             self.compose = Some(compose);
             return;
         }
@@ -369,7 +374,7 @@ impl Workspace {
             old: compose.old,
             line: compose.line,
             code: compose.code,
-            body: compose.body.trim().to_owned(),
+            body: compose.edit.text().trim().to_owned(),
             at: compose.at,
         });
         self.save_comments();
@@ -384,7 +389,7 @@ impl Workspace {
         let (Some(remote), Some(compose)) = (self.web.clone(), self.compose.as_ref()) else {
             return;
         };
-        let body = compose.body.trim().to_owned();
+        let body = compose.edit.text().trim().to_owned();
         let head = match self.diff.as_ref().map(|d| &d.header) {
             Some(super::Header::Compare { head, .. }) => head.1.to_string(),
             _ => return,
@@ -431,7 +436,7 @@ impl Workspace {
         ) else {
             return;
         };
-        let (body, id) = (compose.body.trim().to_owned(), thread.id.clone());
+        let (body, id) = (compose.edit.text().trim().to_owned(), thread.id.clone());
         if body.is_empty() || compose.posting {
             return;
         }
@@ -755,16 +760,16 @@ impl Workspace {
         }
     }
 
-    /// Typing into the composer: text, ⌘A, backspace, return for a new line (a list goes on),
-    /// ⌘B ⌘I ⌘⇧X ⌘⇧E ⌘⇧K for markdown, ⌘⇧P to preview it, ⌘↵ to add, esc to cancel.
+    /// Typing into the composer: a real text field (caret, selection, ⌥ words, ⌘ lines, undo),
+    /// return carries a list on, ⇧↵ a plain new line; ⌘B ⌘I ⌘⇧X ⌘⇧E ⌘⇧K for markdown, ⌘⇧P to
+    /// preview it, Tab for who sees it, ⌘↵ to send, ⇧⌘↵ to add it to the review, esc to cancel.
     pub(super) fn compose_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = &event.keystroke;
-        let Some(compose) = self.compose.as_mut() else {
-            return;
-        };
         let m = key.modifiers;
+        if self.compose.as_ref().is_none_or(|c| c.posting) {
+            return;
+        }
         if key.key == "enter" && m.platform {
-            // ⇧⌘↵ on a merge request keeps the comment pending until the review is submitted.
             if m.shift
                 && let Some(Target::Request(iid)) = self.compose.as_ref().map(|c| c.target)
             {
@@ -791,46 +796,48 @@ impl Workspace {
                 return self.toggle_preview(cx);
             }
         }
-        if key.key == "enter" {
-            if std::mem::take(&mut self.field_all) {
-                compose.body.clear();
-            }
-            // ⇧↵ is a plain new line; ↵ carries a list or a quote on.
-            if m.shift {
-                compose.body.push('\n');
-            } else {
-                crate::markdown::newline(&mut compose.body);
-            }
-        } else if key.key == "v" && m.platform && !m.shift {
-            // A comment keeps the lines of what is pasted into it (a field makes them one line).
-            if let Some(pasted) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                if std::mem::take(&mut self.field_all) {
-                    compose.body.clear();
-                }
-                compose.body.push_str(&pasted);
-            }
-        } else {
-            match input::edit(&mut compose.body, &mut self.field_all, key, cx) {
-                Edit::Escape => return self.cancel_comment(cx),
-                Edit::Ignored => return,
-                Edit::Changed | Edit::Selected | Edit::Enter { .. } => {}
-            }
+        let Some(compose) = self.compose.as_mut() else {
+            return;
+        };
+        match input::edit_text(&mut compose.edit, key, cx) {
+            Edit::Escape => return self.cancel_comment(cx),
+            Edit::Ignored => return,
+            Edit::Enter { shift: true } => compose.edit.insert("\n"),
+            Edit::Enter { shift: false } => crate::markdown::newline(&mut compose.edit),
+            Edit::Changed | Edit::Selected => {}
         }
-        compose.preview = false;
-        crate::markdown::prune(&compose.body, &mut compose.open);
         // The box grows with its text.
         self.diff_list.remeasure();
         cx.notify();
     }
 
-    /// A markdown helper of the composer's toolbar, on its text.
+    /// A click in the composer's text: the caret goes there; ⇧ extends the selection, a double
+    /// click takes the word; a drag (`drag`) selects.
+    fn compose_place(
+        &mut self,
+        at: usize,
+        shift: bool,
+        clicks: usize,
+        drag: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(compose) = self.compose.as_mut() else {
+            return;
+        };
+        if clicks >= 2 && !drag {
+            compose.edit.select_word(at);
+        } else {
+            compose.edit.place(at, shift || drag);
+        }
+        cx.notify();
+    }
+
+    /// A markdown helper of the composer's toolbar, on the selection or at the caret.
     fn apply_helper(&mut self, helper: Helper, cx: &mut Context<Self>) {
         let Some(compose) = self.compose.as_mut().filter(|c| !c.posting) else {
             return;
         };
-        let all = std::mem::take(&mut self.field_all);
-        crate::markdown::apply(&mut compose.body, all, &mut compose.open, helper);
-        compose.preview = false;
+        crate::markdown::apply(&mut compose.edit, helper);
         self.diff_list.remeasure();
         cx.notify();
     }
@@ -867,19 +874,18 @@ impl Workspace {
 
     /// The *Raw* / *Rich* switch beside a comment that has markdown.
     pub(super) fn rich_switch(&self, id: impl Into<gpui::ElementId>) -> gpui::Stateful<gpui::Div> {
-        div()
-            .id(id)
-            .cursor_pointer()
-            .hover(|s| s.text_color(theme::text()))
-            .child(if self.settings.rich_comments {
+        discussion::lite(
+            id,
+            if self.settings.rich_comments {
                 "Raw"
             } else {
                 "Rich"
-            })
-            .tooltip(|_, cx| {
-                cx.new(|_| super::Tip("Markdown as written or formatted  ⌥M"))
-                    .into()
-            })
+            },
+        )
+        .tooltip(|_, cx| {
+            cx.new(|_| super::Tip("Markdown as written or formatted  ⌥M"))
+                .into()
+        })
     }
 
     /// The comments as markdown, copied for pasting into an agent.
@@ -907,7 +913,7 @@ impl Workspace {
             .unwrap_or(Place::Line(comment.line))
     }
 
-    /// One comment's thread, drawn under its line.
+    /// An agent note, drawn under its line: a purple discussion frame with one note.
     pub(super) fn render_thread(
         &self,
         id: u64,
@@ -917,432 +923,459 @@ impl Workspace {
         let Some(comment) = self.comments.iter().find(|c| c.id == id) else {
             return div().into_any_element();
         };
-        if self.toggled_agent.contains(&id) {
-            return div()
-                .w_full()
-                .pl(px(indent))
-                .pr(px(12.))
-                .py(px(2.))
-                .child(
-                    div()
-                        .id(("agent-folded", id))
-                        .max_w(px(640.))
-                        .h(px(26.))
-                        .px_3()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .rounded(px(ROW_RADIUS))
-                        .border_1()
-                        .border_color(theme::island_border())
-                        .bg(theme::panel())
-                        .font_family(theme::UI_FONT)
-                        .text_size(px(12.))
-                        .text_color(theme::muted())
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_color(theme::focus())
-                                .child("▸ You → agent"),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .child(self.one_line(&comment.body)),
-                        )
-                        .on_click(move |_, _, cx| {
-                            this.update(cx, |this, cx| {
-                                this.toggled_agent.remove(&id);
-                                this.refresh_rows();
-                                cx.notify();
-                            })
+        let open = !self.toggled_agent.contains(&id);
+        let (fold, delete, raw) = (this.clone(), this.clone(), this);
+        let bar = discussion::bar(("agent-bar", id), open)
+            .child(discussion::source_pill(Source::Agent))
+            .child(div().flex_1().min_w_0().truncate().child(if open {
+                format!("· stays on this Mac · at {}", comment.at)
+            } else {
+                self.one_line(&comment.body)
+            }))
+            .children((open && markdown::has_markdown(&comment.body)).then(|| {
+                self.rich_switch(("agent-rich", id))
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        raw.update(cx, |this, cx| this.toggle_rich_comments(cx))
                             .ok();
-                        }),
-                )
-                .into_any_element();
-        }
-        let (toggle, fold) = (this.clone(), this.clone());
+                    })
+            }))
+            .child(
+                discussion::button(("delete-comment", id), "Delete", None, Kind::Quiet)
+                    .h(px(24.))
+                    .px(px(8.))
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        delete
+                            .update(cx, |this, cx| this.delete_comment(id, cx))
+                            .ok();
+                    }),
+            )
+            .on_click(move |_, _, cx| {
+                fold.update(cx, |this, cx| {
+                    if !this.toggled_agent.remove(&id) {
+                        this.toggled_agent.insert(id);
+                    }
+                    this.refresh_rows();
+                    cx.notify();
+                })
+                .ok();
+            });
+        let body = discussion::note(
+            &self.me,
+            true,
+            None,
+            comment.at.clone(),
+            markdown::body(
+                &comment.body,
+                self.settings.rich_comments,
+                format!("md-agent-{id}"),
+                None,
+            ),
+            true,
+        );
         div()
             .w_full()
             .pl(px(indent))
             .pr(px(12.))
-            .py(px(4.))
+            .py(px(6.))
             .child(
-                div()
-                    .max_w(px(640.))
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .px_3()
-                    .py_2()
-                    .rounded(px(ROW_RADIUS))
-                    .border_1()
-                    .border_color(theme::island_border())
-                    .bg(theme::panel())
-                    .font_family(theme::UI_FONT)
-                    .text_size(px(12.))
-                    .line_height(px(17.))
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .text_size(px(11.))
-                            .text_color(theme::faint())
-                            .child(
-                                div()
-                                    .id(("agent-arrow", id))
-                                    .text_color(theme::focus())
-                                    .cursor_pointer()
-                                    .hover(|s| s.text_color(theme::text()))
-                                    .child("▾ You → agent")
-                                    .on_click(move |_, _, cx| {
-                                        fold.update(cx, |this, cx| {
-                                            this.toggled_agent.insert(id);
-                                            this.refresh_rows();
-                                            cx.notify();
-                                        })
-                                        .ok();
-                                    }),
-                            )
-                            .child(div().flex_1().child(format!("· {}", comment.at)))
-                            .children(markdown::has_markdown(&comment.body).then(|| {
-                                self.rich_switch(("agent-rich", id))
-                                    .on_click(move |_, _, cx| {
-                                        toggle
-                                            .update(cx, |this, cx| this.toggle_rich_comments(cx))
-                                            .ok();
-                                    })
-                            }))
-                            .child(
-                                div()
-                                    .id(("delete-comment", id))
-                                    .cursor_pointer()
-                                    .hover(|s| s.text_color(theme::removed()))
-                                    .child("Delete")
-                                    .on_click(move |_, _, cx| {
-                                        this.update(cx, |this, cx| this.delete_comment(id, cx))
-                                            .ok();
-                                    }),
-                            ),
-                    )
-                    .child(markdown::body(
-                        &comment.body,
-                        self.settings.rich_comments,
-                        format!("md-agent-{id}"),
-                        None,
-                    )),
+                discussion::frame(Source::Agent, false)
+                    .child(bar)
+                    .children(open.then_some(body)),
             )
             .into_any_element()
     }
 
-    /// The box for a new comment, drawn under its line.
+    /// The composer of a new comment, drawn under its line: my avatar beside the box. A reply is
+    /// not drawn here but inside its discussion (`requests::render_request_thread`).
     pub(super) fn render_composer(&self, indent: f32, this: WeakEntity<Self>) -> gpui::AnyElement {
-        let Some(compose) = &self.compose else {
+        let Some(boxed) = self.compose_box(this) else {
             return div().into_any_element();
         };
-        let (add, cancel, pick_agent, pick_request, helpers) =
-            (this.clone(), this.clone(), this.clone(), this.clone(), this);
-        let request = self.request_target();
-        let reply = matches!(compose.target, Target::Reply(_));
-        let to_request = matches!(compose.target, Target::Request(_) | Target::Reply(_));
-        // Agent notes are purple, what goes to GitLab is orange: the two never look alike.
-        let tone = if to_request {
-            theme::warning()
-        } else {
-            theme::focus()
-        };
-        let target_chip = |id: &'static str, label: String, on: bool, color: gpui::Rgba| {
-            div()
-                .id(id)
-                .px_2()
-                .py(px(1.))
-                .rounded(px(ROW_RADIUS))
-                .text_size(px(11.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .cursor_pointer()
-                .border_1()
-                .border_color(if on { color } else { theme::island_border() })
-                .text_color(if on { color } else { theme::muted() })
-                .hover(|s| s.bg(theme::hover()))
-                .child(label)
-        };
         div()
             .w_full()
             .pl(px(indent))
             .pr(px(12.))
-            .py(px(4.))
+            .py(px(6.))
             .child(
                 div()
-                    .max_w(px(640.))
+                    .max_w(px(760.))
                     .flex()
-                    .flex_col()
-                    .gap_2()
-                    .p_3()
-                    .rounded(px(ROW_RADIUS))
-                    .border_2()
-                    .border_color(tone)
-                    .bg(theme::panel())
-                    .font_family(theme::UI_FONT)
-                    .text_size(px(12.))
-                    .line_height(px(17.))
-                    .child(if reply {
-                        div()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::warning())
-                            .child("Reply on GitLab")
-                    } else {
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                target_chip(
-                                    "target-agent",
-                                    "For your agent".to_owned(),
-                                    !to_request,
-                                    theme::focus(),
-                                )
-                                .on_click(move |_, _, cx| {
-                                    pick_agent
-                                        .update(cx, |this, cx| {
-                                            if let Some(c) = this.compose.as_mut() {
-                                                c.target = Target::Agent;
-                                                c.error = None;
-                                            }
-                                            cx.notify();
-                                        })
-                                        .ok();
-                                }),
-                            )
-                            .children(request.map(|iid| {
-                                target_chip(
-                                    "target-request",
-                                    format!("On !{iid} · GitLab"),
-                                    to_request,
-                                    theme::warning(),
-                                )
-                                .on_click(move |_, _, cx| {
-                                    pick_request
-                                        .update(cx, |this, cx| {
-                                            if let Some(c) = this.compose.as_mut() {
-                                                c.target = Target::Request(iid);
-                                                c.error = None;
-                                            }
-                                            cx.notify();
-                                        })
-                                        .ok();
-                                })
-                            }))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_size(px(11.))
-                                    .text_color(theme::faint())
-                                    .child(if request.is_some() {
-                                        "Tab switches"
-                                    } else {
-                                        ""
-                                    }),
-                            )
-                    })
-                    .child(self.render_markdown_bar(compose, tone, helpers))
-                    .child(if compose.preview {
-                        if compose.body.trim().is_empty() {
-                            div().text_color(theme::faint()).child("Nothing to preview")
-                        } else {
-                            div().child(markdown::body(
-                                &compose.body,
-                                true,
-                                "md-compose",
-                                self.link_base(),
-                            ))
-                        }
-                    } else if compose.body.is_empty() {
-                        div().text_color(theme::faint()).child(if reply {
-                            "Reply — everyone on the merge request will see it  ⌘↵ sends"
-                        } else if to_request {
-                            "Comment on the merge request — everyone on it will see it  ⌘↵ posts · ⇧⌘↵ keeps it pending"
-                        } else {
-                            "Comment for your agent — stays on this Mac  ⌘↵ adds it"
-                        })
-                    } else {
-                        div()
-                            .flex()
-                            .items_end()
-                            .child(
-                                div()
-                                    .when(self.field_all, |s| {
-                                        s.bg(theme::selection()).rounded(px(3.))
-                                    })
-                                    .child(compose.body.clone()),
-                            )
-                            .children((!self.field_all).then(|| {
-                                div()
-                                    .flex_none()
-                                    .w(px(2.))
-                                    .h(px(15.))
-                                    .rounded_full()
-                                    .bg(theme::accent())
-                            }))
-                    })
-                    .children(compose.error.clone().map(|e| {
-                        div()
-                            .text_size(px(11.))
-                            .text_color(theme::removed())
-                            .child(e)
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(px(11.))
-                                    .text_color(theme::faint())
-                                    .child(format!("on {}:{}", compose.path, compose.line)),
-                            )
-                            .child(
-                                div()
-                                    .id("compose-cancel")
-                                    .px_2()
-                                    .rounded(px(ROW_RADIUS))
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(theme::hover()))
-                                    .child("Cancel  esc")
-                                    .on_click(move |_, _, cx| {
-                                        cancel.update(cx, |this, cx| this.cancel_comment(cx)).ok();
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .id("compose-add")
-                                    .px_3()
-                                    .rounded(px(ROW_RADIUS))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .bg(tone)
-                                    .text_color(theme::base())
-                                    .cursor_pointer()
-                                    .child(match (&compose.target, compose.posting) {
-                                        (Target::Request(_) | Target::Reply(_), true) => {
-                                            "Posting…".to_owned()
-                                        }
-                                        (Target::Reply(_), false) => "Reply  ⌘↵".to_owned(),
-                                        (Target::Request(iid), false) => {
-                                            format!("Post to !{iid}  ⌘↵")
-                                        }
-                                        (Target::Agent, _) => "Add for agent  ⌘↵".to_owned(),
-                                    })
-                                    .on_click(move |_, _, cx| {
-                                        add.update(cx, |this, cx| this.add_comment(cx)).ok();
-                                    }),
-                            ),
-                    ),
+                    .items_start()
+                    .gap(px(12.))
+                    .child(discussion::avatar(&self.me, true, 28.).mt(px(3.)))
+                    .child(boxed),
             )
             .into_any_element()
     }
 
-    /// The composer's markdown helpers, and Write / Preview.
-    fn render_markdown_bar(
+    /// The new comment's input: the one input component (variant D) with who sees it on its edge.
+    pub(super) fn compose_box(&self, this: WeakEntity<Self>) -> Option<gpui::Div> {
+        let compose = self.compose.as_ref()?;
+        let request = self.request_target();
+        let source = match compose.target {
+            Target::Agent => Source::Agent,
+            Target::Request(_) | Target::Reply(_) => Source::GitLab,
+        };
+        let tone = source.color();
+        let (cancel, add, review, audience) =
+            (this.clone(), this.clone(), this.clone(), this.clone());
+        let switchable = request.is_some();
+        let chip = div()
+            .id("compose-audience")
+            .h(px(26.))
+            .px(px(8.))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(6.))
+            .rounded(px(6.))
+            .bg(match source {
+                Source::Agent => theme::focus_bg(),
+                _ => theme::warning_bg(),
+            })
+            .text_size(px(12.))
+            .text_color(tone)
+            .whitespace_nowrap()
+            .child(div().size(px(7.)).rounded_full().bg(tone))
+            .child(match compose.target {
+                Target::Request(iid) => format!("Everyone on !{iid}"),
+                _ => "Your agent".to_owned(),
+            })
+            .when(switchable, |s| {
+                s.cursor_pointer()
+                    .child(super::icons::icon("chevron").size(px(12.)).text_color(tone))
+                    .tooltip(|_, cx| cx.new(|_| super::Tip("Who sees it — Tab switches")).into())
+                    .on_click(move |_, _, cx| {
+                        audience.update(cx, |this, cx| this.toggle_target(cx)).ok();
+                    })
+            });
+        let primary = match (&compose.target, compose.posting) {
+            (_, true) => "Posting…",
+            (Target::Agent, _) => "Add for agent",
+            (_, _) => "Comment",
+        };
+        let mut tail = vec![
+            discussion::button("compose-cancel", "Cancel", None, Kind::Quiet)
+                .h(px(28.))
+                .px(px(10.))
+                .tooltip(|_, cx| cx.new(|_| super::Tip("Esc")).into())
+                .on_click(move |_, _, cx| {
+                    cancel.update(cx, |this, cx| this.cancel_comment(cx)).ok();
+                })
+                .into_any_element(),
+        ];
+        if let (Target::Request(iid), false) = (compose.target, compose.posting) {
+            tail.push(
+                discussion::button("compose-review", "Add to review", Some("⇧⌘↵"), Kind::Plain)
+                    .h(px(28.))
+                    .px(px(10.))
+                    .tooltip(|_, cx| {
+                        cx.new(|_| super::Tip("Pending until you submit the review"))
+                            .into()
+                    })
+                    .on_click(move |_, _, cx| {
+                        review
+                            .update(cx, |this, cx| this.post_comment(iid, true, cx))
+                            .ok();
+                    })
+                    .into_any_element(),
+            );
+        }
+        tail.push(
+            discussion::button(
+                "compose-add",
+                primary,
+                (!compose.posting).then_some("⌘↵"),
+                Kind::Primary(tone),
+            )
+            .h(px(28.))
+            .px(px(10.))
+            .on_click(move |_, _, cx| {
+                add.update(cx, |this, cx| this.add_comment(cx)).ok();
+            })
+            .into_any_element(),
+        );
+        let placeholder = match compose.target {
+            Target::Agent => "A note for your agent — it stays on this Mac",
+            _ => "Comment on the merge request — everyone on it sees it",
+        };
+        Some(self.open_input(
+            compose,
+            tone,
+            placeholder,
+            Some(chip.into_any_element()),
+            &[Helper::Bold, Helper::Code, Helper::Link, Helper::Bullet],
+            tail,
+            this,
+        ))
+    }
+
+    /// A reply: the discussion's own one-line field, grown inside its outline (variant D).
+    pub(super) fn reply_editor(&self, this: WeakEntity<Self>) -> Option<gpui::Div> {
+        let compose = self.compose.as_ref()?;
+        let tone = Source::GitLab.color();
+        let (cancel, send) = (this.clone(), this.clone());
+        let tail = vec![
+            discussion::button("reply-cancel", "Cancel", None, Kind::Quiet)
+                .h(px(28.))
+                .px(px(10.))
+                .tooltip(|_, cx| cx.new(|_| super::Tip("Esc")).into())
+                .on_click(move |_, _, cx| {
+                    cancel.update(cx, |this, cx| this.cancel_comment(cx)).ok();
+                })
+                .into_any_element(),
+            discussion::button(
+                "reply-send",
+                if compose.posting {
+                    "Posting…"
+                } else {
+                    "Reply"
+                },
+                (!compose.posting).then_some("⌘↵"),
+                Kind::Primary(tone),
+            )
+            .h(px(28.))
+            .px(px(10.))
+            .on_click(move |_, _, cx| {
+                send.update(cx, |this, cx| this.add_comment(cx)).ok();
+            })
+            .into_any_element(),
+        ];
+        Some(self.open_input(
+            compose,
+            tone,
+            "Reply…",
+            None,
+            &[
+                Helper::Bold,
+                Helper::Italic,
+                Helper::Code,
+                Helper::Link,
+                Helper::Quote,
+                Helper::Bullet,
+                Helper::CodeBlock,
+            ],
+            tail,
+            this,
+        ))
+    }
+
+    /// The one input component, open: one outline in the audience's colour, the text (or its
+    /// preview), and along its bottom edge `lead`, the markdown `tools`, Preview, then `tail`.
+    #[allow(clippy::too_many_arguments)]
+    fn open_input(
         &self,
         compose: &Compose,
         tone: gpui::Rgba,
+        placeholder: &'static str,
+        lead: Option<gpui::AnyElement>,
+        tools: &[Helper],
+        tail: Vec<gpui::AnyElement>,
         this: WeakEntity<Self>,
-    ) -> impl IntoElement + use<> {
-        let button = |h: Helper, this: WeakEntity<Self>| {
-            let (icon, tip) = markdown::helper_look(h);
-            let open = compose.open.iter().any(|o| o.helper == h);
+    ) -> gpui::Div {
+        let text = if compose.preview {
             div()
-                .id(("md-helper", h as usize))
-                .size(px(22.))
+                .min_h(px(66.))
+                .px(px(10.))
+                .py(px(7.))
+                .child(if compose.edit.text().trim().is_empty() {
+                    div().text_color(theme::muted()).child("Nothing to preview")
+                } else {
+                    div().child(markdown::body(
+                        compose.edit.text(),
+                        true,
+                        "md-compose",
+                        self.link_base(),
+                    ))
+                })
+                .into_any_element()
+        } else {
+            self.render_edit_text(compose, placeholder, true, this.clone())
+        };
+        let tool = |h: Helper, this: WeakEntity<Self>| {
+            let (icon, tip) = markdown::helper_look(h);
+            div()
+                .id(("md-tool", h as usize))
+                .size(px(26.))
                 .flex()
                 .flex_none()
                 .items_center()
                 .justify_center()
-                .rounded(px(4.))
+                .rounded(px(6.))
                 .cursor_pointer()
-                .when(open, |s| s.bg(theme::selected()))
                 .hover(|s| s.bg(theme::hover()))
-                .child(super::icons::icon(icon).size(px(14.)).text_color(if open {
-                    tone
-                } else {
-                    theme::muted()
-                }))
+                .child(
+                    super::icons::icon(icon)
+                        .size(px(15.))
+                        .text_color(theme::muted()),
+                )
                 .tooltip(move |_, cx| cx.new(|_| super::Tip(tip)).into())
                 .on_click(move |_, _, cx| {
                     this.update(cx, |this, cx| this.apply_helper(h, cx)).ok();
                 })
         };
-        let groups: [&[Helper]; 3] = [
-            &[
-                Helper::Bold,
-                Helper::Italic,
-                Helper::Strike,
-                Helper::Code,
-                Helper::Link,
-            ],
-            &[Helper::Heading, Helper::Quote, Helper::CodeBlock],
-            &[Helper::Bullet, Helper::Numbered, Helper::Task],
-        ];
-        let separator = || {
-            div()
-                .w(px(1.))
-                .h(px(14.))
-                .mx(px(4.))
-                .bg(theme::island_border())
-        };
-        let mut row = div().flex().items_center().gap(px(1.));
-        for (n, group) in groups.iter().enumerate() {
-            if n > 0 {
-                row = row.child(separator());
-            }
-            row = row.children(group.iter().map(|&h| button(h, this.clone())));
-        }
-        let tab = |id: &'static str, label: &'static str, on: bool, this: WeakEntity<Self>| {
-            div()
-                .id(id)
-                .px_2()
-                .rounded(px(4.))
-                .text_size(px(11.))
-                .cursor_pointer()
-                .when(on, |s| s.bg(theme::selected()).text_color(theme::text()))
-                .when(!on, |s| s.text_color(theme::muted()))
-                .hover(|s| s.text_color(theme::text()))
-                .child(label)
-                .on_click(move |_, _, cx| {
-                    this.update(cx, |this, cx| {
-                        if this
-                            .compose
-                            .as_ref()
-                            .is_some_and(|c| c.preview != (id == "md-preview"))
-                        {
-                            this.toggle_preview(cx)
-                        }
-                    })
-                    .ok();
-                })
-        };
-        row.child(div().flex_1()).child(
-            div()
-                .flex()
-                .p(px(2.))
-                .rounded(px(5.))
-                .bg(theme::base())
-                .child(tab("md-write", "Write", !compose.preview, this.clone()))
-                .child(
-                    tab("md-preview", "Preview", compose.preview, this).tooltip(|_, cx| {
-                        cx.new(|_| super::Tip("Preview the markdown  ⌘⇧P")).into()
+        let preview = compose.preview;
+        let toggle = this.clone();
+        let edge = div()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .px(px(6.))
+            .pt(px(4.))
+            .pb(px(6.))
+            .children(lead.map(|lead| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .mr(px(4.))
+                    .child(lead)
+                    .child(div().w(px(1.)).h(px(14.)).bg(theme::selected()))
+            }))
+            .children(tools.iter().map(|&h| tool(h, this.clone())))
+            .child(
+                div()
+                    .id("md-preview")
+                    .size(px(26.))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .when(preview, |s| s.bg(theme::selected()))
+                    .hover(|s| s.bg(theme::hover()))
+                    .child(
+                        super::icons::icon("eye")
+                            .size(px(15.))
+                            .text_color(if preview {
+                                theme::text()
+                            } else {
+                                theme::muted()
+                            }),
+                    )
+                    .tooltip(|_, cx| cx.new(|_| super::Tip("Preview  ⌘⇧P")).into())
+                    .on_click(move |_, _, cx| {
+                        toggle.update(cx, |this, cx| this.toggle_preview(cx)).ok();
                     }),
-                ),
-        )
+            )
+            .child(div().flex_1())
+            .child(div().flex().items_center().gap(px(6.)).children(tail));
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(tone)
+            .bg(theme::base())
+            .overflow_hidden()
+            .font_family(theme::UI_FONT)
+            .text_size(px(13.))
+            .line_height(px(20.))
+            .text_color(theme::text())
+            .child(text)
+            .children(compose.error.clone().map(|e| {
+                div()
+                    .px(px(10.))
+                    .pb(px(4.))
+                    .text_size(px(12.))
+                    .text_color(theme::removed())
+                    .child(e)
+            }))
+            .child(edge)
+    }
+
+    /// The composer's text as a field: the text wrapping in its box, the selection tinted, the
+    /// caret drawn where the text's layout puts it; a click places the caret, a drag selects.
+    fn render_edit_text(
+        &self,
+        compose: &Compose,
+        placeholder: &'static str,
+        compact: bool,
+        this: WeakEntity<Self>,
+    ) -> gpui::AnyElement {
+        // A reply grows out of its one-line field, so its text starts where the field's did.
+        let (pad_x, pad_y, min_h) = if compact {
+            (10., 6., 64.)
+        } else {
+            (12., 10., 88.)
+        };
+        use gpui::{Bounds, HighlightStyle, MouseButton, StyledText, canvas, fill, point, size};
+        let text = compose.edit.text();
+        // A trailing space gives the caret a place on a last, empty line.
+        let styled = StyledText::new(format!("{text} ")).with_highlights(
+            compose.edit.selection().map(|sel| {
+                (
+                    sel,
+                    HighlightStyle {
+                        background_color: Some(theme::selection().into()),
+                        ..Default::default()
+                    },
+                )
+            }),
+        );
+        let layout = styled.layout().clone();
+        let (for_caret, for_down, for_move) = (layout.clone(), layout.clone(), layout);
+        let caret = compose.edit.caret();
+        let (down, drag) = (this.clone(), this);
+        div()
+            .relative()
+            .min_h(px(min_h))
+            .px(px(pad_x))
+            .py(px(pad_y))
+            .bg(theme::base())
+            .cursor_text()
+            .child(div().w_full().min_w_0().child(styled))
+            .children(text.is_empty().then(|| {
+                div()
+                    .absolute()
+                    .top(px(pad_y))
+                    .left(px(pad_x + 2.))
+                    .text_color(theme::muted())
+                    .child(placeholder)
+            }))
+            .child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, _| {
+                        let at = for_caret
+                            .position_for_index(caret)
+                            .unwrap_or(bounds.origin + point(px(pad_x), px(pad_y)));
+                        window.paint_quad(fill(
+                            Bounds::new(at, size(px(2.), px(20.))),
+                            theme::accent(),
+                        ));
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
+            .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+                let at = for_down
+                    .index_for_position(event.position)
+                    .unwrap_or_else(|nearest| nearest);
+                let (shift, clicks) = (event.modifiers.shift, event.click_count);
+                down.update(cx, |this, cx| {
+                    this.compose_place(at, shift, clicks, false, cx)
+                })
+                .ok();
+            })
+            .on_mouse_move(move |event, _, cx| {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    let at = for_move
+                        .index_for_position(event.position)
+                        .unwrap_or_else(|nearest| nearest);
+                    drag.update(cx, |this, cx| this.compose_place(at, true, 1, true, cx))
+                        .ok();
+                }
+            })
+            .into_any_element()
     }
 
     /// Shows a comment: in the open file, scrolled to; in another file of the diff, that file first.

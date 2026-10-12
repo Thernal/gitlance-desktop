@@ -13,6 +13,7 @@ mod search;
 mod storage;
 mod structural;
 mod symbols;
+mod textedit;
 mod ui;
 mod worddiff;
 

@@ -218,21 +218,29 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ⌥↓ ⌥↑: the next or previous merge request in the order the list shows them.
+    /// ⌥↓: the next merge request, in list order, that is not reviewed yet; ⌥↑: the previous one,
+    /// reviewed or not (to look again at what was just done).
     pub(super) fn step_request(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let order: Vec<u64> = self.shown_requests().iter().map(|m| m.iid).collect();
-        if order.is_empty() {
+        let shown = self.shown_requests();
+        let n = shown.len();
+        if n == 0 {
             return;
         }
-        let n = order.len();
-        let next = match order
+        let at = shown
             .iter()
-            .position(|&iid| Some(iid) == self.requests.current)
-        {
-            Some(at) if forward => order[(at + 1) % n],
-            Some(at) => order[(at + n - 1) % n],
-            None if forward => order[0],
-            None => order[n - 1],
+            .position(|m| Some(m.iid) == self.requests.current);
+        let next = if forward {
+            let reviewed: Vec<bool> = shown
+                .iter()
+                .map(|m| git2::Oid::from_str(&m.head).is_ok_and(|h| self.head_reviewed(h)))
+                .collect();
+            next_unreviewed(&reviewed, at).map(|ix| shown[ix])
+        } else {
+            Some(shown[at.map_or(n - 1, |a| (a + n - 1) % n)])
+        };
+        let Some(next) = next.map(|m| m.iid) else {
+            self.error = Some("Every other merge request in the list is reviewed.".into());
+            return cx.notify();
         };
         self.done_card = false;
         self.select_request(next, cx);
@@ -276,7 +284,14 @@ impl Workspace {
                 .when(!primary, |s| s.bg(theme::hover()).text_color(theme::text()))
                 .hover(|s| s.opacity(0.85))
                 .child(div().min_w_0().truncate().child(label))
-                .child(div().flex_none().opacity(0.7).child(key))
+                .child(super::keys::caps(
+                    key,
+                    if primary {
+                        super::keys::On::Filled
+                    } else {
+                        super::keys::On::Plain
+                    },
+                ))
         };
         Some(
             div()
@@ -437,220 +452,193 @@ impl Workspace {
             .collect()
     }
 
-    /// A discussion of the request, drawn under its line.
+    /// A discussion of the request, drawn under its line: a frame with a header bar (it folds the
+    /// discussion), the notes on a timeline, and a footer to reply and resolve. A click anywhere
+    /// gives it the keyboard, so `r` `x` `o` act on it.
     pub(super) fn render_request_thread(
         &self,
         ix: usize,
         indent: f32,
         this: WeakEntity<Self>,
     ) -> gpui::AnyElement {
+        use super::discussion::{self, Kind, Source};
         let Some(t) = self.requests.threads.get(ix) else {
             return div().into_any_element();
         };
-        if !self.mr_open(ix) {
-            let first = &t.notes[0];
-            let more = t.notes.len() - 1;
-            return div()
-                .w_full()
-                .pl(px(indent))
-                .pr(px(12.))
-                .py(px(2.))
-                .child(
-                    div()
-                        .id(("thread-folded", ix))
-                        .max_w(px(640.))
-                        .h(px(26.))
-                        .px_3()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .rounded(px(super::ROW_RADIUS))
-                        .border_1()
-                        .border_color(theme::island_border())
-                        .bg(theme::panel())
-                        .font_family(theme::UI_FONT)
-                        .text_size(px(12.))
-                        .text_color(theme::muted())
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
-                        .child(div().flex_none().text_color(theme::warning()).child("▸"))
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_color(theme::warning())
-                                .child(first.author.clone()),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .child(self.one_line(&first.body)),
-                        )
-                        .children((more > 0).then(|| plural(more, "reply")))
-                        .children(t.resolved.then_some("resolved ✓"))
-                        .on_click(move |_, _, cx| {
-                            this.update(cx, |this, cx| this.set_thread_open(ix, true, cx))
-                                .ok();
-                        }),
-                )
-                .into_any_element();
-        }
-        let can_act = self.request_target().is_some();
-        let (reply, resolve, fold, raw, arrow) =
-            (this.clone(), this.clone(), this.clone(), this.clone(), this);
-        let resolved = t.resolved;
+        let open = self.mr_open(ix);
         let focused = self.thread_at == Some(ix);
-        let action = |id: &'static str, label: &'static str, key: &'static str| {
-            div()
-                .id((id, ix))
-                .h(px(24.))
-                .px(px(10.))
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .rounded(px(super::ROW_RADIUS))
-                .bg(theme::hover())
-                .text_size(px(12.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme::muted())
-                .cursor_pointer()
-                .hover(|s| s.bg(theme::selected()).text_color(theme::text()))
-                .child(label)
-                // The key is always told; it acts on the discussion the keyboard is on (⇧N ⇧P).
-                .child(
-                    div()
-                        .font_weight(FontWeight::NORMAL)
-                        .text_color(if focused {
-                            theme::muted()
-                        } else {
-                            theme::faint()
-                        })
-                        .child(key),
-                )
-        };
-        let notes = t.notes.iter().enumerate().map(|(n, note)| {
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .when(n > 0, |s| {
-                    s.pt(px(6.))
-                        .mt(px(4.))
-                        .border_t_1()
-                        .border_color(theme::island_border())
-                })
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .text_size(px(11.))
-                        .text_color(theme::faint())
-                        // The arrow that opened the discussion folds it again.
-                        .when(n == 0, |s| {
-                            let arrow = arrow.clone();
-                            s.child(
-                                div()
-                                    .id(("thread-arrow", ix))
-                                    .flex_none()
-                                    .text_size(px(13.))
-                                    .text_color(theme::warning())
-                                    .cursor_pointer()
-                                    .hover(|s| s.text_color(theme::text()))
-                                    .child("▾")
-                                    .on_click(move |_, _, cx| {
-                                        arrow
-                                            .update(cx, |this, cx| {
-                                                this.set_thread_open(ix, false, cx)
-                                            })
-                                            .ok();
-                                    }),
-                            )
-                        })
-                        .child(
-                            div()
-                                .text_color(theme::warning())
-                                .child(note.author.clone()),
-                        )
-                        .child(format!("· {}", format::ago(note.created)))
-                        .when(n == 0 && t.resolved, |s| s.child("· resolved ✓")),
-                )
-                .child(super::markdown::body(
-                    &note.body,
-                    self.settings.rich_comments,
-                    format!("md-note-{ix}-{n}"),
-                    self.link_base(),
-                ))
-        });
+        let can_act = self.request_target().is_some();
+        let (fold, pick, reply, resolve, raw) =
+            (this.clone(), this.clone(), this.clone(), this.clone(), this);
+        let first = &t.notes[0];
+        let author = self
+            .requests
+            .current
+            .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))
+            .map(|m| m.author.clone());
         let rich = t
             .notes
             .iter()
             .any(|n| super::markdown::has_markdown(&n.body));
+        let bar = discussion::bar(("thread-bar", ix), open)
+            .child(discussion::source_pill(Source::GitLab))
+            .children((!open).then(|| {
+                div()
+                    .flex_none()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme::text())
+                    .child(first.author.clone())
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .when(open, |s| {
+                        s.child(
+                            div()
+                                .flex()
+                                .gap(px(6.))
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(theme::text())
+                                        .child("Discussion"),
+                                )
+                                .child(format!("· {}", plural(t.notes.len(), "comment"))),
+                        )
+                    })
+                    .when(!open, |s| s.child(self.one_line(&first.body))),
+            )
+            .children((open && rich).then(|| {
+                self.rich_switch(("thread-rich", ix))
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        raw.update(cx, |this, cx| this.toggle_rich_comments(cx))
+                            .ok();
+                    })
+            }))
+            .children(t.resolvable.then(|| discussion::state(t.resolved)))
+            .tooltip(move |_, cx| {
+                cx.new(|_| super::Tip(if open { "Collapse  O" } else { "Expand  O" }))
+                    .into()
+            })
+            .on_click(move |_, _, cx| {
+                fold.update(cx, |this, cx| {
+                    this.thread_at = Some(ix);
+                    this.set_thread_open(ix, !open, cx)
+                })
+                .ok();
+            });
+        // Replying: the timeline runs on from the last note to my avatar.
+        let replying = self
+            .compose
+            .as_ref()
+            .is_some_and(|c| c.target == super::comments::Target::Reply(ix));
+        let last = t.notes.len() - 1;
+        let notes = t.notes.iter().enumerate().map(|(n, note)| {
+            discussion::note(
+                &note.author,
+                false,
+                (author.as_deref() == Some(note.author.as_str())).then_some("Author"),
+                format::ago(note.created),
+                super::markdown::body(
+                    &note.body,
+                    self.settings.rich_comments,
+                    format!("md-note-{ix}-{n}"),
+                    self.link_base(),
+                ),
+                n == last && !replying,
+            )
+        });
+        // Replying: the box opens where "Reply…" was, inside the discussion.
+        // The reply row: my avatar on the timeline's column, then the one input — closed, one line
+        // with Resolve beside it; open, grown inside its own outline (`comments::reply_editor`).
+        let my_avatar = || {
+            div()
+                .w(px(28.))
+                .flex()
+                .flex_none()
+                .justify_center()
+                .pt(px(5.))
+                .child(discussion::avatar(&self.me, true, 24.))
+        };
+        let reply_row = if replying {
+            self.reply_editor(reply.clone()).map(|editor| {
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(12.))
+                    .child(my_avatar())
+                    .child(editor)
+            })
+        } else {
+            can_act.then(|| {
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(12.))
+                    .child(my_avatar())
+                    .child(
+                        div()
+                            .id(("thread-reply", ix))
+                            .flex_1()
+                            .h(px(34.))
+                            .pl(px(10.))
+                            .pr(px(6.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(theme::selected())
+                            .bg(theme::base())
+                            .text_color(theme::muted())
+                            .cursor_text()
+                            .hover(|s| s.border_color(theme::muted()))
+                            .child(div().flex_1().child("Reply…"))
+                            .child(super::keys::caps("r", super::keys::On::Plain))
+                            .on_click(move |_, _, cx| {
+                                reply.update(cx, |this, cx| this.start_reply(ix, cx)).ok();
+                            }),
+                    )
+                    .children(t.resolvable.then(|| {
+                        discussion::button(
+                            ("thread-resolve", ix),
+                            if t.resolved { "Reopen" } else { "Resolve" },
+                            Some("x"),
+                            Kind::Plain,
+                        )
+                        .h(px(34.))
+                        .on_click(move |_, _, cx| {
+                            resolve
+                                .update(cx, |this, cx| this.toggle_resolved(ix, cx))
+                                .ok();
+                        })
+                    }))
+            })
+        };
         div()
             .w_full()
             .pl(px(indent))
             .pr(px(12.))
-            .py(px(4.))
+            .py(px(6.))
             .child(
-                div()
-                    .max_w(px(640.))
-                    .flex()
-                    .flex_col()
-                    .px_3()
-                    .py_2()
-                    .rounded(px(super::ROW_RADIUS))
-                    .when(focused, |s| s.border_2())
-                    .when(!focused, |s| s.border_1())
-                    .border_color(theme::warning())
-                    .bg(theme::panel())
-                    .font_family(theme::UI_FONT)
-                    .text_size(px(12.))
-                    .line_height(px(17.))
-                    .children(notes)
-                    .child(
-                        div()
-                            .flex()
-                            .gap_1()
-                            .pt(px(6.))
-                            .children(can_act.then(|| {
-                                action("thread-reply", "Reply", "r").on_click(move |_, _, cx| {
-                                    reply.update(cx, |this, cx| this.start_reply(ix, cx)).ok();
-                                })
-                            }))
-                            .children((can_act && t.resolvable).then(|| {
-                                action(
-                                    "thread-resolve",
-                                    if resolved { "Reopen" } else { "Resolve" },
-                                    "x",
-                                )
-                                .on_click(move |_, _, cx| {
-                                    resolve
-                                        .update(cx, |this, cx| this.toggle_resolved(ix, cx))
-                                        .ok();
-                                })
-                            }))
-                            .child(
-                                action("thread-fold", "Fold", "o").on_click(move |_, _, cx| {
-                                    fold.update(cx, |this, cx| this.set_thread_open(ix, false, cx))
-                                        .ok();
-                                }),
-                            )
-                            .children(rich.then(|| {
-                                action(
-                                    "thread-rich",
-                                    if self.settings.rich_comments {
-                                        "Raw"
-                                    } else {
-                                        "Rich"
-                                    },
-                                    "⌥M",
-                                )
-                                .on_click(move |_, _, cx| {
-                                    raw.update(cx, |this, cx| this.toggle_rich_comments(cx))
-                                        .ok();
-                                })
-                            })),
-                    ),
+                discussion::frame(Source::GitLab, focused)
+                    .id(("thread", ix))
+                    .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                        pick.update(cx, |this, cx| {
+                            if this.thread_at != Some(ix) {
+                                this.thread_at = Some(ix);
+                                cx.notify();
+                            }
+                        })
+                        .ok();
+                    })
+                    .child(bar)
+                    .when(open, |s| {
+                        s.child(div().flex().flex_col().children(notes))
+                            .children(reply_row)
+                    }),
             )
             .into_any_element()
     }
@@ -708,14 +696,34 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The discussion `r` `x` `o` act on: the one with the keyboard (a click or ⇧N gave it), else
+    /// the first open one from the top of the view.
+    fn acting_thread(&self) -> Option<usize> {
+        self.thread_at.or_else(|| {
+            let top = self.diff_list.logical_scroll_top().item_ix;
+            self.rows.iter().skip(top).find_map(|row| match row {
+                super::rows::Row::Request(ix) if self.mr_open(*ix) => Some(*ix),
+                _ => None,
+            })
+        })
+    }
+
     pub(super) fn reply_focused(&mut self, cx: &mut Context<Self>) {
-        if let Some(ix) = self.thread_at.filter(|_| self.request_target().is_some()) {
+        if let Some(ix) = self
+            .acting_thread()
+            .filter(|_| self.request_target().is_some())
+        {
+            self.thread_at = Some(ix);
             self.start_reply(ix, cx);
         }
     }
 
     pub(super) fn resolve_focused(&mut self, cx: &mut Context<Self>) {
-        if let Some(ix) = self.thread_at.filter(|_| self.request_target().is_some()) {
+        if let Some(ix) = self
+            .acting_thread()
+            .filter(|_| self.request_target().is_some())
+        {
+            self.thread_at = Some(ix);
             self.toggle_resolved(ix, cx);
         }
     }
@@ -737,7 +745,8 @@ impl Workspace {
 
     /// `o`: folds or opens the discussion the keyboard is on.
     pub(super) fn toggle_focused(&mut self, cx: &mut Context<Self>) {
-        if let Some(ix) = self.thread_at {
+        if let Some(ix) = self.acting_thread() {
+            self.thread_at = Some(ix);
             let open = self.mr_open(ix);
             self.set_thread_open(ix, !open, cx);
         }
@@ -761,76 +770,67 @@ impl Workspace {
             .collect()
     }
 
-    /// A pending comment, dashed: only its author sees it until the review is submitted.
+    /// A pending comment: a dashed frame, only its author sees it until the review is submitted.
     pub(super) fn render_draft(
         &self,
         ix: usize,
         indent: f32,
         this: WeakEntity<Self>,
     ) -> gpui::AnyElement {
+        use super::discussion::{self, Kind, Source};
         let Some(d) = self.requests.drafts.get(ix) else {
             return div().into_any_element();
         };
         let id = d.id;
-        let toggle = this.clone();
+        let (delete, raw) = (this.clone(), this);
+        let bar = discussion::bar(("draft-bar", ix), true)
+            .cursor_default()
+            .child(discussion::source_pill(Source::Pending))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child("· only you see it until you submit the review"),
+            )
+            .children(super::markdown::has_markdown(&d.body).then(|| {
+                self.rich_switch(("draft-rich", ix))
+                    .on_click(move |_, _, cx| {
+                        raw.update(cx, |this, cx| this.toggle_rich_comments(cx))
+                            .ok();
+                    })
+            }))
+            .child(
+                discussion::button(("draft-delete", ix), "Delete", None, Kind::Quiet)
+                    .h(px(24.))
+                    .px(px(8.))
+                    .on_click(move |_, _, cx| {
+                        delete
+                            .update(cx, |this, cx| this.discard_draft(id, cx))
+                            .ok();
+                    }),
+            );
         div()
             .w_full()
             .pl(px(indent))
             .pr(px(12.))
-            .py(px(4.))
+            .py(px(6.))
             .child(
-                div()
-                    .max_w(px(640.))
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .px_3()
-                    .py_2()
-                    .rounded(px(super::ROW_RADIUS))
-                    .border_1()
-                    .border_dashed()
-                    .border_color(theme::warning())
-                    .bg(theme::panel())
-                    .font_family(theme::UI_FONT)
-                    .text_size(px(12.))
-                    .line_height(px(17.))
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .text_size(px(11.))
-                            .text_color(theme::faint())
-                            .child(
-                                div()
-                                    .text_color(theme::warning())
-                                    .child("Pending · only you see this"),
-                            )
-                            .child(div().flex_1())
-                            .children(super::markdown::has_markdown(&d.body).then(|| {
-                                self.rich_switch(("draft-rich", ix))
-                                    .on_click(move |_, _, cx| {
-                                        toggle
-                                            .update(cx, |this, cx| this.toggle_rich_comments(cx))
-                                            .ok();
-                                    })
-                            }))
-                            .child(
-                                div()
-                                    .id(("draft-delete", ix))
-                                    .cursor_pointer()
-                                    .hover(|s| s.text_color(theme::removed()))
-                                    .child("Delete")
-                                    .on_click(move |_, _, cx| {
-                                        this.update(cx, |this, cx| this.discard_draft(id, cx)).ok();
-                                    }),
-                            ),
-                    )
-                    .child(super::markdown::body(
-                        &d.body,
-                        self.settings.rich_comments,
-                        format!("md-draft-{ix}"),
-                        self.link_base(),
-                    )),
+                discussion::frame(Source::Pending, false)
+                    .child(bar)
+                    .child(div().child(discussion::note(
+                        &self.me,
+                        true,
+                        None,
+                        "pending".to_owned(),
+                        super::markdown::body(
+                            &d.body,
+                            self.settings.rich_comments,
+                            format!("md-draft-{ix}"),
+                            self.link_base(),
+                        ),
+                        true,
+                    ))),
             )
             .into_any_element()
     }
@@ -1451,12 +1451,7 @@ impl Workspace {
                                 .text_color(theme::warning())
                                 .child("＋ New merge request…")
                                 .child(div().flex_1())
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(theme::faint())
-                                        .child("⌥⌘M"),
-                                )
+                                .child(super::keys::caps("⌥⌘M", super::keys::On::Plain))
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                     this.open_create(None, cx)
                                 })),
@@ -1615,5 +1610,33 @@ impl Workspace {
             }
             _ => false,
         })
+    }
+}
+
+/// After position `at` in a list (none: before its start), the next item not reviewed, going round
+/// to the first item when the end is reached; never `at` itself.
+fn next_unreviewed(reviewed: &[bool], at: Option<usize>) -> Option<usize> {
+    let n = reviewed.len();
+    let start = at.map_or(0, |a| a + 1);
+    (0..n)
+        .map(|step| (start + step) % n)
+        .find(|&ix| Some(ix) != at && !reviewed[ix])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_unreviewed;
+
+    #[test]
+    fn the_next_unreviewed_request_goes_round_to_the_top() {
+        // 0 open, 1 reviewed, 2 current, 3 reviewed: past the end, back to 0.
+        assert_eq!(
+            next_unreviewed(&[false, true, false, true], Some(2)),
+            Some(0)
+        );
+        assert_eq!(next_unreviewed(&[true, false, true], Some(0)), Some(1));
+        assert_eq!(next_unreviewed(&[true, false], None), Some(1));
+        // Only the current one is left: nowhere to go.
+        assert_eq!(next_unreviewed(&[true, false, true], Some(1)), None);
     }
 }

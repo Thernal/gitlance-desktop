@@ -190,6 +190,11 @@ impl Repo {
         Ok(Self { inner })
     }
 
+    /// `user.name` from git's config: whose avatar the composer shows.
+    pub fn user_name(&self) -> Option<String> {
+        self.inner.config().ok()?.get_string("user.name").ok()
+    }
+
     /// The working directory, or the git directory of a bare repository.
     pub fn root(&self) -> PathBuf {
         self.inner

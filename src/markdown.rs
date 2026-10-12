@@ -1,7 +1,8 @@
 //! Markdown in comments: GitLab writes discussions in it, and a comment written here may use it too.
 //! `parse` turns a body into blocks the UI draws; `apply` and `newline` are the composer's helpers,
-//! which put the markers in for the writer (the composer only types at the end of its text).
+//! which put the markers in for the writer at the caret or around the selection.
 
+use crate::textedit::TextEdit;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use std::ops::Range;
 
@@ -357,10 +358,8 @@ pub enum Helper {
     Strike,
     Code,
     CodeBlock,
-    Heading,
     Bullet,
     Numbered,
-    Task,
     Quote,
     Link,
 }
@@ -380,9 +379,7 @@ impl Helper {
     /// What starts each line, for the line ones.
     fn prefix(self) -> Option<&'static str> {
         match self {
-            Helper::Heading => Some("### "),
             Helper::Bullet => Some("- "),
-            Helper::Task => Some("- [ ] "),
             Helper::Quote => Some("> "),
             Helper::Numbered => Some("1. "),
             _ => None,
@@ -390,141 +387,94 @@ impl Helper {
     }
 }
 
-/// A marker the writer opened and has not closed yet: `at` is where its text starts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Open {
-    pub helper: Helper,
-    /// The link's address is being typed (after `](`).
-    pub url: bool,
-    pub at: usize,
-}
-
-/// Drops the open markers that editing by hand took away.
-pub fn prune(text: &str, open: &mut Vec<Open>) {
-    open.retain(|o| {
-        o.at <= text.len()
-            && text.is_char_boundary(o.at)
-            && match (o.helper.marker(), o.url) {
-                (Some(m), _) => text[..o.at].ends_with(m),
-                (None, true) => text[..o.at].ends_with("]("),
-                (None, false) => text[..o.at].ends_with('['),
-            }
-    });
-}
-
-/// Applies `helper` to the composer's `text`. With `all` (⌘A), it wraps or prefixes the whole
-/// text; otherwise an inline marker opens at the end and the same helper closes it, and a line
-/// marker starts a new line.
-pub fn apply(text: &mut String, all: bool, open: &mut Vec<Open>, helper: Helper) {
-    prune(text, open);
-    if all && !text.is_empty() {
-        open.clear();
-        *text = wrap_all(text, helper);
-        return;
-    }
-    if helper == Helper::CodeBlock {
-        // The same fence opens a block and, pressed again, closes it.
-        if !text.is_empty() && !text.ends_with('\n') {
-            text.push('\n');
-        }
-        text.push_str("```\n");
-        return;
-    }
-    if let Some(prefix) = helper.prefix() {
-        let last = text.rsplit('\n').next().unwrap_or_default();
-        let bare = match helper {
-            Helper::Numbered => line_marker(last).is_some_and(|m| m == last && m.ends_with(". ")),
-            _ => last == prefix,
-        };
-        let prefix = match helper {
-            Helper::Numbered => numbered_after(last),
-            _ => prefix.to_owned(),
-        };
-        if last.is_empty() {
-            text.push_str(&prefix);
-        } else if bare {
-            // Pressed again on an empty line of its own: it comes off.
-            text.truncate(text.len() - last.len());
-        } else {
-            text.push('\n');
-            text.push_str(&prefix);
-        }
-        return;
-    }
-    if let Some(ix) = open.iter().rposition(|o| o.helper == helper) {
-        let o = open.remove(ix);
-        if o.at == text.len() {
-            // Nothing written since it opened: the marker comes off again.
-            let len = match (helper.marker(), o.url) {
-                (Some(m), _) => m.len(),
-                (None, true) => 2,
-                (None, false) => 1,
-            };
-            text.truncate(o.at - len);
-            if o.url {
-                let at = text.rfind('[').map_or(text.len(), |i| i + 1);
-                open.push(Open {
-                    helper,
-                    url: false,
-                    at,
-                });
-            }
-            return;
-        }
-        match (helper.marker(), o.url) {
-            (Some(m), _) => text.push_str(m),
-            (None, true) => text.push(')'),
-            (None, false) => {
-                text.push_str("](");
-                open.push(Open {
-                    helper,
-                    url: true,
-                    at: text.len(),
-                });
-            }
-        }
-        return;
-    }
-    if !text.is_empty() && !text.ends_with(char::is_whitespace) {
-        text.push(' ');
-    }
-    text.push_str(helper.marker().unwrap_or("["));
-    open.push(Open {
-        helper,
-        url: false,
-        at: text.len(),
-    });
-}
-
-fn wrap_all(text: &str, helper: Helper) -> String {
-    let body = text.trim_end_matches('\n');
+/// Applies `helper` at the caret or over the selection, the way GitHub's toolbar does: an inline
+/// marker wraps the selection (or goes in empty with the caret between), and comes off when the
+/// selection is already wrapped; a line marker goes at the start of every line the selection
+/// touches, and comes off when they all have it.
+pub fn apply(edit: &mut TextEdit, helper: Helper) {
+    let text = edit.text().to_owned();
+    let sel = edit.selection().unwrap_or(edit.caret()..edit.caret());
+    let inner = text[sel.clone()].to_owned();
     match helper {
-        Helper::Code if body.contains('\n') => format!("```\n{body}\n```"),
-        Helper::CodeBlock => format!("```\n{body}\n```"),
-        Helper::Link if body.starts_with("http://") || body.starts_with("https://") => {
-            format!("[link]({body})")
+        Helper::Link => {
+            if inner.starts_with("http://") || inner.starts_with("https://") {
+                let with = format!("[]({inner})");
+                let at = sel.start + 1;
+                edit.replace(sel, &with, at..at);
+            } else {
+                let with = format!("[{inner}](url)");
+                let url = sel.start + inner.len() + 3;
+                edit.replace(sel, &with, url..url + 3);
+            }
         }
-        Helper::Link => format!("[{body}](url)"),
-        Helper::Heading => match body.split_once('\n') {
-            Some((first, rest)) => format!("### {first}\n{rest}"),
-            None => format!("### {body}"),
-        },
-        Helper::Numbered => body
-            .lines()
-            .enumerate()
-            .map(|(i, l)| format!("{}. {l}", i + 1))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => match (helper.marker(), helper.prefix()) {
-            (Some(m), _) => format!("{m}{body}{m}"),
-            (_, Some(p)) => body
-                .lines()
-                .map(|l| format!("{p}{l}"))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            _ => body.to_owned(),
+        Helper::CodeBlock => {
+            let lead = if sel.start == 0 || text[..sel.start].ends_with('\n') {
+                ""
+            } else {
+                "\n"
+            };
+            let with = format!("{lead}```\n{inner}\n```");
+            let at = sel.start + lead.len() + 4;
+            edit.replace(sel, &with, at..at + inner.len());
+        }
+        Helper::Code if inner.contains('\n') => apply(edit, Helper::CodeBlock),
+        _ => match helper.marker() {
+            Some(m) => {
+                let wrapped = sel.start >= m.len()
+                    && text[..sel.start].ends_with(m)
+                    && text[sel.end..].starts_with(m);
+                if wrapped {
+                    let outer = sel.start - m.len()..sel.end + m.len();
+                    let at = outer.start;
+                    edit.replace(outer, &inner, at..at + inner.len());
+                } else {
+                    let with = format!("{m}{inner}{m}");
+                    let at = sel.start + m.len();
+                    edit.replace(sel, &with, at..at + inner.len());
+                }
+            }
+            None => prefix_lines(edit, &text, sel, helper),
         },
     }
+}
+
+fn prefix_lines(edit: &mut TextEdit, text: &str, sel: std::ops::Range<usize>, helper: Helper) {
+    let start = text[..sel.start].rfind('\n').map_or(0, |i| i + 1);
+    let end = text[sel.end..]
+        .find('\n')
+        .map_or(text.len(), |i| sel.end + i);
+    let lines: Vec<&str> = text[start..end].split('\n').collect();
+    let have = |line: &str| match helper {
+        Helper::Numbered => numbered_prefix(line).is_some(),
+        _ => helper.prefix().is_some_and(|p| line.starts_with(p)),
+    };
+    let all = lines.iter().all(|l| have(l));
+    let block: Vec<String> = lines
+        .iter()
+        .enumerate()
+        .map(|(n, line)| {
+            if all {
+                let len = match helper {
+                    Helper::Numbered => numbered_prefix(line).unwrap_or(0),
+                    _ => helper.prefix().map_or(0, str::len),
+                };
+                line[len..].to_owned()
+            } else if helper == Helper::Numbered {
+                format!("{}. {line}", n + 1)
+            } else {
+                format!("{}{line}", helper.prefix().unwrap_or_default())
+            }
+        })
+        .collect();
+    let with = block.join("\n");
+    let caret = start + with.len();
+    edit.replace(start..end, &with, caret..caret);
+}
+
+/// The length of `12. ` at the start of `line`, if it has one.
+fn numbered_prefix(line: &str) -> Option<usize> {
+    let (n, _) = line.split_once(". ")?;
+    (!n.is_empty() && n.chars().all(|c| c.is_ascii_digit())).then_some(n.len() + 2)
 }
 
 /// `N. ` after a line numbered `N-1. `, else `1. `.
@@ -551,20 +501,24 @@ fn line_marker(line: &str) -> Option<String> {
 }
 
 /// Return in the composer: a list or a quote goes on to its next line; return on an empty item
-/// ends the list instead.
-pub fn newline(text: &mut String) {
-    let last = text.rsplit('\n').next().unwrap_or_default().to_owned();
-    let in_code = text
+/// ends the list with a blank line instead. Inside a code fence it is a plain new line.
+pub fn newline(edit: &mut TextEdit) {
+    if edit.selection().is_some() {
+        return edit.insert("\n");
+    }
+    let text = edit.text().to_owned();
+    let caret = edit.caret();
+    let start = text[..caret].rfind('\n').map_or(0, |i| i + 1);
+    let line = &text[start..caret];
+    let in_code = text[..caret]
         .lines()
         .filter(|l| l.trim_start().starts_with("```"))
         .count()
         % 2
         == 1;
-    match line_marker(&last).filter(|_| !in_code) {
-        Some(marker) if last == marker || last.trim_end() == marker.trim_end() => {
-            // A blank line ends the list: without it the next line would join the last item.
-            text.truncate(text.len() - last.len());
-            text.push('\n');
+    match line_marker(line).filter(|_| !in_code) {
+        Some(marker) if line.trim_end() == marker.trim_end() => {
+            edit.replace(start..caret, "\n", start + 1..start + 1);
         }
         Some(marker) => {
             let next = match marker.trim_start().split_once(". ") {
@@ -574,10 +528,9 @@ pub fn newline(text: &mut String) {
                 }
                 _ => marker,
             };
-            text.push('\n');
-            text.push_str(&next);
+            edit.insert(&format!("\n{next}"));
         }
-        None => text.push('\n'),
+        None => edit.insert("\n"),
     }
 }
 
@@ -654,90 +607,73 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_inline_helper_opens_then_closes() {
-        let (mut text, mut open) = ("fix".to_owned(), Vec::new());
-        apply(&mut text, false, &mut open, Helper::Bold);
-        assert_eq!(text, "fix **");
-        text.push_str("this");
-        apply(&mut text, false, &mut open, Helper::Bold);
-        assert_eq!(text, "fix **this**");
-        assert!(open.is_empty());
-        // Opened and closed with nothing between: undone.
-        apply(&mut text, false, &mut open, Helper::Code);
-        apply(&mut text, false, &mut open, Helper::Code);
-        assert_eq!(text, "fix **this** ");
+    fn edit(text: &str, sel: std::ops::Range<usize>) -> TextEdit {
+        let mut e = TextEdit::new(text);
+        e.place(sel.start, false);
+        e.place(sel.end, true);
+        e
     }
 
     #[test]
-    fn a_link_takes_its_text_then_its_address() {
-        let (mut text, mut open) = (String::new(), Vec::new());
-        apply(&mut text, false, &mut open, Helper::Link);
-        text.push_str("docs");
-        apply(&mut text, false, &mut open, Helper::Link);
-        text.push_str("https://x.y");
-        apply(&mut text, false, &mut open, Helper::Link);
-        assert_eq!(text, "[docs](https://x.y)");
-        assert!(open.is_empty());
+    fn an_inline_helper_wraps_the_selection_and_unwraps_it() {
+        let mut e = edit("fix this now", 4..8);
+        apply(&mut e, Helper::Bold);
+        assert_eq!(e.text(), "fix **this** now");
+        assert_eq!(e.selected_text(), Some("this"));
+        apply(&mut e, Helper::Bold);
+        assert_eq!(e.text(), "fix this now");
     }
 
     #[test]
-    fn backspacing_over_a_marker_forgets_it() {
-        let (mut text, mut open) = ("a".to_owned(), Vec::new());
-        apply(&mut text, false, &mut open, Helper::Italic);
-        text.pop();
-        prune(&text, &mut open);
-        assert!(open.is_empty());
+    fn with_nothing_selected_the_caret_lands_between_the_markers() {
+        let mut e = edit("a ", 2..2);
+        apply(&mut e, Helper::Code);
+        e.insert("x");
+        assert_eq!(e.text(), "a `x`");
     }
 
     #[test]
-    fn helpers_wrap_everything_when_all_is_selected() {
-        let mut open = Vec::new();
-        let mut text = "one\ntwo".to_owned();
-        apply(&mut text, true, &mut open, Helper::Bullet);
-        assert_eq!(text, "- one\n- two");
-        let mut text = "one\ntwo".to_owned();
-        apply(&mut text, true, &mut open, Helper::Numbered);
-        assert_eq!(text, "1. one\n2. two");
-        let mut text = "x".to_owned();
-        apply(&mut text, true, &mut open, Helper::Bold);
-        assert_eq!(text, "**x**");
-        let mut text = "a\nb".to_owned();
-        apply(&mut text, true, &mut open, Helper::Code);
-        assert_eq!(text, "```\na\nb\n```");
+    fn a_link_wraps_its_text_and_selects_the_address() {
+        let mut e = edit("see docs", 4..8);
+        apply(&mut e, Helper::Link);
+        assert_eq!(e.text(), "see [docs](url)");
+        assert_eq!(e.selected_text(), Some("url"));
     }
 
     #[test]
-    fn line_helpers_start_a_line() {
-        let (mut text, mut open) = ("intro".to_owned(), Vec::new());
-        apply(&mut text, false, &mut open, Helper::Numbered);
-        assert_eq!(text, "intro\n1. ");
-        text.push_str("first");
-        apply(&mut text, false, &mut open, Helper::Numbered);
-        assert_eq!(text, "intro\n1. first\n2. ");
-        apply(&mut text, false, &mut open, Helper::Numbered);
-        assert_eq!(text, "intro\n1. first\n");
+    fn line_helpers_mark_every_selected_line_and_take_it_off_again() {
+        let mut e = edit("one\ntwo", 1..5);
+        apply(&mut e, Helper::Bullet);
+        assert_eq!(e.text(), "- one\n- two");
+        let len = e.text().len();
+        e.place(0, false);
+        e.place(len, true);
+        apply(&mut e, Helper::Bullet);
+        assert_eq!(e.text(), "one\ntwo");
+        let mut e = edit("a\nb", 0..3);
+        apply(&mut e, Helper::Numbered);
+        assert_eq!(e.text(), "1. a\n2. b");
     }
 
     #[test]
     fn return_continues_a_list_and_ends_it_on_an_empty_item() {
-        let mut text = "- a".to_owned();
-        newline(&mut text);
-        assert_eq!(text, "- a\n- ");
-        newline(&mut text);
-        assert_eq!(text, "- a\n\n");
+        let mut e = TextEdit::new("- a");
+        newline(&mut e);
+        assert_eq!(e.text(), "- a\n- ");
+        newline(&mut e);
+        assert_eq!(e.text(), "- a\n\n");
         assert!(matches!(
-            &parse(&format!("{text}after"))[1],
+            &parse(&format!("{}after", e.text()))[1],
             Block::Paragraph(_)
         ));
-        let mut text = "  3. c".to_owned();
-        newline(&mut text);
-        assert_eq!(text, "  3. c\n  4. ");
-        let mut text = "- [x] done".to_owned();
-        newline(&mut text);
-        assert_eq!(text, "- [x] done\n- [ ] ");
-        let mut text = "```\n- in code".to_owned();
-        newline(&mut text);
-        assert_eq!(text, "```\n- in code\n");
+        let mut e = TextEdit::new("  3. c");
+        newline(&mut e);
+        assert_eq!(e.text(), "  3. c\n  4. ");
+        let mut e = TextEdit::new("- [x] done");
+        newline(&mut e);
+        assert_eq!(e.text(), "- [x] done\n- [ ] ");
+        let mut e = TextEdit::new("```\n- in code");
+        newline(&mut e);
+        assert_eq!(e.text(), "```\n- in code\n");
     }
 }

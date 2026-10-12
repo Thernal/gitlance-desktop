@@ -109,7 +109,11 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
         "⌥⇧V",
         Cmd::AllReviewed,
     ),
-    ("Next merge request", "⌥↓", Cmd::NextRequest),
+    (
+        "Next merge request not reviewed yet",
+        "⌥↓",
+        Cmd::NextRequest,
+    ),
     ("Previous merge request", "⌥↑", Cmd::PreviousRequest),
     ("Hide or show the branches", "⌥⌘1", Cmd::ToggleSidebar),
     ("Hide or show the files", "⌥⌘2", Cmd::ToggleFiles),
@@ -632,12 +636,9 @@ impl Workspace {
                             .text_color(theme::muted())
                             .child(item.detail.clone()),
                     )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(px(11.))
-                            .text_color(theme::faint())
-                            .child(item.key),
+                    .children(
+                        (!item.key.is_empty())
+                            .then(|| super::keys::caps(item.key, super::keys::On::Plain)),
                     )
                     .on_click(
                         cx.listener(move |this, _, window, cx| {

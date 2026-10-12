@@ -77,6 +77,16 @@ pub fn focus() -> Rgba {
     rgb(crate::highlight::palette::PURPLE)
 }
 
+/// The tint behind an agent note's pill.
+pub fn focus_bg() -> Rgba {
+    rgba(0xc678dd2e)
+}
+
+/// The tint behind a "Resolved" chip.
+pub fn added_bg() -> Rgba {
+    rgba(0x98c37924)
+}
+
 /// The tint behind the new-commits pill.
 pub fn info_bg() -> Rgba {
     rgba(0x61afef24)

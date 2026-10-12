@@ -317,11 +317,9 @@ pub fn helper_look(h: Helper) -> (&'static str, &'static str) {
         Helper::Strike => ("strikethrough", "Strikethrough  ⌘⇧X"),
         Helper::Code => ("code", "Code  ⌘⇧E"),
         Helper::Link => ("link", "Link — text, then again for the address  ⌘⇧K"),
-        Helper::Heading => ("heading", "Heading"),
         Helper::Quote => ("quote", "Quote"),
         Helper::Bullet => ("list", "Bulleted list"),
         Helper::Numbered => ("list-ordered", "Numbered list"),
-        Helper::Task => ("list-checks", "Task list"),
         Helper::CodeBlock => ("code-block", "Code block — again to close it"),
     }
 }

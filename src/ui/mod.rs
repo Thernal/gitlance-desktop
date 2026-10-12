@@ -5,12 +5,14 @@ mod bookmarks;
 mod comments;
 mod create;
 mod diff_view;
+mod discussion;
 mod fetch;
 mod find;
 mod findfiles;
 mod format;
 mod icons;
 mod input;
+mod keys;
 mod lists;
 mod markdown;
 mod menu;
@@ -236,8 +238,12 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("p", PreviousChange, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-g", NextMatch, Some("Workspace")),
                 KeyBinding::new("cmd-shift-g", PreviousMatch, Some("Workspace")),
-                KeyBinding::new("up", PreviousCommit, Some("Workspace && !Palette")),
-                KeyBinding::new("down", NextCommit, Some("Workspace && !Palette")),
+                KeyBinding::new(
+                    "up",
+                    PreviousCommit,
+                    Some("Workspace && !Palette && !Caret"),
+                ),
+                KeyBinding::new("down", NextCommit, Some("Workspace && !Palette && !Caret")),
                 KeyBinding::new("up", PaletteUp, Some("Palette")),
                 KeyBinding::new("down", PaletteDown, Some("Palette")),
                 KeyBinding::new("cmd-k", OpenPalette, Some("Workspace")),
@@ -497,7 +503,9 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                                 });
                                 this.start_comment(false, line + 1, cx);
                                 if let Some(c) = this.compose.as_mut() {
-                                    c.body = "Name this after what it holds.".into();
+                                    c.edit = crate::textedit::TextEdit::new(
+                                        "Name this after what it holds.",
+                                    );
                                 }
                                 this.refresh_rows();
                             }
@@ -831,6 +839,8 @@ pub struct Workspace {
     compose: Option<comments::Compose>,
     /// The merge request the last comment went to: the next composer on its diff starts there.
     last_request_target: Option<u64>,
+    /// Who is reviewing (git's `user.name`): the composer's avatar.
+    me: String,
     /// A comment to scroll to once its file is laid out.
     jump: Option<u64>,
     /// "Copied ✓" on the Copy button until something changes.
@@ -968,6 +978,7 @@ impl Workspace {
             comments: Vec::new(),
             compose: None,
             last_request_target: None,
+            me: "You".to_owned(),
             jump: None,
             copied: false,
             field_all: false,
@@ -1037,21 +1048,23 @@ impl Workspace {
                     let fingerprint = crate::git::fingerprint(&git_dir);
                     let web = repo.web_remote();
                     let decor = repo.decorations();
+                    let me = repo.user_name();
                     anyhow::Ok((
                         repo.root(),
                         repo.branches()?,
                         git_dir,
                         fingerprint,
                         web,
-                        decor,
+                        (decor, me),
                     ))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 match loaded {
-                    Ok((root, branches, git_dir, fingerprint, web, decor)) => {
+                    Ok((root, branches, git_dir, fingerprint, web, (decor, me))) => {
                         this.web = web;
                         this.decor = decor;
+                        this.me = me.unwrap_or_else(|| "You".to_owned());
                         this.recent = storage::remember(&root);
                         if this.root.as_ref() != Some(&root) {
                             this.find.reset();
@@ -2278,12 +2291,7 @@ impl Workspace {
                     .gap_2()
                     .child(icons::icon(icon).text_color(theme::muted()))
                     .child(div().flex_1().child(label))
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(theme::faint())
-                            .child(key),
-                    )
+                    .child(keys::caps(key, keys::On::Plain))
             };
         div()
             .absolute()
@@ -3860,6 +3868,9 @@ impl Render for Workspace {
                 {
                     if self.palette.is_some() || self.ffind.is_some() {
                         "Workspace Typing Palette"
+                    } else if self.compose.is_some() || self.goline.is_some() {
+                        // ↑ ↓ belong to the field: they move its caret or its line.
+                        "Workspace Typing Caret"
                     } else {
                         "Workspace Typing"
                     }
