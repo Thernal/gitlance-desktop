@@ -289,6 +289,8 @@ pub struct Settings {
     pub ui_zoom: u16,
     /// Comments are drawn as formatted markdown, not as the text written (⌥M).
     pub rich_comments: bool,
+    /// Merge requests are listed by when they were last updated, not when they were opened.
+    pub mr_by_updated: bool,
 }
 
 impl Default for Settings {
@@ -303,6 +305,7 @@ impl Default for Settings {
             zoom: 100,
             ui_zoom: 100,
             rich_comments: true,
+            mr_by_updated: false,
         }
     }
 }
@@ -333,6 +336,7 @@ impl Settings {
                 "auto_refresh" => settings.auto_refresh = value != "false",
                 "fold_generated" => settings.fold_generated = value != "false",
                 "rich_comments" => settings.rich_comments = value != "false",
+                "mr_sort" => settings.mr_by_updated = value == "updated",
                 "ui_zoom" => {
                     settings.ui_zoom = value.parse().map_or(100, |z: u16| {
                         z.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX)
@@ -361,6 +365,12 @@ impl std::fmt::Display for Settings {
         writeln!(f, "auto_refresh={}", self.auto_refresh)?;
         writeln!(f, "fold_generated={}", self.fold_generated)?;
         writeln!(f, "rich_comments={}", self.rich_comments)?;
+        let sort = if self.mr_by_updated {
+            "updated"
+        } else {
+            "created"
+        };
+        writeln!(f, "mr_sort={sort}")?;
         writeln!(f, "zoom={}", self.zoom)?;
         writeln!(f, "ui_zoom={}", self.ui_zoom)?;
         writeln!(f, "appearance={}", self.appearance.key())?;
@@ -453,6 +463,7 @@ mod tests {
             zoom: 130,
             ui_zoom: 120,
             rich_comments: false,
+            mr_by_updated: true,
         };
         assert_eq!(Settings::parse(&settings.to_string()), settings);
     }

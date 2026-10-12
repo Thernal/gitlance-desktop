@@ -258,6 +258,11 @@ impl Workspace {
             Selection::WorkingTree => "working tree".to_owned(),
             Selection::None => String::new(),
         };
+        // A run of comments to one merge request does not have to pick it every time.
+        let target = match self.request_target() {
+            Some(iid) if self.last_request_target == Some(iid) => Target::Request(iid),
+            _ => Target::Agent,
+        };
         self.compose = Some(Compose {
             path,
             old,
@@ -265,7 +270,7 @@ impl Workspace {
             code,
             body: String::new(),
             at,
-            target: Target::Agent,
+            target,
             error: None,
             posting: false,
             open: Vec::new(),
@@ -356,6 +361,7 @@ impl Workspace {
             self.compose = Some(compose);
             return;
         }
+        self.last_request_target = None;
         let id = self.comments.iter().map(|c| c.id).max().unwrap_or(0) + 1;
         self.comments.push(Comment {
             id,
@@ -394,6 +400,7 @@ impl Workspace {
         let Some((new_path, old_path)) = file else {
             return;
         };
+        self.last_request_target = Some(iid);
         let (old_line, new_line) = self.line_pair(compose.line, compose.old);
         let path = new_path.clone().or(old_path.clone()).unwrap_or_default();
         let old_path = old_path.or(new_path).unwrap_or_default();
@@ -958,7 +965,7 @@ impl Workspace {
                 )
                 .into_any_element();
         }
-        let toggle = this.clone();
+        let (toggle, fold) = (this.clone(), this.clone());
         div()
             .w_full()
             .pl(px(indent))
@@ -985,7 +992,22 @@ impl Workspace {
                             .gap_2()
                             .text_size(px(11.))
                             .text_color(theme::faint())
-                            .child(div().text_color(theme::focus()).child("You → agent"))
+                            .child(
+                                div()
+                                    .id(("agent-arrow", id))
+                                    .text_color(theme::focus())
+                                    .cursor_pointer()
+                                    .hover(|s| s.text_color(theme::text()))
+                                    .child("▾ You → agent")
+                                    .on_click(move |_, _, cx| {
+                                        fold.update(cx, |this, cx| {
+                                            this.toggled_agent.insert(id);
+                                            this.refresh_rows();
+                                            cx.notify();
+                                        })
+                                        .ok();
+                                    }),
+                            )
                             .child(div().flex_1().child(format!("· {}", comment.at)))
                             .children(markdown::has_markdown(&comment.body).then(|| {
                                 self.rich_switch(("agent-rich", id))

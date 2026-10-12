@@ -45,6 +45,7 @@ pub enum Cmd {
     FullContext,
     Whitespace,
     RichComments,
+    LeaveRequest,
     Compare,
     NewTab,
     CreateRequest,
@@ -95,6 +96,11 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Toggle full file", "⌥E", Cmd::FullContext),
     ("Toggle ignore whitespace", "⌥W", Cmd::Whitespace),
     ("Comments as markdown or raw text", "⌥M", Cmd::RichComments),
+    (
+        "Leave the merge request — back to your branch",
+        "⌥⌘L",
+        Cmd::LeaveRequest,
+    ),
     ("Hide or show the branches", "⌥⌘1", Cmd::ToggleSidebar),
     ("Hide or show the files", "⌥⌘2", Cmd::ToggleFiles),
     ("Branches or merge requests", "⌥⌘3", Cmd::ToggleRequests),
@@ -251,25 +257,40 @@ impl Workspace {
                 .collect();
         }
         if !matches!(p.kind, Kind::Jump) {
-            let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
             let group = if matches!(p.kind, Kind::Base) {
                 "Base"
             } else {
                 "Compare with"
             };
-            let mut items: Vec<Item> = p
-                .refs
-                .iter()
-                .filter(|r| matches(&words, &r.name))
+            let mut ranked = crate::rank::rank(&p.refs, query, |r| &r.name);
+            // A stale local branch comes after its upstream: that is the one meant.
+            for i in 0..ranked.len() {
+                if let Some(st) = &ranked[i].stale
+                    && let Some(j) = ranked[i..].iter().position(|r| r.name == st.upstream)
+                {
+                    let upstream = ranked.remove(i + j);
+                    ranked.insert(i, upstream);
+                }
+            }
+            let mut items: Vec<Item> = ranked
+                .into_iter()
                 .take(14)
                 .map(|r| Item {
                     group,
                     label: r.name.clone(),
-                    detail: format!(
-                        "{} {}",
-                        if r.tag { "tag" } else { "branch" },
-                        format::short(r.tip)
-                    ),
+                    detail: match &r.stale {
+                        Some(st) => format!(
+                            "branch {} · ↓{} behind {}",
+                            format::short(r.tip),
+                            st.behind,
+                            st.upstream
+                        ),
+                        None => format!(
+                            "{} {}",
+                            if r.tag { "tag" } else { "branch" },
+                            format::short(r.tip)
+                        ),
+                    },
                     key: "",
                     pick: Pick::Ref(r.name.clone(), r.tip),
                 })
@@ -320,10 +341,8 @@ impl Workspace {
         }
         if scope.is_none_or(|s| s == '#') && !words.is_empty() | scope.is_some() {
             items.extend(
-                self.branches
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, b)| matches(&words, &b.name))
+                crate::rank::rank(self.branches.iter().enumerate(), rest, |(_, b)| &b.name)
+                    .into_iter()
                     .take(cap(3))
                     .map(|(ix, b)| Item {
                         group: "Branches",
@@ -339,18 +358,29 @@ impl Workspace {
             && let Some(diff) = &self.diff
         {
             items.extend(
-                diff.files
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, f)| matches(&words, f.path()))
-                    .take(cap(3))
-                    .map(|(ix, f)| Item {
-                        group: "Files in this diff",
-                        label: f.path().to_owned(),
-                        detail: String::new(),
-                        key: "",
-                        pick: Pick::File(ix),
+                crate::rank::rank(diff.files.iter().enumerate(), rest, |(_, f)| {
+                    f.path().rsplit('/').next().unwrap_or_default()
+                })
+                .into_iter()
+                .chain(
+                    // A word that only matches the folders of a path.
+                    diff.files.iter().enumerate().filter(|(_, f)| {
+                        matches(&words, f.path())
+                            && crate::rank::score(
+                                rest,
+                                f.path().rsplit('/').next().unwrap_or_default(),
+                            )
+                            .is_none()
                     }),
+                )
+                .take(cap(3))
+                .map(|(ix, f)| Item {
+                    group: "Files in this diff",
+                    label: f.path().to_owned(),
+                    detail: String::new(),
+                    key: "",
+                    pick: Pick::File(ix),
+                }),
             );
         }
         if scope.is_none() && !words.is_empty() {
@@ -515,7 +545,12 @@ impl Workspace {
         self.selection = Selection::None;
         let settings = self.settings();
         self.load_diff(None, cx, move || {
-            let c = Repo::open(&root)?.compare(base.1, head.1, since_merge_base, settings)?;
+            let repo = Repo::open(&root)?;
+            let c = repo.compare(base.1, head.1, since_merge_base, settings)?;
+            // Only a local branch that still points where it was picked can be stale.
+            let stale = repo
+                .stale(&base.0)
+                .filter(|_| repo.resolve(&base.0).ok() == Some(base.1));
             Ok(Diff {
                 header: Header::Compare {
                     base,
@@ -524,6 +559,7 @@ impl Workspace {
                     start: c.start,
                     commits: c.commits,
                     request,
+                    stale,
                 },
                 files: Arc::new(c.files),
                 pairs: Vec::new(),
@@ -686,6 +722,7 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::FullContext => Box::new(ToggleFullContext),
         Cmd::Whitespace => Box::new(ToggleWhitespace),
         Cmd::RichComments => Box::new(ToggleRichComments),
+        Cmd::LeaveRequest => Box::new(LeaveRequest),
         Cmd::Compare => Box::new(Compare),
         Cmd::NewTab => Box::new(NewTab),
         Cmd::CreateRequest => Box::new(CreateRequest),

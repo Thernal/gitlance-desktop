@@ -18,6 +18,7 @@ pub struct Mr {
     pub url: String,
     /// Seconds since the epoch.
     pub updated: i64,
+    pub created: i64,
     pub comments: usize,
     pub draft: bool,
 }
@@ -488,6 +489,7 @@ pub fn create(
             target: target.to_owned(),
             url: String::new(),
             updated: 0,
+            created: 0,
             comments: 0,
             draft,
         });
@@ -641,6 +643,7 @@ pub fn parse_mrs(value: &Value) -> Vec<Mr> {
                 target: text(m, "target_branch"),
                 url: text(m, "web_url"),
                 updated: epoch(&text(m, "updated_at")),
+                created: epoch(&text(m, "created_at")),
                 comments: m
                     .get("user_notes_count")
                     .and_then(Value::as_u64)

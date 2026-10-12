@@ -374,7 +374,11 @@ impl Workspace {
                                 .border_2()
                                 .border_color(theme::focus())
                                 .bg(theme::base())
-                                .child(div().text_color(theme::faint()).child("⌕"))
+                                .child(
+                                    super::icons::icon("search")
+                                        .size(px(14.))
+                                        .text_color(theme::faint()),
+                                )
                                 .child(input::field_text(&f.query, true, f.all, "Search the diff"))
                                 .child(
                                     toggle("ffind-case", "Aa", f.case, "Match case  ⌥C").on_click(

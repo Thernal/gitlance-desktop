@@ -163,15 +163,8 @@ impl Workspace {
     fn branch_items(&self) -> Vec<BranchItem> {
         let filter = self.bfilter.to_lowercase();
         if !filter.trim().is_empty() {
-            return self
-                .branches
-                .iter()
-                .enumerate()
-                .filter(|(_, b)| {
-                    filter
-                        .split_whitespace()
-                        .all(|w| b.name.to_lowercase().contains(w))
-                })
+            return crate::rank::rank(self.branches.iter().enumerate(), &filter, |(_, b)| &b.name)
+                .into_iter()
                 .map(|(ix, _)| BranchItem::Branch(ix))
                 .collect();
         }
@@ -318,7 +311,11 @@ impl Workspace {
             .bg(theme::base())
             .cursor_text()
             .on_click(on_click)
-            .child(div().text_color(theme::faint()).child("⌕"))
+            .child(
+                super::icons::icon("search")
+                    .size(px(14.))
+                    .text_color(theme::faint()),
+            )
             .child(input::field_text(
                 &text,
                 active,

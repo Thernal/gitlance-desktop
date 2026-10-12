@@ -515,3 +515,50 @@ fn the_working_tree_reads_staged_unstaged_and_untracked_changes() {
     fs::write(dir.join("a.txt"), "three!\n").unwrap();
     assert_ne!(repo.working_summary().unwrap().1, before);
 }
+
+#[test]
+fn a_local_branch_behind_its_upstream_is_stale() {
+    let mut f = Fixture::new();
+    let old = f.commit("refs/heads/develop", &[], &[("a", "1")], "init");
+    f.repo
+        .reference("refs/remotes/origin/develop", old, true, "fetch")
+        .unwrap();
+    f.repo
+        .remote("origin", "https://example.com/app.git")
+        .unwrap();
+    let mut config = f.repo.config().unwrap();
+    config.set_str("branch.develop.remote", "origin").unwrap();
+    config
+        .set_str("branch.develop.merge", "refs/heads/develop")
+        .unwrap();
+    let repo = f.open();
+    assert_eq!(repo.stale("develop"), None);
+
+    let one = f.commit(
+        "refs/remotes/origin/develop",
+        &[old],
+        &[("a", "2")],
+        "fetch",
+    );
+    let two = f.commit(
+        "refs/remotes/origin/develop",
+        &[one],
+        &[("a", "3")],
+        "fetch",
+    );
+    let stale = repo.stale("develop").expect("behind");
+    assert_eq!(
+        (stale.upstream.as_str(), stale.tip, stale.behind),
+        ("origin/develop", two, 2)
+    );
+    let refs = repo.compare_refs().unwrap();
+    let develop = refs.iter().find(|r| r.name == "develop").unwrap();
+    assert_eq!(develop.stale.as_ref().map(|s| s.behind), Some(2));
+    assert!(
+        refs.iter()
+            .find(|r| r.name == "origin/develop")
+            .unwrap()
+            .stale
+            .is_none()
+    );
+}

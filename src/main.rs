@@ -7,6 +7,7 @@ mod git;
 mod highlight;
 mod markdown;
 mod mr;
+mod rank;
 mod review;
 mod search;
 mod storage;

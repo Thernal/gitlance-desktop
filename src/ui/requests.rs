@@ -35,6 +35,8 @@ pub struct Requests {
     /// The pushes GitLab kept for a request, as versions of this repository.
     pub versions: Option<(u64, Vec<Version>)>,
     version_task: Option<Task<()>>,
+    /// The request left with ✕: its branch shows as a plain branch until a request is picked again.
+    pub dismissed: Option<u64>,
     task: Option<Task<()>>,
     thread_task: Option<Task<()>>,
 }
@@ -106,7 +108,11 @@ impl Workspace {
     /// Follows the branch selection: the request of the branch becomes the current one and its
     /// discussions are read.
     pub(super) fn sync_request(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let iid = self.request_of_branch(ix).map(|m| m.iid);
+        let dismissed = self.requests.dismissed;
+        let iid = self
+            .request_of_branch(ix)
+            .map(|m| m.iid)
+            .filter(|iid| dismissed != Some(*iid));
         if iid == self.requests.current && iid.is_none() {
             return;
         }
@@ -159,6 +165,7 @@ impl Workspace {
         else {
             return;
         };
+        self.requests.dismissed = None;
         self.load_request_versions(iid, cx);
         if let Some(m) = self.requests.list.iter().find(|m| m.iid == iid) {
             let (label, detail) = (m.title.clone(), format!("!{iid}"));
@@ -192,6 +199,23 @@ impl Workspace {
         }
         self.select_branch(src, None, cx);
         self.record();
+    }
+
+    /// ✕ on the request (⌥⌘L): back to the checked-out branch, as a plain branch, with the branches
+    /// in the rail.
+    pub(super) fn leave_request(&mut self, cx: &mut Context<Self>) {
+        let Some(iid) = self.requests.current else {
+            return;
+        };
+        self.requests.dismissed = Some(iid);
+        self.requests.side = Side::Branches;
+        self.pending_compare = None;
+        self.close_picker(cx);
+        match self.branches.iter().position(|b| b.is_head).or(self.branch) {
+            Some(ix) => self.select_branch(ix, None, cx),
+            None => self.sync_request(0, cx),
+        }
+        cx.notify();
     }
 
     /// Reads the pushes GitLab kept for request `iid`; they become the versions timeline once the
@@ -339,7 +363,8 @@ impl Workspace {
                 .into_any_element();
         }
         let can_act = self.request_target().is_some();
-        let (reply, resolve, fold, raw) = (this.clone(), this.clone(), this.clone(), this);
+        let (reply, resolve, fold, raw, arrow) =
+            (this.clone(), this.clone(), this.clone(), this.clone(), this);
         let resolved = t.resolved;
         let focused = self.thread_at == Some(ix);
         let action = |id: &'static str, label: &'static str, key: &'static str| {
@@ -358,12 +383,17 @@ impl Workspace {
                 .cursor_pointer()
                 .hover(|s| s.bg(theme::selected()).text_color(theme::text()))
                 .child(label)
-                .children(focused.then(|| {
+                // The key is always told; it acts on the discussion the keyboard is on (⇧N ⇧P).
+                .child(
                     div()
                         .font_weight(FontWeight::NORMAL)
-                        .text_color(theme::faint())
-                        .child(key)
-                }))
+                        .text_color(if focused {
+                            theme::muted()
+                        } else {
+                            theme::faint()
+                        })
+                        .child(key),
+                )
         };
         let notes = t.notes.iter().enumerate().map(|(n, note)| {
             div()
@@ -382,6 +412,27 @@ impl Workspace {
                         .gap_2()
                         .text_size(px(11.))
                         .text_color(theme::faint())
+                        // The arrow that opened the discussion folds it again.
+                        .when(n == 0, |s| {
+                            let arrow = arrow.clone();
+                            s.child(
+                                div()
+                                    .id(("thread-arrow", ix))
+                                    .flex_none()
+                                    .text_size(px(13.))
+                                    .text_color(theme::warning())
+                                    .cursor_pointer()
+                                    .hover(|s| s.text_color(theme::text()))
+                                    .child("▾")
+                                    .on_click(move |_, _, cx| {
+                                        arrow
+                                            .update(cx, |this, cx| {
+                                                this.set_thread_open(ix, false, cx)
+                                            })
+                                            .ok();
+                                    }),
+                            )
+                        })
                         .child(
                             div()
                                 .text_color(theme::warning())
@@ -961,7 +1012,8 @@ impl Workspace {
     pub(super) fn shown_requests(&self) -> Vec<&Mr> {
         let filter = self.bfilter.to_lowercase();
         let words: Vec<&str> = filter.split_whitespace().collect();
-        self.requests
+        let mut shown: Vec<&Mr> = self
+            .requests
             .list
             .iter()
             .filter(|m| {
@@ -969,7 +1021,20 @@ impl Workspace {
                     format!("!{} {} {} {}", m.iid, m.title, m.author, m.source).to_lowercase();
                 words.iter().all(|w| hay.contains(w))
             })
-            .collect()
+            .collect();
+        if self.settings.mr_by_updated {
+            shown.sort_by_key(|m| std::cmp::Reverse(m.updated));
+        } else {
+            shown.sort_by_key(|m| std::cmp::Reverse(m.created));
+        }
+        shown
+    }
+
+    /// Newest first, or most recently updated first.
+    fn set_mr_order(&mut self, by_updated: bool, cx: &mut Context<Self>) {
+        self.settings.mr_by_updated = by_updated;
+        self.settings.save();
+        cx.notify();
     }
 
     /// The island's label: which of the two lists the rail's button chose.
@@ -1174,7 +1239,11 @@ impl Workspace {
                                 format!(" → {}", m.target)
                             },
                             plural(m.comments, "comment"),
-                            format::ago(m.updated),
+                            if self.settings.mr_by_updated {
+                                format!("updated {}", format::ago(m.updated))
+                            } else {
+                                format!("opened {}", format::ago(m.created))
+                            },
                         )),
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -1188,6 +1257,33 @@ impl Workspace {
             .flex()
             .flex_col()
             .child(field)
+            .child({
+                let by_updated = self.settings.mr_by_updated;
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px(px(14.))
+                    .pb(px(4.))
+                    .text_size(px(11.))
+                    .text_color(theme::faint())
+                    .child("Sort")
+                    .child(
+                        super::diff_view::group()
+                            .child(
+                                super::diff_view::chip("mr-by-created", "Newest", !by_updated)
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.set_mr_order(false, cx)
+                                    })),
+                            )
+                            .child(
+                                super::diff_view::chip("mr-by-updated", "Updated", by_updated)
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.set_mr_order(true, cx)
+                                    })),
+                            ),
+                    )
+            })
             .child(
                 div()
                     .id("requests")
@@ -1309,7 +1405,30 @@ impl Workspace {
                                 .child(m.title.clone()),
                         ),
                 )
-                .children(pill),
+                .children(pill)
+                .child(
+                    div()
+                        .id("leave-request")
+                        .flex_none()
+                        .size(px(22.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.))
+                        .text_color(theme::faint())
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                        .child("✕")
+                        .tooltip(|_, cx| {
+                            cx.new(|_| {
+                                super::Tip("Leave the merge request — back to your branch  ⌥⌘L")
+                            })
+                            .into()
+                        })
+                        .on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.leave_request(cx)),
+                        ),
+                ),
         )
     }
 

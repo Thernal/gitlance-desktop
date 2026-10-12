@@ -149,6 +149,18 @@ pub struct NamedRef {
     pub name: String,
     pub tip: Oid,
     pub tag: bool,
+    /// A local branch behind its upstream.
+    pub stale: Option<Stale>,
+}
+
+/// A local branch its upstream has moved past: comparing against it shows everyone else's work too.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stale {
+    /// `origin/develop`.
+    pub upstream: String,
+    pub tip: Oid,
+    /// Commits the upstream has that the local branch does not.
+    pub behind: usize,
 }
 
 /// Uncommitted work against `HEAD`.
@@ -454,6 +466,9 @@ impl Repo {
             .branches()?
             .into_iter()
             .map(|b| NamedRef {
+                stale: (b.kind == RefKind::Local)
+                    .then(|| self.stale(&b.name))
+                    .flatten(),
                 name: b.name,
                 tip: b.tip,
                 tag: false,
@@ -470,10 +485,24 @@ impl Repo {
                     name: name.to_owned(),
                     tip,
                     tag: true,
+                    stale: None,
                 });
             }
         }
         Ok(out)
+    }
+
+    /// Whether local branch `name` is behind its upstream, and by how much.
+    pub fn stale(&self, name: &str) -> Option<Stale> {
+        let local = self.inner.find_branch(name, BranchType::Local).ok()?;
+        let upstream = local.upstream().ok()?;
+        let (tip, up) = (local.get().target()?, upstream.get().target()?);
+        let (_, behind) = self.inner.graph_ahead_behind(tip, up).ok()?;
+        (behind > 0).then(|| Stale {
+            upstream: lossy(upstream.get().shorthand_bytes()),
+            tip: up,
+            behind,
+        })
     }
 
     /// A branch, tag, `HEAD~3` or (part of) a commit id as a commit.

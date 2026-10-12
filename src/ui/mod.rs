@@ -85,6 +85,7 @@ actions!(
         ToggleFullContext,
         ToggleWhitespace,
         ToggleRichComments,
+        LeaveRequest,
         CommentLine,
         SubmitReview,
         CreateRequest,
@@ -250,6 +251,7 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("alt-e", ToggleFullContext, Some("Workspace")),
                 KeyBinding::new("alt-w", ToggleWhitespace, Some("Workspace")),
                 KeyBinding::new("alt-m", ToggleRichComments, Some("Workspace && !Typing")),
+                KeyBinding::new("cmd-alt-l", LeaveRequest, Some("Workspace")),
             ]);
             if !cfg!(feature = "snapshot") || std::env::var_os("GITLANCE_SNAPSHOT").is_none() {
                 crate::dock::set_icon();
@@ -653,6 +655,8 @@ enum Header {
         commits: usize,
         /// The merge request this is the diff of, so comments can go to it.
         request: Option<u64>,
+        /// The base is a local branch behind its upstream.
+        stale: Option<crate::git::Stale>,
     },
     /// One commit of an older version against its counterpart in a newer one.
     Interdiff {
@@ -813,6 +817,8 @@ pub struct Workspace {
     /// Review comments of this repository, the one being written, and the Review island.
     comments: Vec<crate::review::Comment>,
     compose: Option<comments::Compose>,
+    /// The merge request the last comment went to: the next composer on its diff starts there.
+    last_request_target: Option<u64>,
     /// A comment to scroll to once its file is laid out.
     jump: Option<u64>,
     /// "Copied ✓" on the Copy button until something changes.
@@ -948,6 +954,7 @@ impl Workspace {
             watch: watch::Watch::default(),
             comments: Vec::new(),
             compose: None,
+            last_request_target: None,
             jump: None,
             copied: false,
             field_all: false,
@@ -2518,7 +2525,14 @@ impl Workspace {
                             .children(self.render_working_chip(cx))
                             .child(
                                 commit_chip("commit-search", self.find.text.is_some())
-                                    .child("⌕")
+                                    .px(px(5.))
+                                    .child(icons::icon("search").size(px(15.)).text_color(
+                                        if self.find.text.is_some() {
+                                            theme::text()
+                                        } else {
+                                            theme::muted()
+                                        },
+                                    ))
                                     .tooltip(|_, cx| cx.new(|_| Tip("Search commits  ⌘⇧F")).into())
                                     .on_click(cx.listener(|this, _, _, cx| this.start_find(cx))),
                             );
@@ -2847,11 +2861,6 @@ impl Workspace {
     fn render_commit_row(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let commit = &self.commits[ix];
         let selected = self.selection == Selection::Commit(ix);
-        // The author is told only when more than one person made the commits in view.
-        let several = self
-            .commits
-            .iter()
-            .any(|c| c.author != self.commits[0].author);
         let item = row(("commit", ix), selected)
             .h(px(62.))
             .flex_col()
@@ -2887,14 +2896,14 @@ impl Workspace {
                                 .unwrap_or_default(),
                         ),
                     )
-                    .children((several && !self.decor.contains_key(&commit.id)).then(|| {
+                    // Always shown: a branch of one's own still has commits by others under it.
+                    .child(
                         div()
                             .flex_1()
-                            .min_w_0()
+                            .min_w(px(40.))
                             .truncate()
-                            .child(commit.author.clone())
-                    }))
-                    .child(div().flex_1())
+                            .child(commit.author.clone()),
+                    )
                     .child(
                         div()
                             .flex_none()
@@ -3202,10 +3211,63 @@ impl Workspace {
                 start,
                 commits,
                 request,
+                stale,
             } => {
                 let (b, h, since, req) = (base.clone(), head.clone(), *since_merge_base, *request);
                 let (b2, h2) = (b.clone(), h.clone());
                 let (b3, h3) = (b.clone(), h.clone());
+                let (h4, b5, h5) = (h.clone(), b.clone(), h.clone());
+                // Why the result looks wrong, with the one click that fixes it.
+                let warning = |text: String, button: gpui::Stateful<gpui::Div>| {
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_3()
+                        .py(px(6.))
+                        .rounded(px(ROW_RADIUS))
+                        .bg(theme::warning_bg())
+                        .text_size(px(12.))
+                        .text_color(theme::warning())
+                        .child(div().flex_1().min_w_0().child(text))
+                        .child(
+                            button
+                                .flex_none()
+                                .bg(theme::hover())
+                                .text_color(theme::text()),
+                        )
+                };
+                let stale_note = stale.clone().map(|st| {
+                    let upstream = (st.upstream.clone(), st.tip);
+                    let h = h4.clone();
+                    warning(
+                        format!(
+                            "{} is {} behind {}: their changes show up here too",
+                            base.0,
+                            plural(st.behind, "commit"),
+                            st.upstream
+                        ),
+                        chip("cmp-upstream", format!("Use {}", st.upstream), false).on_click(
+                            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.run_compare(upstream.clone(), h.clone(), since, req, cx)
+                            }),
+                        ),
+                    )
+                });
+                let empty_note = (since && *commits == 0).then(|| {
+                    warning(
+                        format!(
+                            "{} has nothing {} lacks: are the sides swapped?",
+                            head.0, base.0
+                        ),
+                        chip("cmp-swap-hint", "⇄ Swap", false).on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| {
+                                this.run_compare(h5.clone(), b5.clone(), since, None, cx)
+                            },
+                        )),
+                    )
+                });
                 header
                     .child(
                         div()
@@ -3252,6 +3314,8 @@ impl Workspace {
                             ))
                             .child(stats),
                     )
+                    .children(stale_note)
+                    .children(empty_note)
             }
             Header::Interdiff { from, to, old, new } => {
                 let (from, to) = (*from, *to);
@@ -3931,6 +3995,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_full_context))
             .on_action(cx.listener(Self::toggle_whitespace))
             .on_action(cx.listener(Self::toggle_rich_comments_action))
+            .on_action(cx.listener(|this, _: &LeaveRequest, _, cx| this.leave_request(cx)))
             .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
                 if let Some(path) = paths.paths().first() {
                     this.open_repo(path.clone(), None, cx);
