@@ -11,6 +11,8 @@ use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 
 /// Files with a line longer than this are shown unhighlighted: syntect is slow on minified code.
 const MAX_LINE_BYTES: usize = 4096;
+/// Files larger than this are shown unhighlighted: syntect takes seconds on them.
+const MAX_FILE_BYTES: usize = 1 << 20;
 
 /// One Dark (Atom), as 0xRRGGBB.
 pub mod palette {
@@ -37,7 +39,7 @@ pub struct Span {
 /// The spans of every line of `text`; a line without spans is plain foreground.
 pub fn highlight(path: &str, text: &str) -> Vec<Vec<Span>> {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    if lines.iter().any(|l| l.len() > MAX_LINE_BYTES) {
+    if text.len() > MAX_FILE_BYTES || lines.iter().any(|l| l.len() > MAX_LINE_BYTES) {
         return vec![Vec::new(); lines.len()];
     }
     let syntaxes = syntaxes();

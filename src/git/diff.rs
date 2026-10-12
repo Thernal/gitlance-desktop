@@ -4,8 +4,9 @@ use git2::{
 };
 use std::sync::Arc;
 
-/// Files larger than this are listed but not diffed line by line.
-const MAX_TEXT_BYTES: usize = 1 << 20;
+/// Files larger than this are listed but not diffed line by line. Above 1 MiB a file is shown
+/// without highlighting (`crate::highlight`), so this only bounds memory.
+const MAX_TEXT_BYTES: usize = 16 << 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChangeKind {
@@ -191,7 +192,7 @@ impl Content {
     fn reason(&self) -> &'static str {
         match self {
             Content::Binary => "Binary file",
-            Content::TooLarge => "File too large to show",
+            Content::TooLarge => "File too large to show (over 16 MB)",
             Content::Submodule => "Submodule",
             Content::Absent | Content::Text(_) => "",
         }
