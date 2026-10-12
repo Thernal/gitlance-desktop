@@ -218,6 +218,140 @@ impl Workspace {
         cx.notify();
     }
 
+    /// ⌥↓ ⌥↑: the next or previous merge request in the order the list shows them.
+    pub(super) fn step_request(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let order: Vec<u64> = self.shown_requests().iter().map(|m| m.iid).collect();
+        if order.is_empty() {
+            return;
+        }
+        let n = order.len();
+        let next = match order
+            .iter()
+            .position(|&iid| Some(iid) == self.requests.current)
+        {
+            Some(at) if forward => order[(at + 1) % n],
+            Some(at) => order[(at + n - 1) % n],
+            None if forward => order[0],
+            None => order[n - 1],
+        };
+        self.done_card = false;
+        self.select_request(next, cx);
+    }
+
+    /// The next request after the open one, in list order, whose head is not reviewed yet.
+    fn next_unreviewed_request(&self) -> Option<&Mr> {
+        let shown = self.shown_requests();
+        let at = shown
+            .iter()
+            .position(|m| Some(m.iid) == self.requests.current)?;
+        (1..shown.len())
+            .map(|step| shown[(at + step) % shown.len()])
+            .find(|m| git2::Oid::from_str(&m.head).map_or(true, |head| !self.head_reviewed(head)))
+    }
+
+    /// The card that comes up when the last file is marked: what to do next, from the keyboard.
+    pub(super) fn render_done_card(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        if !self.done_card {
+            return None;
+        }
+        let total = self.diff.as_ref()?.files.len();
+        let current = self.requests.current;
+        let next = current
+            .and(self.next_unreviewed_request())
+            .map(|m| (m.iid, m.title.clone()));
+        let button = |id: &'static str, label: String, key: &'static str, primary: bool| {
+            div()
+                .id(id)
+                .h(px(28.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .rounded(px(super::ROW_RADIUS))
+                .cursor_pointer()
+                .when(primary, |s| s.bg(theme::added()).text_color(theme::base()))
+                .when(!primary, |s| s.bg(theme::hover()).text_color(theme::text()))
+                .hover(|s| s.opacity(0.85))
+                .child(div().min_w_0().truncate().child(label))
+                .child(div().flex_none().opacity(0.7).child(key))
+        };
+        Some(
+            div()
+                .absolute()
+                .bottom(px(16.))
+                .right(px(16.))
+                .max_w(px(460.))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_3()
+                .rounded(px(super::ISLAND_RADIUS))
+                .border_2()
+                .border_color(theme::added())
+                .bg(theme::panel())
+                .shadow_lg()
+                .font_family(theme::UI_FONT)
+                .text_size(px(12.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme::added())
+                                .child(match current {
+                                    Some(iid) => format!(
+                                        "All {} of !{iid} reviewed ✓",
+                                        plural(total, "file")
+                                    ),
+                                    None => format!("All {} reviewed ✓", plural(total, "file")),
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id("done-card-close")
+                                .px_1()
+                                .rounded(px(4.))
+                                .text_color(theme::faint())
+                                .cursor_pointer()
+                                .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                                .child("esc")
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.done_card = false;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .children(next.clone().map(|(iid, title)| {
+                    button("done-next", format!("Next: !{iid} {title}"), "⌥↓", true).on_click(
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.done_card = false;
+                            this.select_request(iid, cx);
+                        }),
+                    )
+                }))
+                .children(current.map(|_| {
+                    button("done-leave", "Back to your branch".to_owned(), "⌥⌘L", false).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.done_card = false;
+                            this.leave_request(cx);
+                        }),
+                    )
+                }))
+                .children((current.is_some() && next.is_none()).then(|| {
+                    div()
+                        .text_color(theme::muted())
+                        .child("Every other merge request in the list is reviewed too.")
+                })),
+        )
+    }
+
     /// Reads the pushes GitLab kept for request `iid`; they become the versions timeline once the
     /// request's diff is open.
     fn load_request_versions(&mut self, iid: u64, cx: &mut Context<Self>) {
@@ -1204,6 +1338,7 @@ impl Workspace {
         let items = shown.into_iter().map(|m| {
             let iid = m.iid;
             let current = self.requests.current == Some(iid);
+            let reviewed = git2::Oid::from_str(&m.head).is_ok_and(|h| self.head_reviewed(h));
             row(("mr", iid), current)
                 .h(px(50.))
                 .flex_col()
@@ -1220,7 +1355,14 @@ impl Workspace {
                                 .text_color(theme::accent())
                                 .child(format!("!{iid}")),
                         )
-                        .child(div().flex_1().min_w_0().truncate().child(m.title.clone())),
+                        .child(div().flex_1().min_w_0().truncate().child(m.title.clone()))
+                        .children(reviewed.then(|| {
+                            div()
+                                .flex_none()
+                                .text_size(px(11.))
+                                .text_color(theme::added())
+                                .child("✓ reviewed")
+                        })),
                 )
                 .child(
                     div()

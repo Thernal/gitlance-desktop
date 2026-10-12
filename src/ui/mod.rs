@@ -86,6 +86,9 @@ actions!(
         ToggleWhitespace,
         ToggleRichComments,
         LeaveRequest,
+        ToggleAllReviewed,
+        NextRequest,
+        PreviousRequest,
         CommentLine,
         SubmitReview,
         CreateRequest,
@@ -252,6 +255,13 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("alt-w", ToggleWhitespace, Some("Workspace")),
                 KeyBinding::new("alt-m", ToggleRichComments, Some("Workspace && !Typing")),
                 KeyBinding::new("cmd-alt-l", LeaveRequest, Some("Workspace")),
+                KeyBinding::new(
+                    "alt-shift-v",
+                    ToggleAllReviewed,
+                    Some("Workspace && !Typing"),
+                ),
+                KeyBinding::new("alt-down", NextRequest, Some("Workspace && !Typing")),
+                KeyBinding::new("alt-up", PreviousRequest, Some("Workspace && !Typing")),
             ]);
             if !cfg!(feature = "snapshot") || std::env::var_os("GITLANCE_SNAPSHOT").is_none() {
                 crate::dock::set_icon();
@@ -775,6 +785,8 @@ pub struct Workspace {
     ffind: Option<findfiles::FindFiles>,
     /// The marks of files read, and the scope and file fingerprints of the open diff.
     reviewed: reviewed::Store,
+    /// The card that comes up when the last file of a diff is marked reviewed.
+    done_card: bool,
     review_scope: Option<String>,
     fps: Vec<u64>,
     /// Generated files the reader asked to see in full.
@@ -927,6 +939,7 @@ impl Workspace {
             annot_task: None,
             ffind: None,
             reviewed: reviewed::Store::load(),
+            done_card: false,
             review_scope: None,
             fps: Vec::new(),
             unfolded: HashSet::new(),
@@ -3605,6 +3618,11 @@ impl Workspace {
             }))
             .children(self.render_dfind(cx))
             .children(self.render_goline())
+            // Painted last, over the rows that come after it.
+            .children(
+                self.render_done_card(cx)
+                    .map(|card| gpui::deferred(card).with_priority(1)),
+            )
             .children(self.notice.as_ref().map(|notice| {
                 div()
                     .flex_none()
@@ -3996,6 +4014,11 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_whitespace))
             .on_action(cx.listener(Self::toggle_rich_comments_action))
             .on_action(cx.listener(|this, _: &LeaveRequest, _, cx| this.leave_request(cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleAllReviewed, _, cx| this.toggle_all_reviewed(cx)),
+            )
+            .on_action(cx.listener(|this, _: &NextRequest, _, cx| this.step_request(true, cx)))
+            .on_action(cx.listener(|this, _: &PreviousRequest, _, cx| this.step_request(false, cx)))
             .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
                 if let Some(path) = paths.paths().first() {
                     this.open_repo(path.clone(), None, cx);

@@ -218,7 +218,10 @@ impl Workspace {
         }
         let key = &event.keystroke;
         if key.key == "escape" {
-            if self.shortcuts {
+            if self.done_card {
+                self.done_card = false;
+                cx.notify();
+            } else if self.shortcuts {
                 self.shortcuts = false;
                 cx.notify();
             } else if self.picker_open {

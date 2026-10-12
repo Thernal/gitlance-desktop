@@ -240,6 +240,13 @@ impl Workspace {
                                     })
                                     .child(name.to_owned()),
                             )
+                            .children(self.head_reviewed(b.tip).then(|| {
+                                div()
+                                    .flex_none()
+                                    .text_size(px(11.))
+                                    .text_color(theme::added())
+                                    .child("✓")
+                            }))
                             .children(self.request_of_branch(ix).map(|m| {
                                 div()
                                     .flex_none()
@@ -567,7 +574,12 @@ impl Workspace {
             .w(px(self.files_width()))
             .flex_none()
             .border_2()
-            .border_color(self.zone_border(super::zones::Zone::Files))
+            // Every file reviewed: the island says so in green.
+            .border_color(if self.all_reviewed() {
+                theme::added()
+            } else {
+                self.zone_border(super::zones::Zone::Files)
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.set_zone(super::zones::Zone::Files, cx)),
@@ -596,7 +608,7 @@ impl Workspace {
                             ))),
                     ),
             )
-            .children(self.render_review_progress())
+            .children(self.render_review_progress(cx))
             .child(self.render_field(
                 "file-filter",
                 (self.field == Some(Field::Files)).then_some(self.pfilter.as_str()),
@@ -696,6 +708,7 @@ impl Workspace {
                         .gap_2()
                         .pl(px(8. + *depth as f32 * 14.))
                         .text_color(theme::muted())
+                        .children(self.folder_box(path, cx))
                         .child(
                             super::icons::icon(if *collapsed {
                                 "chevron-right"

@@ -19,6 +19,8 @@ pub struct Mr {
     /// Seconds since the epoch.
     pub updated: i64,
     pub created: i64,
+    /// The source branch's head as GitLab knows it.
+    pub head: String,
     pub comments: usize,
     pub draft: bool,
 }
@@ -490,6 +492,7 @@ pub fn create(
             url: String::new(),
             updated: 0,
             created: 0,
+            head: String::new(),
             comments: 0,
             draft,
         });
@@ -644,6 +647,7 @@ pub fn parse_mrs(value: &Value) -> Vec<Mr> {
                 url: text(m, "web_url"),
                 updated: epoch(&text(m, "updated_at")),
                 created: epoch(&text(m, "created_at")),
+                head: text(m, "sha"),
                 comments: m
                     .get("user_notes_count")
                     .and_then(Value::as_u64)

@@ -16,6 +16,10 @@ pub(crate) fn save(name: &str, body: String) {
     if cfg!(feature = "snapshot") && std::env::var_os("GITLANCE_SNAPSHOT").is_some() {
         return;
     }
+    // Nor may a test.
+    if cfg!(test) {
+        return;
+    }
     if let Some(file) = file(name)
         && let Some(dir) = file.parent()
         && std::fs::create_dir_all(dir).is_ok()

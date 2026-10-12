@@ -8,7 +8,7 @@ use super::{Header, ROW_RADIUS, Workspace, plural, theme};
 use crate::git::FileDiff;
 use crate::storage;
 use gpui::{ClickEvent, Context, FontWeight, IntoElement, MouseButton, div, prelude::*};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// How a file stands in the review.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -23,11 +23,67 @@ pub enum State {
 #[derive(Default)]
 pub struct Store {
     marks: HashMap<String, HashMap<String, u64>>,
+    /// `root|commit` of every head whose whole diff was reviewed: a branch or merge request whose tip
+    /// is one of them shows ✓, and a new push (a new tip) takes it away.
+    heads: HashSet<String>,
 }
 
 impl Store {
     pub fn load() -> Self {
-        Self::parse(&storage::read("reviewed.txt"))
+        let mut store = Self::parse(&storage::read("reviewed.txt"));
+        store.heads = storage::read("reviewed-heads.txt")
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        store
+    }
+
+    fn save_heads(&self) {
+        let mut lines: Vec<&str> = self.heads.iter().map(String::as_str).collect();
+        lines.sort_unstable();
+        storage::save("reviewed-heads.txt", lines.join("\n") + "\n");
+    }
+
+    fn head_key(root: &str, head: git2::Oid) -> String {
+        format!("{root}|{head}")
+    }
+
+    pub fn head_done(&self, root: &str, head: git2::Oid) -> bool {
+        self.heads.contains(&Self::head_key(root, head))
+    }
+
+    fn set_head(&mut self, root: &str, head: git2::Oid, done: bool) {
+        let key = Self::head_key(root, head);
+        let changed = if done {
+            self.heads.insert(key)
+        } else {
+            self.heads.remove(&key)
+        };
+        if changed {
+            while self.heads.len() > 500 {
+                if let Some(k) = self.heads.iter().next().cloned() {
+                    self.heads.remove(&k);
+                }
+            }
+            self.save_heads();
+        }
+    }
+
+    /// Marks or unmarks many files of one scope with a single write.
+    fn set_many(&mut self, scope: &str, files: &[(String, u64)], done: bool) {
+        let entry = self.marks.entry(scope.to_owned()).or_default();
+        for (path, fp) in files {
+            if done {
+                entry.insert(path.clone(), *fp);
+            } else {
+                entry.remove(path);
+            }
+        }
+        if entry.is_empty() {
+            self.marks.remove(scope);
+        }
+        self.prune();
+        self.save();
     }
 
     fn parse(text: &str) -> Self {
@@ -45,7 +101,10 @@ impl Store {
                     .insert(path.to_owned(), fp);
             }
         }
-        Self { marks }
+        Self {
+            marks,
+            heads: HashSet::new(),
+        }
     }
 
     fn render(&self) -> String {
@@ -152,6 +211,7 @@ impl Workspace {
             (Some(_), Some(d)) => d.files.iter().map(fingerprint).collect(),
             _ => Vec::new(),
         };
+        self.done_card = false;
     }
 
     pub(super) fn review_state(&self, ix: usize) -> Option<State> {
@@ -191,7 +251,142 @@ impl Workspace {
         } else {
             self.reviewed.clear(&scope, &path);
         }
+        self.sync_complete();
         cx.notify();
+    }
+
+    /// Marks or unmarks files `ixs` at once (all of them, a folder).
+    pub(super) fn set_reviewed_many(&mut self, ixs: &[usize], done: bool, cx: &mut Context<Self>) {
+        let (Some(scope), Some(diff)) = (self.review_scope.clone(), self.diff.as_ref()) else {
+            return;
+        };
+        let files: Vec<(String, u64)> = ixs
+            .iter()
+            .filter_map(|&ix| Some((diff.files.get(ix)?.path().to_owned(), *self.fps.get(ix)?)))
+            .collect();
+        self.reviewed.set_many(&scope, &files, done);
+        self.sync_complete();
+        cx.notify();
+    }
+
+    /// Every file of the open diff is reviewed.
+    pub(super) fn all_reviewed(&self) -> bool {
+        self.review_progress()
+            .is_some_and(|(done, total)| total > 0 && done == total)
+    }
+
+    /// Records whether the head of the open diff is fully reviewed; the card offering what is next
+    /// comes up the moment it becomes so.
+    fn sync_complete(&mut self) {
+        let (Some(root), Some(head)) = (self.root.clone(), self.viewed_rev()) else {
+            return;
+        };
+        let root = root.display().to_string();
+        let done = self.all_reviewed();
+        // Only a whole branch or request (a compare, versions) makes its head count as reviewed;
+        // one commit read is not its branch read.
+        let whole = matches!(
+            self.diff.as_ref().map(|d| &d.header),
+            Some(Header::Compare { .. } | Header::Versions { .. })
+        );
+        if done && !(whole && self.reviewed.head_done(&root, head)) {
+            self.done_card = true;
+        }
+        if !done {
+            self.done_card = false;
+        }
+        if whole {
+            self.reviewed.set_head(&root, head, done);
+        }
+    }
+
+    /// Whether the whole diff of a branch or request ending at `head` was reviewed.
+    pub(super) fn head_reviewed(&self, head: git2::Oid) -> bool {
+        self.root
+            .as_ref()
+            .is_some_and(|r| self.reviewed.head_done(&r.display().to_string(), head))
+    }
+
+    /// The files under folder `path` of the tree.
+    pub(super) fn files_under(&self, path: &str) -> Vec<usize> {
+        let prefix = format!("{path}/");
+        self.diff
+            .as_ref()
+            .map(|d| {
+                d.files
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| f.path().starts_with(&prefix))
+                    .map(|(ix, _)| ix)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// ⌥⇧V and the buttons: every file the list shows marked, or (when all are) unmarked.
+    pub(super) fn toggle_all_reviewed(&mut self, cx: &mut Context<Self>) {
+        let shown = self.file_order();
+        let done = shown
+            .iter()
+            .all(|&ix| self.review_state(ix) == Some(State::Done));
+        self.set_reviewed_many(&shown, !done, cx);
+    }
+
+    /// The box of a folder: empty, part-marked or all marked; a click marks or unmarks the folder.
+    pub(super) fn folder_box(
+        &self,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        self.review_scope.as_ref()?;
+        let ixs = self.files_under(path);
+        let done = ixs
+            .iter()
+            .filter(|&&ix| self.review_state(ix) == Some(State::Done))
+            .count();
+        let all = done == ixs.len() && done > 0;
+        let (border, fill, glyph) = if all {
+            (theme::added(), Some(theme::added()), "✓")
+        } else if done > 0 {
+            (theme::added(), None, "–")
+        } else {
+            (theme::faint(), None, "")
+        };
+        let target = path.to_owned();
+        Some(
+            div()
+                .id(gpui::ElementId::Name(format!("folder-box-{path}").into()))
+                .flex_none()
+                .size(px(16.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(3.))
+                .border_2()
+                .border_color(border)
+                .when_some(fill, |s, c| s.bg(c))
+                .text_size(px(10.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(if all { theme::base() } else { theme::added() })
+                .cursor_pointer()
+                .hover(|s| s.border_color(theme::text()))
+                .tooltip(move |_, cx| {
+                    cx.new(|_| {
+                        super::Tip(if all {
+                            "Folder reviewed — click to unmark it"
+                        } else {
+                            "Mark the whole folder reviewed"
+                        })
+                    })
+                    .into()
+                })
+                .child(glyph)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    let ixs = this.files_under(&target);
+                    this.set_reviewed_many(&ixs, !all, cx);
+                })),
+        )
     }
 
     /// `⇧V`: marks or unmarks the open file.
@@ -274,9 +469,43 @@ impl Workspace {
         )
     }
 
-    /// "7 of 17 reviewed" with a bar, under the files label; nothing until one is marked.
-    pub(super) fn render_review_progress(&self) -> Option<impl IntoElement + use<>> {
-        let (done, total) = self.review_progress().filter(|(d, _)| *d > 0)?;
+    /// "7 of 17 reviewed" with a bar under the files label, and Mark all / Unmark all.
+    pub(super) fn render_review_progress(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let (done, total) = self.review_progress()?;
+        let filtered = !self.pfilter.trim().is_empty();
+        let shown = self.file_order();
+        let shown_done = shown
+            .iter()
+            .all(|&ix| self.review_state(ix) == Some(State::Done));
+        let action = |id: &'static str, label: String| {
+            div()
+                .id(id)
+                .flex_none()
+                .px(px(6.))
+                .rounded(px(4.))
+                .text_size(px(11.))
+                .text_color(theme::muted())
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                .child(label)
+        };
+        let toggle = action(
+            "review-all",
+            match (shown_done, filtered) {
+                (true, false) => "Unmark all".to_owned(),
+                (true, true) => format!("Unmark {} shown", shown.len()),
+                (false, false) => "Mark all".to_owned(),
+                (false, true) => format!("Mark {} shown", shown.len()),
+            },
+        )
+        .tooltip(|_, cx| {
+            cx.new(|_| super::Tip("Mark or unmark every file in the list  ⌥⇧V"))
+                .into()
+        })
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_all_reviewed(cx)));
         Some(
             div()
                 .flex_none()
@@ -285,13 +514,30 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap(px(4.))
-                .child(div().text_size(px(11.)).text_color(theme::muted()).child(
-                    if done == total {
-                        format!("All {} reviewed ✓", plural(total, "file"))
-                    } else {
-                        format!("{done} of {total} reviewed")
-                    },
-                ))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(if done == total {
+                                    theme::added()
+                                } else {
+                                    theme::muted()
+                                })
+                                .child(if done == total {
+                                    format!("All {} reviewed ✓", plural(total, "file"))
+                                } else {
+                                    format!("{done}/{total} reviewed")
+                                }),
+                        )
+                        .child(toggle),
+                )
                 .child(
                     div()
                         .h(px(4.))
@@ -365,6 +611,37 @@ mod tests {
         let again = Store::parse(&store.render());
         assert_eq!(again.get("/r|mr:412", "src/a.rs"), Some(0xdead_beef));
         assert_eq!(again.get("/r|mr:413", "src/a.rs"), None);
+    }
+
+    #[test]
+    fn a_folder_is_marked_and_unmarked_at_once() {
+        let mut store = Store::default();
+        let files = [("ui/a.rs".to_owned(), 1), ("ui/b.rs".to_owned(), 2)];
+        store.set_many("s", &files, true);
+        assert_eq!(
+            (store.get("s", "ui/a.rs"), store.get("s", "ui/b.rs")),
+            (Some(1), Some(2))
+        );
+        store.set_many("s", &files[..1], false);
+        assert_eq!(
+            (store.get("s", "ui/a.rs"), store.get("s", "ui/b.rs")),
+            (None, Some(2))
+        );
+    }
+
+    #[test]
+    fn a_reviewed_head_stops_counting_when_the_branch_moves() {
+        let mut store = Store::default();
+        let (old, new) = (
+            git2::Oid::from_bytes(&[1; 20]).unwrap(),
+            git2::Oid::from_bytes(&[2; 20]).unwrap(),
+        );
+        store.set_head("/r", old, true);
+        assert!(store.head_done("/r", old));
+        assert!(!store.head_done("/r", new));
+        assert!(!store.head_done("/other", old));
+        store.set_head("/r", old, false);
+        assert!(!store.head_done("/r", old));
     }
 
     #[test]
