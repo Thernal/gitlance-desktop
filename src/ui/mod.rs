@@ -2387,9 +2387,13 @@ impl Workspace {
             )
             .child(
                 // The empty part of the bar: a double click zooms the window, as in other apps.
+                // It gives way first when the window is narrow: the request's title shortens, the
+                // buttons on the right stay.
                 div()
                     .id("title-bar")
                     .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
                     .h_full()
                     .flex()
                     .items_center()
@@ -2402,6 +2406,8 @@ impl Workspace {
                     .children(branch.map(|b| {
                         div()
                             .id("branch-picker")
+                            .flex_none()
+                            .max_w(px(260.))
                             .flex()
                             .items_center()
                             .gap_1()
@@ -2413,7 +2419,7 @@ impl Workspace {
                             .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
                             .tooltip(|_, cx| cx.new(|_| Tip("Branches  ⌃1")).into())
                             .child(icons::icon("branch").text_color(theme::muted()))
-                            .child(b)
+                            .child(div().min_w_0().truncate().child(b))
                             .child(icons::icon("chevron").text_color(theme::muted()))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if this.picker_open
@@ -2427,12 +2433,20 @@ impl Workspace {
                     }))
                     .children(self.render_request_title(cx)),
             )
-            .children(self.render_fetch(cx))
-            .children(self.render_status(cx))
-            .children(self.render_bell(cx))
+            // The right end never gives way.
             .child(
-                icon_button("settings-open", "settings", "Settings  ⌘,")
-                    .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .children(self.render_fetch(cx))
+                    .children(self.render_status(cx))
+                    .children(self.render_bell(cx))
+                    .child(
+                        icon_button("settings-open", "settings", "Settings  ⌘,")
+                            .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
+                    ),
             )
     }
 

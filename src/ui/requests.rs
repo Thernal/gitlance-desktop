@@ -1720,6 +1720,7 @@ impl Workspace {
         });
         Some(
             div()
+                .flex_1()
                 .flex()
                 .items_center()
                 .gap_3()
