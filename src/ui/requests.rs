@@ -84,6 +84,7 @@ impl Workspace {
                     this.sync_request(ix, cx);
                 }
                 this.follow_pending_link(cx);
+                this.load_notices(cx);
                 cx.notify();
             })
             .ok();

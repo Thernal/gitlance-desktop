@@ -19,6 +19,7 @@ mod keys;
 mod lists;
 mod markdown;
 mod menu;
+mod notifications;
 mod opening;
 mod palette;
 mod recents;
@@ -100,6 +101,7 @@ actions!(
         CommentLine,
         SubmitReview,
         ApproveRequest,
+        ToggleNotifications,
         SwitchTo,
         NextDraft,
         PreviousDraft,
@@ -189,6 +191,7 @@ fn default_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-alt-m", CreateRequest, Some("Workspace && !Typing")),
         KeyBinding::new("a", ApproveRequest, Some("Workspace && !Typing")),
         KeyBinding::new("cmd-b", SwitchTo, Some("Workspace && !Typing")),
+        KeyBinding::new("cmd-shift-n", ToggleNotifications, Some("Workspace")),
         KeyBinding::new("alt-n", NextDraft, Some("Workspace && !Typing")),
         KeyBinding::new("alt-p", PreviousDraft, Some("Workspace && !Typing")),
         KeyBinding::new("?", ShowShortcuts, Some("Workspace && !Typing")),
@@ -845,6 +848,8 @@ pub struct Workspace {
     shell: Option<gpui::WeakEntity<shell::Shell>>,
     /// The window this workspace is in: a repository can open in a new tab of it from anywhere.
     window: gpui::AnyWindowHandle,
+    /// The bell and its list (`notifications.rs`).
+    notices: notifications::Notices,
     /// The "this tab or a new tab?" card (`opening.rs`).
     open_ask: Option<opening::OpenAsk>,
     requests: requests::Requests,
@@ -1025,6 +1030,7 @@ impl Workspace {
             spot: None,
             window: window.window_handle(),
             open_ask: None,
+            notices: Default::default(),
             title: String::new(),
             branches: Vec::new(),
             branch: None,
@@ -2151,6 +2157,9 @@ impl Workspace {
     }
 
     fn palette_up(&mut self, _: &PaletteUp, _: &mut Window, cx: &mut Context<Self>) {
+        if self.notices.open {
+            return self.notices_step(false, cx);
+        }
         if self.ffind.is_some() {
             return self.ffind_step(false, cx);
         }
@@ -2158,6 +2167,9 @@ impl Workspace {
     }
 
     fn palette_down(&mut self, _: &PaletteDown, _: &mut Window, cx: &mut Context<Self>) {
+        if self.notices.open {
+            return self.notices_step(true, cx);
+        }
         if self.ffind.is_some() {
             return self.ffind_step(true, cx);
         }
@@ -2417,6 +2429,7 @@ impl Workspace {
             )
             .children(self.render_fetch(cx))
             .children(self.render_status(cx))
+            .children(self.render_bell(cx))
             .child(
                 icon_button("settings-open", "settings", "Settings  ⌘,")
                     .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
@@ -4021,8 +4034,9 @@ impl Render for Workspace {
                     || self.newreq.is_some()
                     || self.submit.is_some()
                     || self.open_ask.is_some()
+                    || self.notices.open
                 {
-                    if self.palette.is_some() || self.ffind.is_some() {
+                    if self.palette.is_some() || self.ffind.is_some() || self.notices.open {
                         "Workspace Typing Palette"
                     } else if self.compose.is_some()
                         || self.goline.is_some()
@@ -4069,6 +4083,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CommentLine, _, cx| this.open_goline(cx)))
             .on_action(cx.listener(|this, _: &SubmitReview, _, cx| this.open_submit(cx)))
             .on_action(cx.listener(|this, _: &ApproveRequest, _, cx| this.toggle_approval(cx)))
+            .on_action(cx.listener(|this, _: &ToggleNotifications, _, cx| this.toggle_notices(cx)))
             .on_action(cx.listener(|this, _: &SwitchTo, _, cx| {
                 if this.root.is_some() {
                     this.open_palette(palette::Kind::Switch, cx)
@@ -4262,6 +4277,7 @@ impl Render for Workspace {
             })
             // Last, so it paints over everything.
             .children(self.repo_menu.then(|| self.render_repo_menu(cx)))
+            .children(self.render_notices(cx))
             .children(self.render_ctx_menu(window.viewport_size(), cx))
             .children(self.render_picker(cx))
             .children(self.render_find_files(cx))

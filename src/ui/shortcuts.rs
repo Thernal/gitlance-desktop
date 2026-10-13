@@ -45,6 +45,10 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ),
             ("⌥N ⌥P", "next / previous of your pending comments"),
             ("a", "approve the merge request · take the approval back"),
+            (
+                "⌘⇧N",
+                "notifications: mentions, review requests, replies (j k ↵ e)",
+            ),
             ("r  x  o", "reply to, resolve, fold a discussion"),
             ("⌘⇧R", "show or hide the comments drawer"),
             ("⌥M", "comments as markdown / raw text"),

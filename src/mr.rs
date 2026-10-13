@@ -23,6 +23,9 @@ pub struct Mr {
     pub head: String,
     pub comments: usize,
     pub draft: bool,
+    /// The author's and the reviewers' usernames: whose request it is, who was asked to look.
+    pub author_login: String,
+    pub reviewers: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +33,8 @@ pub struct Note {
     /// GitLab's id: a link's `#note_<id>` points at it.
     pub id: u64,
     pub author: String,
+    /// The author's username, to tell one's own notes.
+    pub login: String,
     pub body: String,
     pub created: i64,
 }
@@ -70,6 +75,23 @@ pub struct Draft {
     pub path: Option<String>,
     pub new_line: Option<u32>,
     pub old_line: Option<u32>,
+}
+
+/// A GitLab to-do on a merge request of this project: someone mentioned the user, asked for a
+/// review, addressed them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Todo {
+    pub id: u64,
+    /// GitLab's word: mentioned, review_requested, directly_addressed, assigned, …
+    pub action: String,
+    pub iid: u64,
+    pub title: String,
+    pub author: String,
+    /// The comment's text, when it came from one.
+    pub body: String,
+    /// The page it points at, often with `#note_<id>`.
+    pub url: String,
+    pub created: i64,
 }
 
 /// Who approved a merge request, how many approvals it needs, and where the reviewer stands.
@@ -547,6 +569,8 @@ pub fn create(
             head: String::new(),
             comments: 0,
             draft,
+            author_login: String::new(),
+            reviewers: Vec::new(),
         });
     }
     let value = request(
@@ -591,6 +615,81 @@ pub fn reply(remote: &WebRemote, iid: u64, discussion: &str, body: &str) -> Resu
         "POST",
         &[("body", body.to_owned())],
     )?;
+    Ok(())
+}
+
+/// `group/project` of a remote.
+fn project_path(remote: &WebRemote) -> Option<String> {
+    remote
+        .base
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split_once('/'))
+        .map(|(_, path)| path.to_owned())
+}
+
+/// The token's username (`GITLANCE_MR_FIXTURE`: `user.json`, else "you").
+pub fn username(remote: &WebRemote) -> Result<String> {
+    let user = match fixture() {
+        Some(dir) => match std::fs::read_to_string(dir.join("user.json")) {
+            Ok(text) => serde_json::from_str(&text)?,
+            Err(_) => return Ok("you".to_owned()),
+        },
+        None => call(remote, "/user", "GET", &[])?,
+    };
+    Ok(text(&user, "username"))
+}
+
+/// The user's pending to-dos on merge requests of this project, newest first.
+pub fn todos(remote: &WebRemote) -> Result<Vec<Todo>> {
+    let value = match fixture() {
+        Some(dir) => match std::fs::read_to_string(dir.join("todos.json")) {
+            Ok(text) => serde_json::from_str(&text)?,
+            Err(_) => Value::Array(Vec::new()),
+        },
+        None => call(
+            remote,
+            "/todos?state=pending&type=MergeRequest&per_page=100",
+            "GET",
+            &[],
+        )?,
+    };
+    Ok(parse_todos(
+        &value,
+        &project_path(remote).unwrap_or_default(),
+    ))
+}
+
+pub fn parse_todos(value: &Value, project: &str) -> Vec<Todo> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| {
+            t.get("project")
+                .is_some_and(|p| text(p, "path_with_namespace") == project)
+        })
+        .filter_map(|t| {
+            let target = t.get("target")?;
+            Some(Todo {
+                id: t.get("id")?.as_u64()?,
+                action: text(t, "action_name"),
+                iid: target.get("iid")?.as_u64()?,
+                title: text(target, "title"),
+                author: name(t),
+                body: text(t, "body"),
+                url: text(t, "target_url"),
+                created: epoch(&text(t, "created_at")),
+            })
+        })
+        .collect()
+}
+
+/// Marks to-do `id` done on GitLab.
+pub fn mark_todo_done(remote: &WebRemote, id: u64) -> Result<()> {
+    if record(format!("todo-done {id}"))? {
+        return Ok(());
+    }
+    call(remote, &format!("/todos/{id}/mark_as_done"), "POST", &[])?;
     Ok(())
 }
 
@@ -680,12 +779,7 @@ pub fn request_changes(remote: &WebRemote, iid: u64) -> Result<()> {
         .get("id")
         .and_then(Value::as_u64)
         .ok_or_else(|| anyhow!("GitLab did not say who the token belongs to"))?;
-    let project = remote
-        .base
-        .split_once("://")
-        .and_then(|(_, rest)| rest.split_once('/'))
-        .map(|(_, path)| path.to_owned())
-        .ok_or_else(|| anyhow!("no project in {}", remote.base))?;
+    let project = project_path(remote).ok_or_else(|| anyhow!("no project in {}", remote.base))?;
     let answer = graphql(
         remote,
         "mutation($project: ID!, $iid: String!, $user: UserID!) { \
@@ -822,6 +916,15 @@ pub fn parse_mrs(value: &Value) -> Vec<Mr> {
                     .or_else(|| m.get("work_in_progress"))
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                author_login: text(m.get("author").unwrap_or(&Value::Null), "username"),
+                reviewers: m
+                    .get("reviewers")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(|r| text(r, "username"))
+                    .filter(|u| !u.is_empty())
+                    .collect(),
             })
         })
         .collect()
@@ -878,6 +981,7 @@ pub fn parse_threads(value: &Value) -> Vec<Thread> {
                     .map(|n| Note {
                         id: n.get("id").and_then(Value::as_u64).unwrap_or(0),
                         author: name(n),
+                        login: text(n.get("author").unwrap_or(&Value::Null), "username"),
                         body: text(n, "body"),
                         created: epoch(&text(n, "created_at")),
                     })
@@ -1060,6 +1164,23 @@ mod tests {
         assert_eq!(a.by, vec!["Anna".to_owned()]);
         assert_eq!((a.required, a.left, a.mine, a.can), (2, 1, false, true));
         assert_eq!(parse_approvals(&Value::Null), Approvals::default());
+    }
+
+    #[test]
+    fn to_dos_are_kept_for_this_project_only() {
+        let value: Value = serde_json::from_str(
+            r#"[{"id": 1, "action_name": "mentioned", "body": "@you look",
+                 "target_url": "https://g/x/app/-/merge_requests/7#note_9",
+                 "created_at": "2026-10-13T10:00:00Z", "author": {"name": "Anna"},
+                 "project": {"path_with_namespace": "x/app"},
+                 "target": {"iid": 7, "title": "Clamp"}},
+                {"id": 2, "action_name": "mentioned", "project": {"path_with_namespace": "x/other"},
+                 "target": {"iid": 3, "title": "Elsewhere"}}]"#,
+        )
+        .unwrap();
+        let todos = parse_todos(&value, "x/app");
+        assert_eq!(todos.len(), 1);
+        assert_eq!((todos[0].iid, todos[0].author.as_str()), (7, "Anna"));
     }
 
     #[test]

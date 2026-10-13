@@ -65,10 +65,16 @@ pub enum Cmd {
     ZoomOut,
     ZoomReset,
     Switch,
+    Notifications,
 }
 
 const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Switch to a branch or a merge request…", "⌘B", Cmd::Switch),
+    (
+        "Notifications — mentions, reviews, replies",
+        "⌘⇧N",
+        Cmd::Notifications,
+    ),
     ("Compare two refs…", "⌘⇧C", Cmd::Compare),
     ("Create merge request…", "⌥⌘M", Cmd::CreateRequest),
     ("Keyboard shortcuts", "?", Cmd::Shortcuts),
@@ -858,5 +864,6 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::ZoomOut => Box::new(ZoomOut),
         Cmd::ZoomReset => Box::new(ZoomReset),
         Cmd::Switch => Box::new(SwitchTo),
+        Cmd::Notifications => Box::new(ToggleNotifications),
     }
 }

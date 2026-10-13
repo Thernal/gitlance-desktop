@@ -227,6 +227,9 @@ impl Workspace {
         if self.palette.is_some() {
             return self.palette_key(event, window, cx);
         }
+        if self.notices.open {
+            return self.notices_key(event, cx);
+        }
         if self.open_ask.is_some() {
             return self.open_ask_key(event, cx);
         }
