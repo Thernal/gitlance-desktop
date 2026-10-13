@@ -915,12 +915,16 @@ impl Workspace {
         shift: bool,
         clicks: usize,
         drag: bool,
+        lower: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(compose) = self.compose.as_mut() else {
             return;
         };
         compose.edit.click(at, clicks, shift || drag);
+        if clicks == 1 && !shift && !drag {
+            compose.edit.set_downstream(lower);
+        }
         self.field_goal = None;
         cx.notify();
     }
@@ -1420,7 +1424,7 @@ impl Workspace {
             *self.field_lines.borrow_mut() = Some(layout.clone());
         }
         let (for_caret, for_down, for_move) = (layout.clone(), layout.clone(), layout);
-        let caret = compose.edit.caret();
+        let (caret, downstream) = (compose.edit.caret(), compose.edit.downstream());
         let (down, drag) = (this.clone(), this);
         div()
             .relative()
@@ -1442,8 +1446,7 @@ impl Workspace {
                 canvas(
                     |_, _, _| (),
                     move |bounds, _, window, _| {
-                        let at = for_caret
-                            .position_for_index(caret)
+                        let at = input::caret_point(&for_caret, caret, downstream)
                             .unwrap_or(bounds.origin + point(px(pad_x), px(pad_y)));
                         window.paint_quad(fill(
                             Bounds::new(at, size(px(2.), px(20.))),
@@ -1461,8 +1464,9 @@ impl Workspace {
                     .index_for_position(event.position)
                     .unwrap_or_else(|nearest| nearest);
                 let (shift, clicks) = (event.modifiers.shift, event.click_count);
+                let lower = input::lower_line(&for_down, at, event.position.y);
                 down.update(cx, |this, cx| {
-                    this.compose_place(at, shift, clicks, false, cx)
+                    this.compose_place(at, shift, clicks, false, lower, cx)
                 })
                 .ok();
             })
@@ -1471,8 +1475,10 @@ impl Workspace {
                     let at = for_move
                         .index_for_position(event.position)
                         .unwrap_or_else(|nearest| nearest);
-                    drag.update(cx, |this, cx| this.compose_place(at, true, 1, true, cx))
-                        .ok();
+                    drag.update(cx, |this, cx| {
+                        this.compose_place(at, true, 1, true, false, cx)
+                    })
+                    .ok();
                 }
             })
             .into_any_element()
@@ -1503,21 +1509,26 @@ impl Workspace {
         }
     }
 
-    /// Scrolls to the thread of the comment asked for, once its file is laid out.
+    /// Scrolls to the line and the comments under it that a jump asked for, once its file is laid
+    /// out: the line, opened first when it is folded away, with the discussions or the pending
+    /// comment below it in view.
     pub(super) fn apply_jump(&mut self, cx: &mut Context<Self>) {
-        if let Some((line, old)) = self.jump_line.take()
-            && let Some(at) = self.row_of_line(line, old)
-        {
-            let thread = matches!(self.rows.get(at + 1), Some(Row::Request(_)));
-            self.diff_list
-                .scroll_to_reveal_item(if thread { at + 1 } else { at });
-            cx.notify();
+        if let Some((line, old)) = self.jump_line.take() {
+            self.reveal_line(line, old);
+            if let Some(at) = self.row_of_line(line, old) {
+                let under = self.rows[at + 1..]
+                    .iter()
+                    .take_while(|r| matches!(r, Row::Request(_) | Row::Draft(_) | Row::Thread(_)))
+                    .count();
+                self.reveal_rows(at..at + 1 + under);
+                cx.notify();
+            }
         }
         let Some(id) = self.jump.take() else {
             return;
         };
         if let Some(at) = self.rows.iter().position(|r| *r == Row::Thread(id)) {
-            self.diff_list.scroll_to_reveal_item(at);
+            self.reveal_rows(at.saturating_sub(1)..at + 1);
             cx.notify();
         }
     }

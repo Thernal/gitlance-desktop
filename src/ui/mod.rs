@@ -638,7 +638,12 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
         }
         if let Ok(keys) = std::env::var("GITLANCE_SNAPSHOT_KEYS") {
             // Keystrokes sent to the window itself (not the keyboard), e.g. `right right cmd-t`.
+            // `wait` gives a diff a second to load before the next key.
             for key in keys.split_whitespace() {
+                if key == "wait" {
+                    wait(1000).await;
+                    continue;
+                }
                 if let Ok(keystroke) = gpui::Keystroke::parse(key) {
                     cx.update_window(window.into(), |_, window, cx| {
                         window.dispatch_keystroke(keystroke, cx);
@@ -950,7 +955,15 @@ impl Workspace {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let recent = storage::recent();
-        let settings = Settings::load();
+        let mut settings = Settings::load();
+        // The keyboard card greets the very first launch, once (never a check's snapshot).
+        let greet = !settings.keys_seen
+            && std::env::var_os("GITLANCE_SNAPSHOT").is_none()
+            && !shortcuts::SHOWN.swap(true, std::sync::atomic::Ordering::Relaxed);
+        if greet {
+            settings.keys_seen = true;
+            settings.save();
+        }
         let start = path.or_else(|| open_recent.then(|| recent.first().cloned()).flatten());
         let mut this = Self {
             focus,
@@ -983,10 +996,7 @@ impl Workspace {
             open_request: None,
             gitlab_check: None,
             newreq: None,
-            // The keyboard card greets the first window of a run, unless turned off (or checking).
-            shortcuts: settings.keys_at_launch
-                && std::env::var_os("GITLANCE_SNAPSHOT").is_none()
-                && !shortcuts::SHOWN.swap(true, std::sync::atomic::Ordering::Relaxed),
+            shortcuts: greet,
             zoom_applied: false,
             bookmarks: bookmarks::Store::load(),
             recents: Vec::new(),

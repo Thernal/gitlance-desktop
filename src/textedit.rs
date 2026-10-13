@@ -18,6 +18,9 @@ pub struct TextEdit {
     /// The word (or line) a double (triple) click took: ⇧-click and a drag from it grow by whole
     /// words (lines).
     unit: Option<(std::ops::Range<usize>, Unit)>,
+    /// At a soft wrap the caret's offset is both the end of a drawn line and the start of the
+    /// next: this says it stands at the start of the next (⌘←, a click on that line).
+    downstream: bool,
 }
 
 /// What a selection grows by after a double or triple click.
@@ -61,6 +64,15 @@ impl TextEdit {
         self.caret
     }
 
+    /// The caret stands at the start of the lower line of a soft wrap, not the end of the upper.
+    pub fn downstream(&self) -> bool {
+        self.downstream
+    }
+
+    pub fn set_downstream(&mut self, downstream: bool) {
+        self.downstream = downstream;
+    }
+
     /// The selected range, start before end; `None` when nothing is selected.
     pub fn selection(&self) -> Option<std::ops::Range<usize>> {
         let anchor = self.anchor.filter(|&a| a != self.caret)?;
@@ -83,6 +95,7 @@ impl TextEdit {
     pub fn place(&mut self, at: usize, extend: bool) {
         let at = self.floor(at.min(self.text.len()));
         self.run = None;
+        self.downstream = false;
         if extend && let Some((taken, unit)) = self.unit.clone() {
             let around = match unit {
                 Unit::Word => self.word_at(at),
@@ -186,6 +199,7 @@ impl TextEdit {
         }
         self.run = None;
         self.unit = None;
+        self.downstream = false;
         if !matches!(motion, Move::Up | Move::Down) {
             self.column = None;
         }
@@ -306,6 +320,7 @@ impl TextEdit {
 
     fn remember(&mut self) {
         self.unit = None;
+        self.downstream = false;
         self.undo.push((self.text.clone(), self.caret));
         if self.undo.len() > 200 {
             self.undo.remove(0);

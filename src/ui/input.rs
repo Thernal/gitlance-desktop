@@ -27,7 +27,36 @@ pub enum Edit {
 }
 
 /// A click in a field's text: where (a byte offset), ⇧, the click count, and whether it is a drag.
-pub type Place = Rc<dyn Fn(usize, bool, usize, bool, &mut App)>;
+/// The last flag: the press was on the lower line of a soft wrap at that offset.
+pub type Place = Rc<dyn Fn(usize, bool, usize, bool, bool, &mut App)>;
+
+/// Where the caret at `index` is drawn. At a soft wrap the offset ends the upper line and starts
+/// the lower one; `downstream` puts the caret at the start of the lower.
+pub fn caret_point(
+    layout: &TextLayout,
+    index: usize,
+    downstream: bool,
+) -> Option<gpui::Point<Pixels>> {
+    let at = layout.position_for_index(index)?;
+    if downstream {
+        let (height, bounds) = (layout.line_height(), layout.bounds());
+        let next = gpui::point(bounds.left(), at.y + height * 1.5);
+        if at.y + height < bounds.bottom()
+            && layout.index_for_position(next).unwrap_or_else(|n| n) == index
+        {
+            return Some(gpui::point(bounds.left(), at.y + height));
+        }
+    }
+    Some(at)
+}
+
+/// Whether a press at height `y` that hit offset `index` was on the line below where the layout
+/// puts that offset: the start of a wrapped line.
+pub fn lower_line(layout: &TextLayout, index: usize, y: Pixels) -> bool {
+    layout
+        .position_for_index(index)
+        .is_some_and(|p| p.y + layout.line_height() <= y)
+}
 
 /// Makes `edit` the edit of `text`, unless it already is.
 pub fn sync(text: &str, edit: &mut TextEdit) {
@@ -103,7 +132,7 @@ pub fn drawn(
     if layout.len() != len + 1 {
         return false;
     }
-    let Some(at) = layout.position_for_index(edit.caret()) else {
+    let Some(at) = caret_point(layout, edit.caret(), edit.downstream()) else {
         return false;
     };
     let height = layout.line_height();
@@ -144,6 +173,16 @@ pub fn drawn(
         }
     };
     edit.go_to(target, select);
+    // Aimed at a line whose start is where the layout ends the line above: stand on the line aimed at.
+    let aimed = match motion {
+        Drawn::Up => Some(at.y - height),
+        Drawn::Down => Some(at.y + height),
+        Drawn::Start => Some(at.y),
+        Drawn::End => None,
+    };
+    if let Some(line) = aimed {
+        edit.set_downstream(lower_line(layout, target, line + height * 0.5));
+    }
     true
 }
 
@@ -159,10 +198,10 @@ pub fn text_body(
     place: Option<Place>,
 ) -> AnyElement {
     use gpui::{Bounds, HighlightStyle, MouseButton, StyledText, canvas, fill, point, size};
-    let (caret, selection) = if edit.text() == text {
-        (edit.caret(), edit.selection())
+    let (caret, selection, downstream) = if edit.text() == text {
+        (edit.caret(), edit.selection(), edit.downstream())
     } else {
-        (text.len(), None)
+        (text.len(), None, false)
     };
     let dot = '•'.len_utf8();
     let to_shown = |at: usize| {
@@ -212,7 +251,7 @@ pub fn text_body(
         |_, _, _| (),
         move |bounds, _, window, _| {
             let height = layout.line_height();
-            let at = layout.position_for_index(caret).unwrap_or(bounds.origin);
+            let at = caret_point(&layout, caret, downstream).unwrap_or(bounds.origin);
             if !look.wrap {
                 // Scroll so the caret stays in view, with no empty room after the text's end.
                 let width = f32::from(bounds.size.width) - 2.;
@@ -266,11 +305,13 @@ pub fn text_body(
                     .index_for_position(event.position)
                     .unwrap_or_else(|nearest| nearest);
                 cx.stop_propagation();
+                let lower = lower_line(&for_down, at, event.position.y);
                 place(
                     from_down(at),
                     event.modifiers.shift,
                     event.click_count,
                     false,
+                    lower,
                     cx,
                 );
             }
@@ -282,7 +323,7 @@ pub fn text_body(
                 let at = for_move
                     .index_for_position(event.position)
                     .unwrap_or_else(|nearest| nearest);
-                place(from_move(at), true, 1, true, cx);
+                place(from_move(at), true, 1, true, false, cx);
             }
         })
         .into_any_element()
@@ -292,11 +333,14 @@ pub fn text_body(
 /// double click taking the word.
 fn place_field(text: &str, this: WeakEntity<Workspace>) -> Place {
     let text = text.to_owned();
-    Rc::new(move |at, shift, clicks, drag, cx| {
+    Rc::new(move |at, shift, clicks, drag, lower, cx| {
         this.update(cx, |this, cx| {
             sync(&text, &mut this.field_edit);
             this.field_goal = None;
             this.field_edit.click(at, clicks, shift || drag);
+            if clicks == 1 && !shift && !drag {
+                this.field_edit.set_downstream(lower);
+            }
             cx.notify();
         })
         .ok();

@@ -295,8 +295,8 @@ pub struct Settings {
     pub rich_comments: bool,
     /// Merge requests are listed by when they were last updated, not when they were opened.
     pub mr_by_updated: bool,
-    /// The keyboard card shows when the app starts.
-    pub keys_at_launch: bool,
+    /// The keyboard card was shown at a first launch; it is not shown at launch again.
+    pub keys_seen: bool,
 }
 
 impl Default for Settings {
@@ -312,7 +312,7 @@ impl Default for Settings {
             ui_zoom: 100,
             rich_comments: true,
             mr_by_updated: false,
-            keys_at_launch: true,
+            keys_seen: false,
         }
     }
 }
@@ -344,7 +344,7 @@ impl Settings {
                 "fold_generated" => settings.fold_generated = value != "false",
                 "rich_comments" => settings.rich_comments = value != "false",
                 "mr_sort" => settings.mr_by_updated = value == "updated",
-                "keys_at_launch" => settings.keys_at_launch = value != "false",
+                "keys_seen" => settings.keys_seen = value == "true",
                 "ui_zoom" => {
                     settings.ui_zoom = value.parse().map_or(100, |z: u16| {
                         z.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX)
@@ -379,7 +379,7 @@ impl std::fmt::Display for Settings {
             "created"
         };
         writeln!(f, "mr_sort={sort}")?;
-        writeln!(f, "keys_at_launch={}", self.keys_at_launch)?;
+        writeln!(f, "keys_seen={}", self.keys_seen)?;
         writeln!(f, "zoom={}", self.zoom)?;
         writeln!(f, "ui_zoom={}", self.ui_zoom)?;
         writeln!(f, "appearance={}", self.appearance.key())?;
@@ -473,7 +473,7 @@ mod tests {
             ui_zoom: 120,
             rich_comments: false,
             mr_by_updated: true,
-            keys_at_launch: false,
+            keys_seen: true,
         };
         assert_eq!(Settings::parse(&settings.to_string()), settings);
     }

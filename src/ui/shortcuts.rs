@@ -203,7 +203,7 @@ impl Workspace {
                                 .gap_y(px(16.))
                                 .children(groups),
                         )
-                        .child(self.render_launch_switch(cx)),
+                        .child(self.render_launch_switch()),
                 ),
         )
     }
@@ -238,52 +238,14 @@ impl Workspace {
         })
     }
 
-    /// "Show this when GitLance starts", and that ⌘/ or `?` brings it back.
-    fn render_launch_switch(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let on = self.settings.keys_at_launch;
+    /// How to bring the card back.
+    fn render_launch_switch(&self) -> impl IntoElement + use<> {
         div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .pt(px(4.))
+            .pt(px(8.))
             .border_t_1()
             .border_color(theme::island_border())
-            .child(
-                div()
-                    .id("keys-at-launch")
-                    .pt(px(8.))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .cursor_pointer()
-                    .child(
-                        div()
-                            .size(px(14.))
-                            .rounded(px(3.))
-                            .border_2()
-                            .border_color(if on { theme::accent() } else { theme::faint() })
-                            .when(on, |s| s.bg(theme::accent()))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(10.))
-                            .text_color(theme::base())
-                            .child(if on { "✓" } else { "" }),
-                    )
-                    .child("Show this when GitLance starts")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.settings.keys_at_launch = !this.settings.keys_at_launch;
-                        this.settings.save();
-                        cx.notify();
-                    })),
-            )
-            .child(
-                div()
-                    .pt(px(8.))
-                    .flex_1()
-                    .text_size(px(12.))
-                    .text_color(theme::faint())
-                    .child("? or ⌘/ shows it again, and Help → Keyboard Shortcuts"),
-            )
+            .text_size(px(12.))
+            .text_color(theme::faint())
+            .child("? or ⌘/ shows this again, and Help → Keyboard Shortcuts")
     }
 }
