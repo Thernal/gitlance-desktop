@@ -1,6 +1,6 @@
 //! Opening a repository while one is open: in this tab, or a new one. A card asks (↵ takes the
 //! highlighted answer, ⇥ or ← → switch it, esc cancels) unless Settings → General says which, and
-//! "Remember my choice" (on by default) writes the answer there. Every way of opening one comes
+//! "Remember my choice" (off until ticked) writes the answer there. Every way of opening one comes
 //! here: ⌘O, the recent list, a folder dropped on the window, a link into another project.
 
 use super::keys::{self, On};
@@ -40,7 +40,7 @@ impl Workspace {
                     path,
                     then,
                     new_tab: self.settings.last_new_tab,
-                    remember: true,
+                    remember: false,
                 });
                 cx.notify();
             }
