@@ -220,59 +220,6 @@ impl Workspace {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sel(a: (u32, usize), b: (u32, usize)) -> Sel {
-        Sel {
-            old: false,
-            anchor: Pos {
-                line: a.0,
-                byte: a.1,
-            },
-            head: Pos {
-                line: b.0,
-                byte: b.1,
-            },
-        }
-    }
-
-    #[test]
-    fn a_selection_covers_part_of_its_first_and_last_lines() {
-        let s = sel((2, 4), (4, 3));
-        assert_eq!(s.in_line(1, 10), None);
-        assert_eq!(s.in_line(2, 10), Some(4..10));
-        assert_eq!(s.in_line(3, 10), Some(0..10));
-        assert_eq!(s.in_line(4, 10), Some(0..3));
-        assert_eq!(s.in_line(5, 10), None);
-    }
-
-    #[test]
-    fn the_ends_are_the_same_whichever_way_it_was_dragged() {
-        let a = sel((2, 4), (4, 3));
-        let b = sel((4, 3), (2, 4));
-        assert_eq!(a.ends(), b.ends());
-        assert_eq!(b.in_line(2, 10), Some(4..10));
-    }
-
-    #[test]
-    fn a_caret_selects_nothing() {
-        let s = sel((2, 4), (2, 4));
-        assert!(s.is_empty());
-        assert_eq!(s.in_line(2, 10), None);
-    }
-
-    #[test]
-    fn a_double_click_takes_the_word_under_it() {
-        let text = "let max_len = 10;";
-        assert_eq!(word_at(text, 5), 4..11);
-        assert_eq!(word_at(text, 3), 3..4);
-        assert_eq!(word_at(text, text.len()), text.len() - 1..text.len());
-        assert_eq!(word_at("", 0), 0..0);
-    }
-}
-
 impl Workspace {
     /// How the text of comments can be selected: the selection now, and presses back to here.
     pub(super) fn selecting(&self, this: gpui::WeakEntity<Self>) -> super::markdown::Selecting {
@@ -336,5 +283,58 @@ impl Workspace {
             },
         }
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sel(a: (u32, usize), b: (u32, usize)) -> Sel {
+        Sel {
+            old: false,
+            anchor: Pos {
+                line: a.0,
+                byte: a.1,
+            },
+            head: Pos {
+                line: b.0,
+                byte: b.1,
+            },
+        }
+    }
+
+    #[test]
+    fn a_selection_covers_part_of_its_first_and_last_lines() {
+        let s = sel((2, 4), (4, 3));
+        assert_eq!(s.in_line(1, 10), None);
+        assert_eq!(s.in_line(2, 10), Some(4..10));
+        assert_eq!(s.in_line(3, 10), Some(0..10));
+        assert_eq!(s.in_line(4, 10), Some(0..3));
+        assert_eq!(s.in_line(5, 10), None);
+    }
+
+    #[test]
+    fn the_ends_are_the_same_whichever_way_it_was_dragged() {
+        let a = sel((2, 4), (4, 3));
+        let b = sel((4, 3), (2, 4));
+        assert_eq!(a.ends(), b.ends());
+        assert_eq!(b.in_line(2, 10), Some(4..10));
+    }
+
+    #[test]
+    fn a_caret_selects_nothing() {
+        let s = sel((2, 4), (2, 4));
+        assert!(s.is_empty());
+        assert_eq!(s.in_line(2, 10), None);
+    }
+
+    #[test]
+    fn a_double_click_takes_the_word_under_it() {
+        let text = "let max_len = 10;";
+        assert_eq!(word_at(text, 5), 4..11);
+        assert_eq!(word_at(text, 3), 3..4);
+        assert_eq!(word_at(text, text.len()), text.len() - 1..text.len());
+        assert_eq!(word_at("", 0), 0..0);
     }
 }

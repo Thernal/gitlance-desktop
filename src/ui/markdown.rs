@@ -77,11 +77,14 @@ pub enum Press {
     },
 }
 
+/// Where a comment's text sends its presses.
+pub type OnPress = Rc<dyn Fn(Press, &mut App)>;
+
 /// Selecting in comments: the selection now, and where presses go.
 #[derive(Clone)]
 pub struct Selecting {
     pub current: Option<TextSel>,
-    pub on: Rc<dyn Fn(Press, &mut App)>,
+    pub on: OnPress,
 }
 
 /// Where relative links of a comment point: GitLab writes uploads as `/uploads/…`, relative to the
