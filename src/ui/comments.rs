@@ -593,8 +593,28 @@ impl Workspace {
             .goline_target()
             .and_then(|(old, line)| self.row_of_line(line, old));
         if let Some(at) = self.goline_row {
-            self.diff_list.scroll_to_reveal_item(at + 1);
+            // The marked line and the prompt under it.
+            self.reveal_rows(at..at + 2);
+        } else if let Some(gap) = self
+            .goline_target()
+            .and_then(|(old, line)| self.gap_of(line, old))
+        {
+            // Folded away: the run that holds it, which ↵ opens.
+            self.reveal_rows(gap..gap + 1);
         }
+    }
+
+    /// The row of the folded run of unchanged lines that holds `line`.
+    fn gap_of(&self, line: u32, old: bool) -> Option<usize> {
+        let data = self.data.as_ref()?;
+        self.rows.iter().position(|r| match r {
+            Row::Gap { segment, .. } => matches!(
+                data.segments.get(*segment),
+                Some(super::rows::Segment::Same { old: o, new: n, len })
+                    if (if old { *o } else { *n }) <= line && line < (if old { *o } else { *n }) + len
+            ),
+            _ => false,
+        })
     }
 
     /// Opens the composer under the marked line.
@@ -621,7 +641,7 @@ impl Workspace {
         self.reveal_line(line, old);
         self.start_comment(old, line, cx);
         if let Some(at) = self.row_of_line(line, old) {
-            self.diff_list.scroll_to_reveal_item(at + 1);
+            self.reveal_rows(at..at + 2);
         }
     }
 

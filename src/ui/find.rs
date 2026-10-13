@@ -164,6 +164,24 @@ impl Workspace {
         });
     }
 
+    /// Brings `rows` into view when they are not, the first a third of the view from the top; rows
+    /// already in view stay where they are. The view is counted in code rows: right after a
+    /// relayout the list has not measured what lies below, so `scroll_to_reveal_item` cannot reach
+    /// it.
+    pub(super) fn reveal_rows(&mut self, rows: std::ops::Range<usize>) {
+        let height = f32::from(self.diff_list.viewport_bounds().size.height);
+        let fit = (height / f32::from(px(self.row_height()))).floor() as usize;
+        let top = self.diff_list.logical_scroll_top().item_ix;
+        // The top row may be cut, and threads are taller than a code row: keep a margin.
+        if fit > 6 && rows.start > top && rows.end + 3 <= top + fit {
+            return;
+        }
+        self.diff_list.scroll_to(gpui::ListOffset {
+            item_ix: rows.start.saturating_sub(fit / 3),
+            offset_in_item: px(0.),
+        });
+    }
+
     /// Steps to the next (or previous) matching line.
     pub(super) fn step_match(&mut self, forward: bool, cx: &mut Context<Self>) {
         if self.matches.is_empty() {

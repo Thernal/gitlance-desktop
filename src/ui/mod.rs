@@ -3618,8 +3618,11 @@ impl Workspace {
                     }))
             }))
             .children(self.render_dfind(cx))
-            .children(self.render_goline(cx.entity().downgrade()))
             // Painted last, over the rows that come after it.
+            .children(
+                self.render_goline(cx.entity().downgrade())
+                    .map(|prompt| gpui::deferred(prompt).with_priority(1)),
+            )
             .children(
                 self.render_done_card(cx)
                     .map(|card| gpui::deferred(card).with_priority(1)),
