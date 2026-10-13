@@ -170,9 +170,27 @@ impl Workspace {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(text) = self.selected_text() {
+        // A selection in the field being typed in wins; with none there, the diff's.
+        if let Some(text) = self.field_selection().or_else(|| self.selected_text()) {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
+    }
+
+    /// The text selected in the field that has the keyboard (never in the token's).
+    fn field_selection(&self) -> Option<String> {
+        if let Some(compose) = &self.compose {
+            return compose.edit.selected_text().map(str::to_owned);
+        }
+        let typing = self.find.text.is_some()
+            || self.dfind.is_some()
+            || self.palette.is_some()
+            || self.ffind.is_some()
+            || self.goline.is_some()
+            || self.newreq.is_some()
+            || self.field.is_some_and(|f| f != super::lists::Field::Token);
+        typing
+            .then(|| self.field_edit.selected_text().map(str::to_owned))
+            .flatten()
     }
 
     /// ⌘A: the whole side of the diff that is being read (the new one, unless the old is selected).

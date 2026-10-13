@@ -15,6 +15,16 @@ pub struct TextEdit {
     column: Option<usize>,
     /// Where the last typed char ended: typing on from there stays one undo step until a new word.
     run: Option<usize>,
+    /// The word (or line) a double (triple) click took: ⇧-click and a drag from it grow by whole
+    /// words (lines).
+    unit: Option<(std::ops::Range<usize>, Unit)>,
+}
+
+/// What a selection grows by after a double or triple click.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unit {
+    Word,
+    Line,
 }
 
 /// Where a movement goes.
@@ -62,15 +72,35 @@ impl TextEdit {
     }
 
     pub fn select_all(&mut self) {
+        self.unit = None;
         self.anchor = Some(0);
         self.caret = self.text.len();
         self.column = None;
     }
 
-    /// Puts the caret at `at` (a click); with `extend` (⇧-click, a drag) the selection grows to it.
+    /// Puts the caret at `at` (a click); with `extend` (⇧-click, a drag) the selection grows to it,
+    /// by whole words or lines after a double or triple click.
     pub fn place(&mut self, at: usize, extend: bool) {
         let at = self.floor(at.min(self.text.len()));
         self.run = None;
+        if extend && let Some((taken, unit)) = self.unit.clone() {
+            let around = match unit {
+                Unit::Word => self.word_at(at),
+                Unit::Line => self.line_start(at)..self.line_end(at),
+            };
+            if around.start < taken.start {
+                self.anchor = Some(taken.end);
+                self.caret = around.start;
+            } else {
+                self.anchor = Some(taken.start);
+                self.caret = around.end.max(taken.end);
+            }
+            self.column = None;
+            return;
+        }
+        if !extend {
+            self.unit = None;
+        }
         if extend {
             self.anchor.get_or_insert(self.caret);
         } else {
@@ -80,8 +110,43 @@ impl TextEdit {
         self.column = None;
     }
 
-    /// Selects the word around `at` (a double click).
+    /// Moves the caret to `at` from the keyboard (a drawn line up or down); `select` grows the
+    /// selection.
+    pub fn go_to(&mut self, at: usize, select: bool) {
+        self.unit = None;
+        self.place(at, select);
+    }
+
+    /// A press of the mouse at `at`: one click places the caret, two take the word, three the
+    /// line; with `extend` (⇧, or a drag) the selection grows to `at`.
+    pub fn click(&mut self, at: usize, clicks: usize, extend: bool) {
+        match clicks {
+            _ if extend => self.place(at, true),
+            0 | 1 => self.place(at, false),
+            2 => self.select_word(at),
+            _ => self.select_line(at),
+        }
+    }
+
+    /// Selects the word around `at` (a double click); a drag from here grows by words.
     pub fn select_word(&mut self, at: usize) {
+        let word = self.word_at(at);
+        self.anchor = Some(word.start);
+        self.caret = word.end;
+        self.unit = Some((word, Unit::Word));
+    }
+
+    /// Selects the line around `at` (a triple click); a drag from here grows by lines.
+    pub fn select_line(&mut self, at: usize) {
+        let at = self.floor(at.min(self.text.len()));
+        let line = self.line_start(at)..self.line_end(at);
+        self.anchor = Some(line.start);
+        self.caret = line.end;
+        self.unit = Some((line, Unit::Line));
+    }
+
+    /// The word around `at`; between words, the empty range there.
+    fn word_at(&self, at: usize) -> std::ops::Range<usize> {
         let at = self.floor(at.min(self.text.len()));
         let start = self.text[..at]
             .char_indices()
@@ -93,8 +158,7 @@ impl TextEdit {
             .char_indices()
             .find(|(_, c)| !is_word(*c))
             .map_or(self.text.len(), |(i, _)| at + i);
-        self.anchor = Some(start);
-        self.caret = end;
+        start..end
     }
 
     /// Moves the caret; with `select` the selection follows it. A move without `select` from a
@@ -121,6 +185,7 @@ impl TextEdit {
             self.anchor = None;
         }
         self.run = None;
+        self.unit = None;
         if !matches!(motion, Move::Up | Move::Down) {
             self.column = None;
         }
@@ -240,6 +305,7 @@ impl TextEdit {
     // ---- inside -------------------------------------------------------------------------------
 
     fn remember(&mut self) {
+        self.unit = None;
         self.undo.push((self.text.clone(), self.caret));
         if self.undo.len() > 200 {
             self.undo.remove(0);
@@ -439,6 +505,28 @@ mod tests {
         assert_eq!(e.text(), "");
         e.redo();
         assert_eq!(e.text(), "one ");
+    }
+
+    #[test]
+    fn a_drag_after_a_double_click_grows_by_words() {
+        let mut e = TextEdit::new("one two three four");
+        e.select_word(9); // "three"
+        e.place(16, true); // into "four"
+        assert_eq!(e.selected_text(), Some("three four"));
+        e.place(1, true); // back into "one"
+        assert_eq!(e.selected_text(), Some("one two three"));
+        e.place(5, false);
+        e.place(6, true); // a plain click forgets the word
+        assert_eq!(e.selected_text(), Some("w"));
+    }
+
+    #[test]
+    fn a_triple_click_takes_the_line_and_a_drag_grows_by_lines() {
+        let mut e = TextEdit::new("first\nsecond\nthird");
+        e.select_line(8);
+        assert_eq!(e.selected_text(), Some("second"));
+        e.place(15, true);
+        assert_eq!(e.selected_text(), Some("second\nthird"));
     }
 
     #[test]

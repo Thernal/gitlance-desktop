@@ -824,6 +824,9 @@ impl Workspace {
         if key.key == "tab" {
             return self.toggle_target(cx);
         }
+        if self.vertical_key(key, cx) {
+            return;
+        }
         if m.platform && !m.alt && !m.control {
             let helper = match (key.key.as_str(), m.shift) {
                 ("b", false) => Some(Helper::Bold),
@@ -855,6 +858,47 @@ impl Workspace {
         cx.notify();
     }
 
+    /// ↑ ↓ (⇧ selecting) in the composer or the new request's description: to the drawn line above
+    /// or below. Any other key forgets the x they keep. Returns whether it took the key.
+    pub(super) fn vertical_key(&mut self, key: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
+        let m = key.modifiers;
+        let up = match key.key.as_str() {
+            "up" if !m.platform && !m.alt => true,
+            "down" if !m.platform && !m.alt => false,
+            _ => {
+                self.field_goal = None;
+                return false;
+            }
+        };
+        let Some(layout) = self.field_lines.borrow().clone() else {
+            return false;
+        };
+        let moved = if let Some(compose) = self.compose.as_mut() {
+            input::vertical(
+                &mut compose.edit,
+                &layout,
+                &mut self.field_goal,
+                up,
+                m.shift,
+            )
+        } else if let Some(text) = self.description_text() {
+            input::sync(&text, &mut self.field_edit);
+            input::vertical(
+                &mut self.field_edit,
+                &layout,
+                &mut self.field_goal,
+                up,
+                m.shift,
+            )
+        } else {
+            false
+        };
+        if moved {
+            cx.notify();
+        }
+        moved
+    }
+
     /// A click in the composer's text: the caret goes there; ⇧ extends the selection, a double
     /// click takes the word; a drag (`drag`) selects.
     fn compose_place(
@@ -868,11 +912,8 @@ impl Workspace {
         let Some(compose) = self.compose.as_mut() else {
             return;
         };
-        if clicks >= 2 && !drag {
-            compose.edit.select_word(at);
-        } else {
-            compose.edit.place(at, shift || drag);
-        }
+        compose.edit.click(at, clicks, shift || drag);
+        self.field_goal = None;
         cx.notify();
     }
 
@@ -1363,6 +1404,7 @@ impl Workspace {
             }),
         );
         let layout = styled.layout().clone();
+        *self.field_lines.borrow_mut() = Some(layout.clone());
         let (for_caret, for_down, for_move) = (layout.clone(), layout.clone(), layout);
         let caret = compose.edit.caret();
         let (down, drag) = (this.clone(), this);

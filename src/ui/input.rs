@@ -5,8 +5,10 @@
 
 use super::{Workspace, px, theme};
 use crate::textedit::TextEdit;
-use gpui::{AnyElement, App, Context, Div, Keystroke, WeakEntity, div, prelude::*};
-use std::cell::Cell;
+use gpui::{
+    AnyElement, App, Context, Div, Keystroke, Pixels, TextLayout, WeakEntity, div, prelude::*,
+};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// What a key press did to a field.
@@ -60,6 +62,9 @@ pub fn edit_area(text: &mut String, field: &mut TextEdit, key: &Keystroke, cx: &
     done
 }
 
+/// Where a wrapped field keeps its text's last layout, for ↑ ↓ by drawn lines.
+pub type Lines = Rc<RefCell<Option<TextLayout>>>;
+
 /// How a field's text is drawn.
 #[derive(Clone, Default)]
 pub struct Look {
@@ -67,6 +72,47 @@ pub struct Look {
     pub wrap: bool,
     /// Every char shows as a dot (a token).
     pub mask: bool,
+    /// Keeps the layout of a wrapped field.
+    pub lines: Option<Lines>,
+}
+
+/// ↑ ↓ in a wrapped field (`up`): the caret goes to the line above or below as drawn, at the x the
+/// first of these presses started from (`goal`); from the first or last drawn line, to the start or
+/// the end. `false` when `layout` is not this text's (it was drawn before the last edit).
+pub fn vertical(
+    edit: &mut TextEdit,
+    layout: &TextLayout,
+    goal: &mut Option<Pixels>,
+    up: bool,
+    select: bool,
+) -> bool {
+    // The field draws its text with a trailing space.
+    if layout.len() != edit.text().len() + 1 {
+        return false;
+    }
+    let Some(at) = layout.position_for_index(edit.caret()) else {
+        return false;
+    };
+    let x = *goal.get_or_insert(at.x);
+    let height = layout.line_height();
+    let y = if up {
+        at.y - height * 0.5
+    } else {
+        at.y + height * 1.5
+    };
+    let bounds = layout.bounds();
+    let target = if y < bounds.top() {
+        0
+    } else if y >= bounds.bottom() {
+        edit.text().len()
+    } else {
+        layout
+            .index_for_position(gpui::point(x, y))
+            .unwrap_or_else(|nearest| nearest)
+            .min(edit.text().len())
+    };
+    edit.go_to(target, select);
+    true
 }
 
 /// A field's text as it is edited: the selection tinted, the caret where the layout puts it; a
@@ -123,6 +169,9 @@ pub fn text_body(
     }));
     let caret = to_shown(caret);
     let layout = styled.layout().clone();
+    if let Some(lines) = &look.lines {
+        *lines.borrow_mut() = Some(layout.clone());
+    }
     let (for_down, for_move) = (layout.clone(), layout.clone());
     let offset = if look.wrap { 0. } else { scroll.get() };
     let from_down = Rc::new(from_shown);
@@ -214,11 +263,8 @@ fn place_field(text: &str, this: WeakEntity<Workspace>) -> Place {
     Rc::new(move |at, shift, clicks, drag, cx| {
         this.update(cx, |this, cx| {
             sync(&text, &mut this.field_edit);
-            if clicks >= 2 && !drag {
-                this.field_edit.select_word(at);
-            } else {
-                this.field_edit.place(at, shift || drag);
-            }
+            this.field_goal = None;
+            this.field_edit.click(at, clicks, shift || drag);
             cx.notify();
         })
         .ok();
@@ -282,6 +328,10 @@ impl Workspace {
                     .child(shown),
             );
         }
+        let look = Look {
+            lines: look.wrap.then(|| self.field_lines.clone()),
+            ..look
+        };
         row.child(text_body(
             text,
             &self.field_edit,

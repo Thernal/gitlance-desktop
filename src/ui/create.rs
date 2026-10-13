@@ -148,9 +148,15 @@ impl Workspace {
 
     /// The card's description has the keyboard: ↑ ↓ move between its lines.
     pub(super) fn typing_description(&self) -> bool {
+        self.description_text().is_some()
+    }
+
+    /// The description's text while it has the keyboard.
+    pub(super) fn description_text(&self) -> Option<String> {
         self.newreq
             .as_ref()
-            .is_some_and(|n| n.focus == Focus::Description)
+            .filter(|n| n.focus == Focus::Description)
+            .map(|n| n.description.clone())
     }
 
     pub(super) fn close_create(&mut self, cx: &mut Context<Self>) {
@@ -174,6 +180,12 @@ impl Workspace {
             n.draft = !n.draft;
             return cx.notify();
         }
+        if self.vertical_key(key, cx) {
+            return;
+        }
+        let Some(n) = self.newreq.as_mut() else {
+            return;
+        };
         if key.key == "tab" {
             n.focus = match (n.focus, key.modifiers.shift) {
                 (Focus::Target, false) | (Focus::Description, true) => Focus::Title,

@@ -26,6 +26,7 @@ mod settings;
 mod shell;
 mod shortcuts;
 mod theme;
+mod toast;
 mod watch;
 mod working;
 mod zones;
@@ -230,7 +231,7 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("cmd-8", Tab8, Some("Workspace")),
                 KeyBinding::new("cmd-9", Tab9, Some("Workspace")),
                 KeyBinding::new("cmd-.", FocusDiff, Some("Workspace")),
-                KeyBinding::new("cmd-c", CopySelection, Some("Workspace && !Typing")),
+                KeyBinding::new("cmd-c", CopySelection, Some("Workspace")),
                 KeyBinding::new("cmd-a", SelectAll, Some("Workspace && !Typing")),
                 KeyBinding::new("f7", NextChange, Some("Workspace")),
                 KeyBinding::new("shift-f7", PreviousChange, Some("Workspace")),
@@ -757,6 +758,8 @@ pub struct Workspace {
     root: Option<PathBuf>,
     recent: Vec<PathBuf>,
     error: Option<SharedString>,
+    /// Errors shown as toasts (`toast.rs`).
+    toasts: toast::Toasts,
     title: String,
     branches: Vec<BranchRef>,
     branch: Option<usize>,
@@ -849,6 +852,9 @@ pub struct Workspace {
     field_edit: crate::textedit::TextEdit,
     /// How far the one-line field with the keyboard is scrolled sideways.
     field_scroll: Rc<Shared<f32>>,
+    /// The last layout of the wrapped field (the composer, a description) and the x ↑ ↓ keep.
+    field_lines: input::Lines,
+    field_goal: Option<gpui::Pixels>,
     /// Back / forward through what was looked at.
     history: History,
     /// Where the View button was painted, so its menu hangs from it.
@@ -924,6 +930,7 @@ impl Workspace {
             root: None,
             recent,
             error: None,
+            toasts: Default::default(),
             title: String::new(),
             branches: Vec::new(),
             branch: None,
@@ -985,6 +992,8 @@ impl Workspace {
             copied: false,
             field_edit: Default::default(),
             field_scroll: Rc::default(),
+            field_lines: Rc::default(),
+            field_goal: None,
             history: History::default(),
             view_bounds: Rc::new(Shared::new(None)),
             bfilter: String::new(),
@@ -3816,6 +3825,7 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.take_error(cx);
         let title = match &self.root {
             Some(root) => format!("GitLance — {}", root.display()),
             None => "GitLance".to_owned(),
@@ -4059,18 +4069,7 @@ impl Render for Workspace {
             .text_size(px(13.))
             .child(self.render_title_bar(cx))
             .children(self.render_tab_strip(cx))
-            .children(self.error.clone().map(|e| {
-                div()
-                    .flex_none()
-                    .mx(px(GAP))
-                    .mb(px(GAP))
-                    .px_4()
-                    .py_2()
-                    .rounded(px(ISLAND_RADIUS))
-                    .bg(theme::removed_line())
-                    .text_color(theme::removed())
-                    .child(e)
-            }))
+            .children(self.render_toasts(cx))
             .child(match self.root {
                 _ if self.settings_open => self.render_settings(cx).into_any_element(),
                 None => self.render_welcome(cx).into_any_element(),
