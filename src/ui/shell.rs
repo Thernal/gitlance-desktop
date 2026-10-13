@@ -206,11 +206,16 @@ impl Workspace {
     /// Runs `f` on the shell this workspace is a tab of.
     pub(super) fn with_shell(
         &self,
+        window: &Window,
         cx: &mut Context<Self>,
-        f: impl FnOnce(&mut Shell, &mut Context<Shell>),
+        f: impl FnOnce(&mut Shell, &mut Window, &mut Context<Shell>) + 'static,
     ) {
+        // After the event: the shell reads its tabs' workspaces (closing one reads its path), and
+        // this workspace is still being updated now — reading it then panics.
         if let Some(shell) = self.shell.as_ref().and_then(WeakEntity::upgrade) {
-            shell.update(cx, f);
+            window.defer(cx, move |window, cx| {
+                shell.update(cx, |s, cx| f(s, window, cx));
+            });
         }
     }
 
@@ -267,11 +272,15 @@ impl Workspace {
                                 .child("×")
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                    this.with_shell(cx, |s, cx| s.close(ix, window, cx))
+                                    this.with_shell(window, cx, move |s, window, cx| {
+                                        s.close(ix, window, cx)
+                                    })
                                 })),
                         )
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            this.with_shell(cx, |s, cx| s.select(ix, window, cx))
+                            this.with_shell(window, cx, move |s, window, cx| {
+                                s.select(ix, window, cx)
+                            })
                         }))
                 }))
                 .child(
@@ -288,7 +297,7 @@ impl Workspace {
                         .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
                         .child("+")
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.with_shell(cx, |s, cx| s.new_tab(window, cx))
+                            this.with_shell(window, cx, |s, window, cx| s.new_tab(window, cx))
                         })),
                 )
         })

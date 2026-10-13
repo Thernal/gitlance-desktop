@@ -4114,49 +4114,49 @@ impl Render for Workspace {
                 cx.listener(|this, _: &FocusDiffZone, _, cx| this.set_zone(zones::Zone::Diff, cx)),
             )
             .on_action(cx.listener(|this, _: &NewTab, window, cx| {
-                this.with_shell(cx, |s, cx| s.new_tab(window, cx))
+                this.with_shell(window, cx, |s, window, cx| s.new_tab(window, cx))
             }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
-                this.with_shell(cx, |s, cx| {
+                this.with_shell(window, cx, |s, window, cx| {
                     let active = s.active_ix();
                     s.close(active, window, cx)
                 })
             }))
             .on_action(cx.listener(|this, _: &ReopenTab, window, cx| {
-                this.with_shell(cx, |s, cx| s.reopen(window, cx))
+                this.with_shell(window, cx, |s, window, cx| s.reopen(window, cx))
             }))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
-                this.with_shell(cx, |s, cx| s.step(true, window, cx))
+                this.with_shell(window, cx, |s, window, cx| s.step(true, window, cx))
             }))
             .on_action(cx.listener(|this, _: &PreviousTab, window, cx| {
-                this.with_shell(cx, |s, cx| s.step(false, window, cx))
+                this.with_shell(window, cx, |s, window, cx| s.step(false, window, cx))
             }))
             .on_action(cx.listener(|this, _: &Tab1, window, cx| {
-                this.with_shell(cx, |s, cx| s.select(0, window, cx))
+                this.with_shell(window, cx, |s, window, cx| s.select(0, window, cx))
             }))
             .on_action(cx.listener(|this, _: &Tab2, window, cx| {
-                this.with_shell(cx, |s, cx| s.select(1, window, cx))
+                this.with_shell(window, cx, |s, window, cx| s.select(1, window, cx))
             }))
             .on_action(cx.listener(|this, _: &Tab3, window, cx| {
-                this.with_shell(cx, |s, cx| s.select(2, window, cx))
+                this.with_shell(window, cx, |s, window, cx| s.select(2, window, cx))
             }))
             .on_action(cx.listener(|this, _: &Tab4, window, cx| {
-                this.with_shell(cx, |s, cx| s.select(3, window, cx))
+                this.with_shell(window, cx, |s, window, cx| s.select(3, window, cx))
             }))
             .on_action(cx.listener(|this, _: &Tab5, window, cx| {
-                this.with_shell(cx, |s, cx| s.select(4, window, cx))
+                this.with_shell(window, cx, |s, window, cx| s.select(4, window, cx))
             }))
             .on_action(cx.listener(|this, _: &Tab6, window, cx| {
-                this.with_shell(cx, |s, cx| s.select(5, window, cx))
+                this.with_shell(window, cx, |s, window, cx| s.select(5, window, cx))
             }))
             .on_action(cx.listener(|this, _: &Tab7, window, cx| {
-                this.with_shell(cx, |s, cx| s.select(6, window, cx))
+                this.with_shell(window, cx, |s, window, cx| s.select(6, window, cx))
             }))
             .on_action(cx.listener(|this, _: &Tab8, window, cx| {
-                this.with_shell(cx, |s, cx| s.select(7, window, cx))
+                this.with_shell(window, cx, |s, window, cx| s.select(7, window, cx))
             }))
             .on_action(cx.listener(|this, _: &Tab9, window, cx| {
-                this.with_shell(cx, |s, cx| s.select(8, window, cx))
+                this.with_shell(window, cx, |s, window, cx| s.select(8, window, cx))
             }))
             .on_action(cx.listener(Self::open_palette_action))
             .on_action(cx.listener(Self::compare_action))
