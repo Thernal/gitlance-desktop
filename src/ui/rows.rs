@@ -631,6 +631,8 @@ mod tests {
             old_text: Some(old.into()),
             new_text: None,
             note: None,
+            old_image: None,
+            new_image: None,
         }
     }
 
@@ -720,6 +722,8 @@ mod tests {
             old_text: None,
             new_text: Some("fn a() {}\nfn b() {}\nfn c() {}\n".into()),
             note: None,
+            old_image: None,
+            new_image: None,
         };
         for mode in DiffMode::ALL {
             let data = FileData::build(&file, mode);
@@ -753,6 +757,8 @@ mod tests {
             old_text: Some("if a > b {\n".into()),
             new_text: Some("if a >= b {\nbrand new line\n".into()),
             note: None,
+            old_image: None,
+            new_image: None,
         };
         let lines = FileData::build(&file, DiffMode::Lines);
         assert!(lines.old.marks.is_empty() && lines.new.marks.is_empty());
@@ -863,6 +869,8 @@ mod tests {
             old_text: Some("hello old\n".into()),
             new_text: Some("Hello NEW\n".into()),
             note: None,
+            old_image: None,
+            new_image: None,
         };
         let data = FileData::build(&file, DiffMode::Lines);
         let rows = layout(&data, &ViewOptions::default(), &HashSet::new());

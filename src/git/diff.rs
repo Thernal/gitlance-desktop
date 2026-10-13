@@ -7,6 +7,107 @@ use std::sync::Arc;
 /// Files larger than this are listed but not diffed line by line. Above 1 MiB a file is shown
 /// without highlighting (`crate::highlight`), so this only bounds memory.
 const MAX_TEXT_BYTES: usize = 16 << 20;
+/// Changed images up to this size are kept to be shown; larger ones stay "Binary file".
+const MAX_IMAGE_BYTES: usize = 24 << 20;
+
+/// The image formats a diff shows as images.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageKind {
+    Png,
+    Jpeg,
+    Gif,
+    Webp,
+    Bmp,
+    Ico,
+    Tiff,
+    Svg,
+}
+
+impl ImageKind {
+    /// By the file's extension.
+    pub fn of(path: &str) -> Option<Self> {
+        let ext = path.rsplit_once('.')?.1.to_ascii_lowercase();
+        Some(match ext.as_str() {
+            "png" => Self::Png,
+            "jpg" | "jpeg" => Self::Jpeg,
+            "gif" => Self::Gif,
+            "webp" => Self::Webp,
+            "bmp" => Self::Bmp,
+            "ico" => Self::Ico,
+            "tif" | "tiff" => Self::Tiff,
+            "svg" => Self::Svg,
+            _ => return None,
+        })
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Png => "PNG",
+            Self::Jpeg => "JPEG",
+            Self::Gif => "GIF",
+            Self::Webp => "WebP",
+            Self::Bmp => "BMP",
+            Self::Ico => "ICO",
+            Self::Tiff => "TIFF",
+            Self::Svg => "SVG",
+        }
+    }
+}
+
+/// One side of a changed image: its bytes, and its size in pixels when it could be read.
+#[derive(Clone, Debug)]
+pub struct ImageSide {
+    pub kind: ImageKind,
+    pub bytes: Arc<[u8]>,
+    pub size: Option<(u32, u32)>,
+}
+
+impl ImageSide {
+    fn new(kind: ImageKind, bytes: Vec<u8>) -> Self {
+        let size = match kind {
+            ImageKind::Svg => svg_size(&String::from_utf8_lossy(&bytes)),
+            _ => imagesize::blob_size(&bytes)
+                .ok()
+                .map(|s| (s.width as u32, s.height as u32)),
+        };
+        Self {
+            kind,
+            bytes: bytes.into(),
+            size,
+        }
+    }
+}
+
+/// An SVG's size: its `width` and `height`, else its `viewBox`.
+pub fn svg_size(text: &str) -> Option<(u32, u32)> {
+    let start = text.find("<svg")?;
+    let tag = &text[start..start + text[start..].find('>')?];
+    let attr = |name: &str| {
+        let at = tag.find(&format!(" {name}="))? + name.len() + 2;
+        let quote = tag[at..].chars().next()?;
+        let rest = &tag[at + 1..];
+        Some(rest[..rest.find(quote)?].to_owned())
+    };
+    let number = |v: &str| {
+        v.trim_end_matches("px")
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|n| n.round() as u32)
+    };
+    if let (Some(w), Some(h)) = (attr("width"), attr("height"))
+        && let (Some(w), Some(h)) = (number(&w), number(&h))
+    {
+        return Some((w, h));
+    }
+    let view = attr("viewBox")?;
+    let parts: Vec<f32> = view
+        .split([' ', ','])
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| p.parse().ok())
+        .collect();
+    (parts.len() == 4).then(|| (parts[2].round() as u32, parts[3].round() as u32))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChangeKind {
@@ -53,6 +154,9 @@ pub struct FileDiff {
     pub new_text: Option<Arc<str>>,
     /// Why the content is not shown (binary, too large, submodule), or a caveat about it.
     pub note: Option<String>,
+    /// The two sides of a changed image (`None` for a side it does not have).
+    pub old_image: Option<ImageSide>,
+    pub new_image: Option<ImageSide>,
 }
 
 impl FileDiff {
@@ -157,6 +261,12 @@ pub(super) fn collect_from(
             }
         }
 
+        let image = |file: DiffFile<'_>, path: &Option<String>, from_disk: bool| {
+            let kind = ImageKind::of(path.as_deref()?)?;
+            load_bytes(repo, file, from_disk).map(|bytes| ImageSide::new(kind, bytes))
+        };
+        let old_image = image(delta.old_file(), &old_path, false);
+        let new_image = image(delta.new_file(), &new_path, workdir);
         files.push(FileDiff {
             old_path,
             new_path,
@@ -167,6 +277,8 @@ pub(super) fn collect_from(
             old_text: old.text(),
             new_text: new.text(),
             note,
+            old_image,
+            new_image,
         });
     }
     Ok(files)
@@ -225,6 +337,24 @@ fn load(repo: &Repository, file: DiffFile<'_>, from_disk: bool) -> Content {
     }
 }
 
+/// The raw bytes of one side, for an image; `None` when absent or too large.
+fn load_bytes(repo: &Repository, file: DiffFile<'_>, from_disk: bool) -> Option<Vec<u8>> {
+    let from_file = || {
+        let path = repo.workdir()?.join(file.path()?);
+        let meta = std::fs::metadata(&path).ok()?;
+        (meta.is_file() && meta.len() as usize <= MAX_IMAGE_BYTES)
+            .then(|| std::fs::read(path).ok())
+            .flatten()
+    };
+    if file.id().is_zero() {
+        return from_disk.then(from_file).flatten();
+    }
+    match repo.find_blob(file.id()) {
+        Ok(blob) => (blob.size() <= MAX_IMAGE_BYTES).then(|| blob.content().to_vec()),
+        Err(_) => from_disk.then(from_file).flatten(),
+    }
+}
+
 /// A file of the working tree as `Content`.
 fn read_file(path: &std::path::Path) -> Content {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
@@ -240,5 +370,30 @@ fn read_file(path: &std::path::Path) -> Content {
         Ok(bytes) if bytes.iter().take(8000).any(|b| *b == 0) => Content::Binary,
         Ok(bytes) => Content::Text(String::from_utf8_lossy(&bytes).into()),
         Err(_) => Content::Absent,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_svg_is_sized_by_its_attributes_or_its_view_box() {
+        assert_eq!(
+            svg_size(r#"<svg width="24" height="16px" viewBox="0 0 48 32">"#),
+            Some((24, 16))
+        );
+        assert_eq!(
+            svg_size(r#"<?xml?><svg xmlns="x" viewBox="0 0 48 32">"#),
+            Some((48, 32))
+        );
+        assert_eq!(svg_size("<svg>"), None);
+    }
+
+    #[test]
+    fn images_are_known_by_extension() {
+        assert_eq!(ImageKind::of("a/Logo.PNG"), Some(ImageKind::Png));
+        assert_eq!(ImageKind::of("icon.svg"), Some(ImageKind::Svg));
+        assert_eq!(ImageKind::of("main.rs"), None);
     }
 }

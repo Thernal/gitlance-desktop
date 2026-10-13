@@ -7,7 +7,7 @@ mod versions;
 #[cfg(test)]
 mod tests;
 
-pub use diff::{ChangeKind, DiffSettings, FileDiff, LineKind};
+pub use diff::{ChangeKind, DiffSettings, FileDiff, ImageKind, ImageSide, LineKind};
 #[cfg(test)]
 pub use diff::{DiffLine, Hunk};
 pub use versions::{PairCommit, PairKind, RangePair, Version, VersionDiff};

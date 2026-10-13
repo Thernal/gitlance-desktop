@@ -11,6 +11,7 @@ mod find;
 mod findfiles;
 mod format;
 mod icons;
+mod image_view;
 mod input;
 mod keymap;
 mod keys;
@@ -560,6 +561,14 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.open_settings(cx);
                             continue;
                         }
+                        "swipe" | "onion" => {
+                            this.images.mode = if name.trim() == "swipe" {
+                                image_view::Mode::Swipe
+                            } else {
+                                image_view::Mode::Onion
+                            };
+                            continue;
+                        }
                         "keyboard" => {
                             this.open_settings(cx);
                             this.settings_section = settings::Section::Keyboard;
@@ -659,7 +668,11 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                 wait(400).await;
             }
         }
-        // A hidden window gets no display-link frames: draw one by hand.
+        // A hidden window gets no display-link frames: draw one by hand. Images start decoding
+        // in the background at a draw, so a first draw, a pause, then the one that is saved.
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .ok();
+        wait(800).await;
         // `update_window` leaves the root view free for the draw to render.
         let saved = cx.update_window(window.into(), |_, window, cx| {
             window.draw(cx).clear(cx);
@@ -790,6 +803,8 @@ pub struct Workspace {
     error: Option<SharedString>,
     /// Errors shown as toasts (`toast.rs`).
     toasts: toast::Toasts,
+    /// How changed images are shown (`image_view.rs`).
+    images: image_view::Images,
     /// What Settings → Keyboard is filtered by.
     keys_filter: String,
     /// The part of Settings shown.
@@ -990,6 +1005,7 @@ impl Workspace {
             note_sel: None,
             settings_section: Default::default(),
             keys_filter: String::new(),
+            images: Default::default(),
             title: String::new(),
             branches: Vec::new(),
             branch: None,
@@ -3599,6 +3615,7 @@ impl Workspace {
                 .text_color(theme::muted())
                 .child("No changes")
                 .into_any_element(),
+            (Some(file), _) if self.shows_image(file) => self.render_image(file, cx),
             (Some(file), _) if file.hunks.is_empty() => div()
                 .flex_1()
                 .flex()
@@ -3659,6 +3676,11 @@ impl Workspace {
                     }))
                     .child(change_badge(f.change))
                     .child(div().flex_1().min_w_0().truncate().child(path))
+                    // An SVG read as its source can go back to the picture.
+                    .children(
+                        (self.images.source && image_view::is_svg(f))
+                            .then(|| image_view::source_switch(true, cx)),
+                    )
                     .children(self.render_review_chip(cx))
                     .children(
                         (!f.hunks.is_empty())

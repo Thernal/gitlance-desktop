@@ -206,6 +206,8 @@ mod tests {
             old_text: Some(old.into()),
             new_text: Some(new.into()),
             note: None,
+            old_image: None,
+            new_image: None,
         }
     }
 
