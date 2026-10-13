@@ -92,11 +92,16 @@ impl Shell {
         self.attach(ws, window, cx);
     }
 
-    /// Opens `path` in a tab of its own (the snapshot checks use it).
-    #[cfg(feature = "snapshot")]
-    pub(super) fn open_tab(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    /// Opens `path` in a tab of its own, and gives back its workspace.
+    pub(super) fn open_tab(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<Workspace> {
         let ws = cx.new(|cx| Workspace::new(Some(path), false, window, cx));
-        self.attach(ws, window, cx);
+        self.attach(ws.clone(), window, cx);
+        ws
     }
 
     pub(super) fn select(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {

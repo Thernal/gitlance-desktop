@@ -165,6 +165,13 @@ impl Workspace {
                 },
             ))
         }));
+        let open_in = diff_view::group().children(crate::storage::OpenIn::ALL.map(|o| {
+            chip(o.label(), o.label(), s.open_in == o).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    this.change_settings(|this| this.settings.open_in = o, cx)
+                },
+            ))
+        }));
         let appearance = diff_view::group().children(Appearance::ALL.map(|a| {
             chip(a.label(), a.label(), s.appearance == a).on_click(cx.listener(
                 move |this, _: &ClickEvent, _, cx| {
@@ -294,6 +301,11 @@ impl Workspace {
                     } else {
                         editors.into_any_element()
                     },
+                ))
+                .child(item(
+                    "Open a repository in",
+                    "Where a repository goes when another one is open: ask each time, in place of the open one, or in a new tab beside it.",
+                    open_in,
                 ))
                 .into_any_element(),
             Section::Repository => column()

@@ -27,10 +27,7 @@ impl Workspace {
                 .is_some_and(|w| w.base == link.base)
         });
         match other.cloned() {
-            Some(path) => {
-                self.pending_link = Some(link.target);
-                self.open_repo(path, None, cx);
-            }
+            Some(path) => self.request_open(path, Some(link.target), cx),
             None => {
                 self.error = Some(
                     format!(

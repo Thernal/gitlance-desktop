@@ -19,6 +19,7 @@ mod keys;
 mod lists;
 mod markdown;
 mod menu;
+mod opening;
 mod palette;
 mod recents;
 mod requests;
@@ -644,6 +645,11 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
             });
             wait(500).await;
         }
+        // Opening another repository while this one is open: the card asks, or Settings decides.
+        if let Ok(path) = std::env::var("GITLANCE_SNAPSHOT_OPEN") {
+            ws.update(cx, |this, cx| this.request_open(path.into(), None, cx));
+            wait(500).await;
+        }
         if let Ok(iid) = std::env::var("GITLANCE_SNAPSHOT_MR") {
             ws.update(cx, |this, cx| {
                 if let Ok(iid) = iid.parse() {
@@ -837,6 +843,10 @@ pub struct Workspace {
     wt: WorkingState,
     fetch: fetch::Fetch,
     shell: Option<gpui::WeakEntity<shell::Shell>>,
+    /// The window this workspace is in: a repository can open in a new tab of it from anywhere.
+    window: gpui::AnyWindowHandle,
+    /// The "this tab or a new tab?" card (`opening.rs`).
+    open_ask: Option<opening::OpenAsk>,
     requests: requests::Requests,
     /// A merge request's diff to show once its branch has loaded: base, head, request.
     pending_compare: Option<PendingCompare>,
@@ -1013,6 +1023,8 @@ impl Workspace {
             images: Default::default(),
             pending_link: None,
             spot: None,
+            window: window.window_handle(),
+            open_ask: None,
             title: String::new(),
             branches: Vec::new(),
             branch: None,
@@ -1903,7 +1915,7 @@ impl Workspace {
                 return;
             };
             if let Some(path) = paths.into_iter().next() {
-                this.update(cx, |this, cx| this.open_repo(path, None, cx))
+                this.update(cx, |this, cx| this.request_open(path, None, cx))
                     .ok();
             }
         })
@@ -2498,7 +2510,7 @@ impl Workspace {
                                     )
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.repo_menu = false;
-                                        this.open_repo(target.clone(), None, cx);
+                                        this.request_open(target.clone(), None, cx);
                                     }))
                             }))
                     })),
@@ -2629,7 +2641,7 @@ impl Workspace {
                             .hover(|s| s.bg(theme::hover()))
                             .child(path.display().to_string())
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.open_repo(path.clone(), None, cx)
+                                this.request_open(path.clone(), None, cx)
                             }))
                     }))
             }))
@@ -4008,6 +4020,7 @@ impl Render for Workspace {
                     || self.goline.is_some()
                     || self.newreq.is_some()
                     || self.submit.is_some()
+                    || self.open_ask.is_some()
                 {
                     if self.palette.is_some() || self.ffind.is_some() {
                         "Workspace Typing Palette"
@@ -4190,7 +4203,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &PreviousRequest, _, cx| this.step_request(false, cx)))
             .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
                 if let Some(path) = paths.paths().first() {
-                    this.open_repo(path.clone(), None, cx);
+                    this.request_open(path.clone(), None, cx);
                 }
             }))
             .on_mouse_move(cx.listener(|this, event, _, cx| this.drag_move(event, cx)))
@@ -4254,6 +4267,7 @@ impl Render for Workspace {
             .children(self.render_find_files(cx))
             .children(self.render_create(cx))
             .children(self.render_submit(cx))
+            .children(self.render_open_ask(cx))
             .children(self.render_shortcuts(cx))
             .children(self.render_palette(cx))
     }

@@ -273,6 +273,39 @@ impl Appearance {
     }
 }
 
+/// Where a repository opened while another is open goes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OpenIn {
+    #[default]
+    Ask,
+    ThisTab,
+    NewTab,
+}
+
+impl OpenIn {
+    pub const ALL: [OpenIn; 3] = [OpenIn::Ask, OpenIn::ThisTab, OpenIn::NewTab];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            OpenIn::Ask => "Ask",
+            OpenIn::ThisTab => "This tab",
+            OpenIn::NewTab => "New tab",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            OpenIn::Ask => "ask",
+            OpenIn::ThisTab => "this-tab",
+            OpenIn::NewTab => "new-tab",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|o| o.key() == key)
+    }
+}
+
 /// Preferences from the Settings page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Settings {
@@ -297,6 +330,10 @@ pub struct Settings {
     pub mr_by_updated: bool,
     /// The keyboard card was shown at a first launch; it is not shown at launch again.
     pub keys_seen: bool,
+    /// Where a repository opened while another is open goes.
+    pub open_in: OpenIn,
+    /// What the "this tab / new tab" question offers first: the last answer.
+    pub last_new_tab: bool,
 }
 
 impl Default for Settings {
@@ -313,6 +350,8 @@ impl Default for Settings {
             rich_comments: true,
             mr_by_updated: false,
             keys_seen: false,
+            open_in: OpenIn::Ask,
+            last_new_tab: false,
         }
     }
 }
@@ -345,6 +384,8 @@ impl Settings {
                 "rich_comments" => settings.rich_comments = value != "false",
                 "mr_sort" => settings.mr_by_updated = value == "updated",
                 "keys_seen" => settings.keys_seen = value == "true",
+                "open_in" => settings.open_in = OpenIn::from_key(value).unwrap_or_default(),
+                "last_new_tab" => settings.last_new_tab = value == "true",
                 "ui_zoom" => {
                     settings.ui_zoom = value.parse().map_or(100, |z: u16| {
                         z.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX)
@@ -380,6 +421,8 @@ impl std::fmt::Display for Settings {
         };
         writeln!(f, "mr_sort={sort}")?;
         writeln!(f, "keys_seen={}", self.keys_seen)?;
+        writeln!(f, "open_in={}", self.open_in.key())?;
+        writeln!(f, "last_new_tab={}", self.last_new_tab)?;
         writeln!(f, "zoom={}", self.zoom)?;
         writeln!(f, "ui_zoom={}", self.ui_zoom)?;
         writeln!(f, "appearance={}", self.appearance.key())?;
@@ -474,6 +517,8 @@ mod tests {
             rich_comments: false,
             mr_by_updated: true,
             keys_seen: true,
+            open_in: OpenIn::NewTab,
+            last_new_tab: true,
         };
         assert_eq!(Settings::parse(&settings.to_string()), settings);
     }
