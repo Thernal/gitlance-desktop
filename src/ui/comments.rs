@@ -858,37 +858,44 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ↑ ↓ (⇧ selecting) in the composer or the new request's description: to the drawn line above
-    /// or below. Any other key forgets the x they keep. Returns whether it took the key.
+    /// ↑ ↓ and ⌘← ⌘→ (⇧ selecting) in a wrapped field — the composer, a review's summary, a
+    /// description: by the lines as drawn. Any other key forgets the x ↑ ↓ keep. Returns whether
+    /// it took the key.
     pub(super) fn vertical_key(&mut self, key: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
+        use input::Drawn;
         let m = key.modifiers;
-        let up = match key.key.as_str() {
-            "up" if !m.platform && !m.alt => true,
-            "down" if !m.platform && !m.alt => false,
+        let motion = match (key.key.as_str(), m.platform, m.alt) {
+            ("up", false, false) => Drawn::Up,
+            ("down", false, false) => Drawn::Down,
+            ("left", true, false) => Drawn::Start,
+            ("right", true, false) => Drawn::End,
             _ => {
                 self.field_goal = None;
                 return false;
             }
         };
+        if matches!(motion, Drawn::Start | Drawn::End) {
+            self.field_goal = None;
+        }
         let Some(layout) = self.field_lines.borrow().clone() else {
             return false;
         };
         // A card's field (the review summary, a description) is over the composer when both are open.
         let moved = if let Some(text) = self.review_summary().or_else(|| self.description_text()) {
             input::sync(&text, &mut self.field_edit);
-            input::vertical(
+            input::drawn(
                 &mut self.field_edit,
                 &layout,
                 &mut self.field_goal,
-                up,
+                motion,
                 m.shift,
             )
         } else if let Some(compose) = self.compose.as_mut() {
-            input::vertical(
+            input::drawn(
                 &mut compose.edit,
                 &layout,
                 &mut self.field_goal,
-                up,
+                motion,
                 m.shift,
             )
         } else {
@@ -1027,7 +1034,7 @@ impl Workspace {
                     })
             }))
             .child(
-                discussion::button(("delete-comment", id), "Delete", None, Kind::Quiet)
+                discussion::button(("delete-comment", id), "Delete", None, Kind::Danger)
                     .h(px(24.))
                     .px(px(8.))
                     .on_click(move |_, _, cx| {

@@ -33,7 +33,10 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("↑ ↓ in it", "step the line"),
             ("Tab in the box", "agent / merge request"),
             ("⌘↵", "add or post"),
-            ("⇧⌘↵", "keep pending · submit review (comment, approve, request changes)"),
+            (
+                "⇧⌘↵",
+                "keep pending · submit review (comment, approve, request changes)",
+            ),
             ("⌥N ⌥P", "next / previous of your pending comments"),
             ("a", "approve the merge request · take the approval back"),
             ("r  x  o", "reply to, resolve, fold a discussion"),

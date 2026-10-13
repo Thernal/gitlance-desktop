@@ -76,40 +76,72 @@ pub struct Look {
     pub lines: Option<Lines>,
 }
 
-/// ↑ ↓ in a wrapped field (`up`): the caret goes to the line above or below as drawn, at the x the
-/// first of these presses started from (`goal`); from the first or last drawn line, to the start or
-/// the end. `false` when `layout` is not this text's (it was drawn before the last edit).
-pub fn vertical(
+/// A move by the lines of a wrapped field as drawn.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Drawn {
+    Up,
+    Down,
+    /// The start of the drawn line (⌘←).
+    Start,
+    /// Its end (⌘→).
+    End,
+}
+
+/// Moves the caret of a wrapped field by drawn lines: ↑ ↓ to the line above or below at the x the
+/// first of these presses started from (`goal`), from the first or last line to the text's start
+/// or end; ⌘← ⌘→ to the ends of the caret's line. `false` when `layout` is not this text's (it was
+/// drawn before the last edit).
+pub fn drawn(
     edit: &mut TextEdit,
     layout: &TextLayout,
     goal: &mut Option<Pixels>,
-    up: bool,
+    motion: Drawn,
     select: bool,
 ) -> bool {
     // The field draws its text with a trailing space.
-    if layout.len() != edit.text().len() + 1 {
+    let len = edit.text().len();
+    if layout.len() != len + 1 {
         return false;
     }
     let Some(at) = layout.position_for_index(edit.caret()) else {
         return false;
     };
-    let x = *goal.get_or_insert(at.x);
     let height = layout.line_height();
-    let y = if up {
-        at.y - height * 0.5
-    } else {
-        at.y + height * 1.5
-    };
     let bounds = layout.bounds();
-    let target = if y < bounds.top() {
-        0
-    } else if y >= bounds.bottom() {
-        edit.text().len()
-    } else {
+    let index = |x: Pixels, y: Pixels| {
         layout
             .index_for_position(gpui::point(x, y))
             .unwrap_or_else(|nearest| nearest)
-            .min(edit.text().len())
+            .min(len)
+    };
+    let target = match motion {
+        Drawn::Up | Drawn::Down => {
+            let x = *goal.get_or_insert(at.x);
+            let y = if motion == Drawn::Up {
+                at.y - height * 0.5
+            } else {
+                at.y + height * 1.5
+            };
+            if y < bounds.top() {
+                0
+            } else if y >= bounds.bottom() {
+                len
+            } else {
+                index(x, y)
+            }
+        }
+        Drawn::Start => index(bounds.left(), at.y + height * 0.5),
+        Drawn::End => {
+            let end = index(bounds.right(), at.y + height * 0.5);
+            // At a soft wrap the nearest index starts the next line: stay before it.
+            match layout.position_for_index(end) {
+                Some(p) if p.y > at.y && end > 0 => edit.text()[..end]
+                    .char_indices()
+                    .next_back()
+                    .map_or(0, |(i, _)| i),
+                _ => end,
+            }
+        }
     };
     edit.go_to(target, select);
     true

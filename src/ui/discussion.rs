@@ -252,6 +252,8 @@ pub enum Kind {
     Plain,
     /// Text only, for Cancel.
     Quiet,
+    /// Something that cannot be undone (Delete): the danger colour, a red tint under the pointer.
+    Danger,
     /// Filled with the source's colour: the one action the box is for.
     Primary(Rgba),
 }
@@ -285,6 +287,11 @@ pub fn button(
             Kind::Quiet => s
                 .text_color(theme::muted())
                 .hover(|s| s.bg(theme::hover()).text_color(theme::text())),
+            Kind::Danger => s
+                .border_1()
+                .border_color(theme::removed_line())
+                .text_color(theme::removed())
+                .hover(|s| s.bg(theme::removed_line())),
             Kind::Primary(color) => s
                 .bg(color)
                 .text_color(theme::base())

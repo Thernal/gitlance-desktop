@@ -263,6 +263,18 @@ impl Workspace {
             .find(|m| git2::Oid::from_str(&m.head).map_or(true, |head| !self.head_reviewed(head)))
     }
 
+    /// After branch `self.branch` in the branch list, the next branch of the same kind (local or
+    /// remote) whose review is not done, going round; never the checked-out one.
+    fn next_unreviewed_branch(&self) -> Option<usize> {
+        let at = self.branch?;
+        let kind = self.branches.get(at)?.kind;
+        let n = self.branches.len();
+        (1..n).map(|step| (at + step) % n).find(|&ix| {
+            let b = &self.branches[ix];
+            b.kind == kind && !b.is_head && !self.head_reviewed(b.tip)
+        })
+    }
+
     /// The card that comes up when the last file is marked: what to do next, from the keyboard.
     pub(super) fn render_done_card(
         &self,
@@ -273,9 +285,15 @@ impl Workspace {
         }
         let total = self.diff.as_ref()?.files.len();
         let current = self.requests.current;
-        let next = current
-            .and(self.next_unreviewed_request())
-            .map(|m| (m.iid, m.title.clone()));
+        // The next merge request in request mode, else the next branch.
+        let next = match current {
+            Some(_) => self
+                .next_unreviewed_request()
+                .map(|m| (format!("Next: !{} {}", m.iid, m.title), Err(m.iid))),
+            None => self
+                .next_unreviewed_branch()
+                .map(|ix| (format!("Next: {}", self.branches[ix].name), Ok(ix))),
+        };
         let button = |id: &'static str, label: String, key: &'static str, primary: bool| {
             div()
                 .id(id)
@@ -366,13 +384,22 @@ impl Workspace {
                             )
                         }),
                 )
-                .children(next.clone().map(|(iid, title)| {
-                    button("done-next", format!("Next: !{iid} {title}"), "⌥↓", true).on_click(
-                        cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.done_card = false;
-                            this.select_request(iid, cx);
-                        }),
+                .children(next.clone().map(|(label, to)| {
+                    button(
+                        "done-next",
+                        label,
+                        if to.is_err() { "⌥↓" } else { "" },
+                        true,
                     )
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.done_card = false;
+                            match to {
+                                Err(iid) => this.select_request(iid, cx),
+                                Ok(ix) => this.select_branch(ix, None, cx),
+                            }
+                        },
+                    ))
                 }))
                 .children(current.map(|_| {
                     button("done-leave", "Back to your branch".to_owned(), "⌥⌘L", false).on_click(
@@ -382,10 +409,14 @@ impl Workspace {
                         }),
                     )
                 }))
-                .children((current.is_some() && next.is_none()).then(|| {
+                .children(next.is_none().then(|| {
                     div()
                         .text_color(theme::muted())
-                        .child("Every other merge request in the list is reviewed too.")
+                        .child(if current.is_some() {
+                            "Nothing left to review: every other merge request is reviewed too."
+                        } else {
+                            "Nothing left to review: every other branch is reviewed too."
+                        })
                 })),
         )
     }
@@ -824,7 +855,7 @@ impl Workspace {
                     })
             }))
             .child(
-                discussion::button(("draft-delete", ix), "Delete", None, Kind::Quiet)
+                discussion::button(("draft-delete", ix), "Delete", None, Kind::Danger)
                     .h(px(24.))
                     .px(px(8.))
                     .on_click(move |_, _, cx| {
