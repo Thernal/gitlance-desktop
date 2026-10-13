@@ -83,6 +83,7 @@ impl Workspace {
                 if let Some(ix) = this.branch {
                     this.sync_request(ix, cx);
                 }
+                this.follow_pending_link(cx);
                 cx.notify();
             })
             .ok();
@@ -148,6 +149,10 @@ impl Workspace {
                             this.requests.drafts = drafts;
                             this.requests.pipeline = pipeline;
                             this.requests.approvals = approvals;
+                            // A link to a comment waits for the discussions; the diff is in by now
+                            // or comes later and tries again.
+                            let diff_in = this.showing_request();
+                            this.resolve_spot(diff_in, cx);
                         }
                         Err(e) => this.requests.error = Some(format!("{e:#}")),
                     }

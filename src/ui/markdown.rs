@@ -79,12 +79,16 @@ pub enum Press {
 
 /// Where a comment's text sends its presses.
 pub type OnPress = Rc<dyn Fn(Press, &mut App)>;
+/// A link clicked in a comment: `true` when the app followed it itself.
+pub type OnLink = Rc<dyn Fn(&str, &mut App) -> bool>;
 
 /// Selecting in comments: the selection now, and where presses go.
 #[derive(Clone)]
 pub struct Selecting {
     pub current: Option<TextSel>,
     pub on: OnPress,
+    /// GitLab links into the open project open in the app (⌘-click: the browser).
+    pub link: OnLink,
 }
 
 /// Where relative links of a comment point: GitLab writes uploads as `/uploads/…`, relative to the
@@ -497,9 +501,13 @@ fn inline(i: &Inline, ctx: &mut Ctx) -> AnyElement {
     ctx.next += 1;
     let id = ElementId::NamedInteger(ctx.key.clone(), ctx.next as u64);
     let (ranges, urls): (Vec<_>, Vec<_>) = links.into_iter().unzip();
-    let linked = InteractiveText::new(id, styled).on_click(ranges, move |ix, _, cx| {
+    let here = ctx.sel.as_ref().map(|s| s.link.clone());
+    let linked = InteractiveText::new(id, styled).on_click(ranges, move |ix, window, cx| {
         if let Some(url) = urls.get(ix) {
-            cx.open_url(url);
+            let browser = window.modifiers().platform;
+            if browser || !here.as_ref().is_some_and(|open| open(url, cx)) {
+                cx.open_url(url);
+            }
         }
     });
     text_block(linked.into_any_element(), layout, &i.text, ctx)

@@ -10,6 +10,7 @@ mod fetch;
 mod find;
 mod findfiles;
 mod format;
+mod goto;
 mod icons;
 mod image_view;
 mod input;
@@ -803,6 +804,10 @@ pub struct Workspace {
     error: Option<SharedString>,
     /// Errors shown as toasts (`toast.rs`).
     toasts: toast::Toasts,
+    /// A link's target waiting for its repository to load (`goto.rs`).
+    pending_link: Option<crate::links::Target>,
+    /// The comment or line a link pointed at, waiting for the request's diff and discussions.
+    spot: Option<goto::Spot>,
     /// How changed images are shown (`image_view.rs`).
     images: image_view::Images,
     /// What Settings → Keyboard is filtered by.
@@ -1006,6 +1011,8 @@ impl Workspace {
             settings_section: Default::default(),
             keys_filter: String::new(),
             images: Default::default(),
+            pending_link: None,
+            spot: None,
             title: String::new(),
             branches: Vec::new(),
             branch: None,
@@ -1175,6 +1182,7 @@ impl Workspace {
                         if let Some(ix) = ix {
                             this.select_branch(ix, commit.flatten(), cx);
                         }
+                        this.follow_pending_link(cx);
                     }
                     Err(err) => this.error = Some(format!("{err:#}").into()),
                 }
@@ -1256,6 +1264,7 @@ impl Workspace {
                             this.apply_mr_versions();
                             this.run_compare(base, head, true, Some(iid), cx);
                         }
+                        this.follow_pending_link(cx);
                     }
                     Err(err) => this.error = Some(format!("{err:#}").into()),
                 }
@@ -1406,6 +1415,7 @@ impl Workspace {
                         if !empty {
                             this.select_file(ix, cx);
                         }
+                        this.resolve_spot(false, cx);
                     }
                     Err(err) => this.error = Some(format!("{err:#}").into()),
                 }

@@ -511,6 +511,11 @@ impl Repo {
     }
 
     /// A branch, tag, `HEAD~3` or (part of) a commit id as a commit.
+    /// Whether `commit` is `tip` or one of its ancestors.
+    pub fn contains(&self, tip: Oid, commit: Oid) -> bool {
+        tip == commit || self.inner.graph_descendant_of(tip, commit).unwrap_or(false)
+    }
+
     pub fn resolve(&self, spec: &str) -> Result<Oid> {
         Ok(self
             .inner

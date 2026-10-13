@@ -136,6 +136,7 @@ enum Pick {
     File(usize),
     Branch(usize),
     Request(u64),
+    Link(crate::links::Link),
     Command(Cmd),
     Ref(String, Oid),
 }
@@ -394,6 +395,16 @@ impl Workspace {
             return items;
         }
 
+        // A pasted GitLab link is one place to go.
+        if let Some(link) = crate::links::parse(query) {
+            return vec![Item {
+                group: "Link",
+                label: format!("Open {}", link.describe()),
+                detail: link.project().to_owned(),
+                key: "↵",
+                pick: Pick::Link(link),
+            }];
+        }
         let (scope, rest) = match query.chars().next() {
             Some(c @ ('>' | '#' | '@')) => (Some(c), &query[1..]),
             _ => (None, query),
@@ -614,6 +625,10 @@ impl Workspace {
             Pick::Request(iid) => {
                 self.palette = None;
                 self.select_request(iid, cx);
+            }
+            Pick::Link(link) => {
+                self.palette = None;
+                self.open_link(link, cx);
             }
             Pick::Command(cmd) => {
                 self.palette = None;

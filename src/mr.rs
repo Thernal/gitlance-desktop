@@ -27,6 +27,8 @@ pub struct Mr {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Note {
+    /// GitLab's id: a link's `#note_<id>` points at it.
+    pub id: u64,
     pub author: String,
     pub body: String,
     pub created: i64,
@@ -874,6 +876,7 @@ pub fn parse_threads(value: &Value) -> Vec<Thread> {
                 notes: notes
                     .iter()
                     .map(|n| Note {
+                        id: n.get("id").and_then(Value::as_u64).unwrap_or(0),
                         author: name(n),
                         body: text(n, "body"),
                         created: epoch(&text(n, "created_at")),

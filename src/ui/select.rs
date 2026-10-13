@@ -223,10 +223,15 @@ impl Workspace {
 impl Workspace {
     /// How the text of comments can be selected: the selection now, and presses back to here.
     pub(super) fn selecting(&self, this: gpui::WeakEntity<Self>) -> super::markdown::Selecting {
+        let link = this.clone();
         super::markdown::Selecting {
             current: self.note_sel.clone(),
             on: std::rc::Rc::new(move |press, cx| {
                 this.update(cx, |this, cx| this.note_press(press, cx)).ok();
+            }),
+            link: std::rc::Rc::new(move |url, cx| {
+                link.update(cx, |this, cx| this.open_url_here(url, cx))
+                    .unwrap_or(false)
             }),
         }
     }

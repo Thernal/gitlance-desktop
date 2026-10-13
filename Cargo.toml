@@ -10,6 +10,8 @@ publish = false
 anyhow = "1"
 # Image sizes from their headers, for image review (already in GPUI's dependency graph).
 imagesize = "0.14"
+# GitLab names a diff line by the SHA-1 of its file's path (already in GPUI's graph).
+sha1_smol = "1"
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

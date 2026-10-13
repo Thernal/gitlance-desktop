@@ -1874,6 +1874,7 @@ dependencies = [
  "pulldown-cmark",
  "serde",
  "serde_json",
+ "sha1_smol",
  "syntect",
  "tempfile",
  "two-face",
