@@ -1766,16 +1766,6 @@ impl Workspace {
             row: self.row_height(),
             // Room for the comment mark (16 px) left of the number.
             gutter: digits.max(3) as f32 * self.char_width + 30.,
-            whole: self
-                .diff
-                .as_ref()
-                .and_then(|d| d.files.get(self.file))
-                .is_some_and(|f| {
-                    matches!(
-                        f.change,
-                        crate::git::ChangeKind::Added | crate::git::ChangeKind::Deleted
-                    )
-                }),
         }
     }
 

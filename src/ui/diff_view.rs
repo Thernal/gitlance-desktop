@@ -39,8 +39,6 @@ pub struct RowStyle<'a> {
     pub row: f32,
     /// The annotation column is on; its cells (empty until blame is read).
     pub annot: Option<&'a [AnnCell]>,
-    /// The file is added or deleted as a whole: its lines keep the gutter bar but no fill.
-    pub whole: bool,
 }
 
 impl RowStyle<'_> {
@@ -167,7 +165,6 @@ pub fn row(
             new_line,
         } => {
             let (line_bg, gutter_bg) = tints(cell.kind);
-            let line_bg = line_bg.filter(|_| !style.whole);
             let sign = match cell.kind {
                 LineKind::Added => "+",
                 LineKind::Removed => "−",
@@ -213,7 +210,6 @@ fn half(
         return half.bg(theme::panel());
     };
     let (line_bg, gutter_bg) = tints(cell.kind);
-    let line_bg = line_bg.filter(|_| !style.whole);
     half.when_some(line_bg, |s, bg| s.bg(bg))
         .children(if old {
             None
