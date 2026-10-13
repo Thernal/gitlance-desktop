@@ -25,7 +25,6 @@ struct Hit {
 
 pub struct FindFiles {
     query: String,
-    all: bool,
     at: usize,
     case: bool,
     word: bool,
@@ -69,11 +68,10 @@ impl Workspace {
         }
         self.palette = None;
         self.field = None;
-        self.field_all = false;
+        self.reset_field_edit();
         let query = self.dfind.clone().unwrap_or_default();
         self.ffind = Some(FindFiles {
             query,
-            all: false,
             at: 0,
             case: false,
             word: false,
@@ -169,7 +167,7 @@ impl Workspace {
             self.refresh_ffind();
             return cx.notify();
         }
-        match input::edit(&mut f.query, &mut f.all, key, cx) {
+        match input::edit(&mut f.query, &mut self.field_edit, key, cx) {
             Edit::Changed => {
                 f.at = 0;
                 self.refresh_ffind();
@@ -379,7 +377,7 @@ impl Workspace {
                                         .size(px(14.))
                                         .text_color(theme::faint()),
                                 )
-                                .child(input::field_text(&f.query, true, f.all, "Search the diff"))
+                                .child(self.field_text(&f.query, true, "Search the diff", cx))
                                 .child(
                                     toggle("ffind-case", "Aa", f.case, "Match case  ⌥C").on_click(
                                         cx.listener(|this, _: &ClickEvent, _, cx| {

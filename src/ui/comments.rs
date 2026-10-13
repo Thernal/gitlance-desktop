@@ -303,7 +303,7 @@ impl Workspace {
             posting: false,
             preview: false,
         });
-        self.field_all = false;
+        self.reset_field_edit();
         self.thread_at = Some(ix);
         if !self.mr_open(ix) {
             self.toggled_mr.insert(ix);
@@ -513,7 +513,7 @@ impl Workspace {
         if self.data.is_none() || self.settings_open || self.compose.is_some() {
             return;
         }
-        self.field_all = false;
+        self.reset_field_edit();
         self.zone = super::zones::Zone::Diff;
         self.goline = Some(String::new());
         self.move_marker();
@@ -534,7 +534,7 @@ impl Workspace {
             }
             return cx.notify();
         }
-        match input::edit(text, &mut self.field_all, &event.keystroke, cx) {
+        match input::edit(text, &mut self.field_edit, &event.keystroke, cx) {
             Edit::Escape => {
                 self.goline = None;
                 self.goline_row = None;
@@ -542,13 +542,21 @@ impl Workspace {
             }
             // Digits, and a minus first for a removed line.
             Edit::Changed => {
+                let keep = |(i, c): &(usize, char)| c.is_ascii_digit() || (*i == 0 && *c == '-');
                 let filtered: String = text
                     .chars()
                     .enumerate()
-                    .filter(|(i, c)| c.is_ascii_digit() || (*i == 0 && *c == '-'))
+                    .filter(keep)
                     .map(|(_, c)| c)
                     .collect();
-                *text = filtered;
+                if filtered != *text {
+                    // The caret stays after the chars it followed.
+                    let caret = self.field_edit.caret();
+                    let before = text[..caret].chars().enumerate().filter(keep).count();
+                    self.field_edit = crate::textedit::TextEdit::new(filtered.as_str());
+                    self.field_edit.place(before, false);
+                    *text = filtered;
+                }
                 self.move_marker();
             }
             Edit::Enter { .. } => return self.finish_goline(cx),
@@ -643,7 +651,11 @@ impl Workspace {
     }
 
     /// The prompt of `c` under the marked line.
-    pub(super) fn render_goline_row(&self, indent: f32) -> gpui::AnyElement {
+    pub(super) fn render_goline_row(
+        &self,
+        indent: f32,
+        this: WeakEntity<Self>,
+    ) -> gpui::AnyElement {
         let Some(text) = self.goline.as_ref() else {
             return div().into_any_element();
         };
@@ -668,7 +680,13 @@ impl Workspace {
                     .text_size(px(12.))
                     .child(div().text_color(theme::muted()).child("Comment on line"))
                     .child(div().min_w(px(56.)).font_family(theme::CODE_FONT).child(
-                        input::field_text(text, true, self.field_all, "first change"),
+                        self.field_look(
+                            text,
+                            true,
+                            "first change",
+                            Default::default(),
+                            this.clone(),
+                        ),
                     ))
                     .child(
                         div()
@@ -680,7 +698,7 @@ impl Workspace {
             .into_any_element()
     }
 
-    pub(super) fn render_goline(&self) -> Option<impl IntoElement + use<>> {
+    pub(super) fn render_goline(&self, this: WeakEntity<Self>) -> Option<impl IntoElement + use<>> {
         if self.goline_row.is_some() {
             return None;
         }
@@ -721,7 +739,13 @@ impl Workspace {
                         .gap_2()
                         .child(div().text_color(theme::muted()).child("Comment on line"))
                         .child(div().min_w(px(60.)).font_family(theme::CODE_FONT).child(
-                            input::field_text(text, true, self.field_all, "first change"),
+                            self.field_look(
+                                text,
+                                true,
+                                "first change",
+                                Default::default(),
+                                this.clone(),
+                            ),
                         ))
                         .child(
                             div()

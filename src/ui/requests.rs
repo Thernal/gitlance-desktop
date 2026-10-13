@@ -1251,16 +1251,11 @@ impl Workspace {
         };
         let host = mr::host(&remote);
         let page = mr::token_page(&remote);
-        let active = self.field == Some(super::lists::Field::Token);
-        let masked = "•".repeat(self.token_input.chars().count().min(40));
         let field = self.render_field(
             "token-field",
-            active.then_some(masked.as_str()),
-            &masked,
+            super::lists::Field::Token,
             "Paste your token",
-            cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.start_field(super::lists::Field::Token, cx)
-            }),
+            cx,
         );
         let note = match (&self.gitlab_check, self.testing) {
             (_, true) => Some(("Checking…".to_owned(), theme::muted())),
@@ -1321,12 +1316,9 @@ impl Workspace {
     pub(super) fn render_requests(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let field = self.render_field(
             "branch-filter",
-            (self.field == Some(super::lists::Field::Branches)).then_some(self.bfilter.as_str()),
-            &self.bfilter,
+            super::lists::Field::Branches,
             "Filter merge requests",
-            cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.start_field(super::lists::Field::Branches, cx)
-            }),
+            cx,
         );
         let shown = self.shown_requests();
         let note = match (&self.requests.error, shown.is_empty()) {

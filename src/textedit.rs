@@ -33,7 +33,6 @@ pub enum Move {
 }
 
 impl TextEdit {
-    #[cfg_attr(not(any(test, feature = "snapshot")), allow(dead_code))]
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let caret = text.len();

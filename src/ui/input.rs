@@ -1,16 +1,19 @@
-//! Editing the text of a one-line field from key events: the app has no text widget, so each field
-//! (commit search, find in the diff, path filter, branch filter, a comment) is a `String` this edits,
-//! with one "everything selected" flag (⌘A) shared by whichever field has the keyboard.
+//! Editing the text of a field from key events and drawing it. A field's text is a `String` its
+//! owner keeps; the caret, the selection and undo live in one `TextEdit` the workspace shares, since
+//! one field has the keyboard at a time. When the owner's text changed behind its back (cleared,
+//! filled from a tag), `sync` starts the edit over with the caret at the end.
 
-use super::px;
-use super::theme;
-use gpui::{App, Div, Keystroke, div, prelude::*};
+use super::{Workspace, px, theme};
+use crate::textedit::TextEdit;
+use gpui::{AnyElement, App, Context, Div, Keystroke, WeakEntity, div, prelude::*};
+use std::cell::Cell;
+use std::rc::Rc;
 
 /// What a key press did to a field.
 pub enum Edit {
     /// The text changed.
     Changed,
-    /// The text was selected (⌘A); nothing changed.
+    /// The caret or the selection moved; nothing changed.
     Selected,
     /// Return was pressed; `shift` for ⇧Return.
     Enter {
@@ -21,105 +24,289 @@ pub enum Edit {
     Ignored,
 }
 
-/// Applies `key` to `text`. `all` is whether the whole text is selected: typing, pasting or
-/// deleting then replaces it, ⌘C and ⌘X take it.
-pub fn edit(text: &mut String, all: &mut bool, key: &Keystroke, cx: &mut App) -> Edit {
-    if key.key == "escape" {
-        return Edit::Escape;
-    }
-    if key.key == "enter" {
-        return Edit::Enter {
-            shift: key.modifiers.shift,
-        };
-    }
-    if key.modifiers.platform {
-        return match key.key.as_str() {
-            "a" => {
-                *all = !text.is_empty();
-                Edit::Selected
-            }
-            "c" | "x" => {
-                if *all || key.key == "x" {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
-                }
-                if key.key == "x" && *all {
-                    text.clear();
-                    *all = false;
-                    Edit::Changed
-                } else {
-                    Edit::Ignored
-                }
-            }
-            "v" => {
-                if let Some(pasted) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                    if std::mem::take(all) {
-                        text.clear();
-                    }
-                    text.push_str(&pasted.replace('\n', " "));
-                }
-                Edit::Changed
-            }
-            "backspace" => {
-                text.clear();
-                *all = false;
-                Edit::Changed
-            }
-            _ => Edit::Ignored,
-        };
-    }
-    match key.key.as_str() {
-        "backspace" => {
-            if std::mem::take(all) {
-                text.clear();
-            } else {
-                text.pop();
-            }
-            Edit::Changed
-        }
-        _ => match &key.key_char {
-            Some(ch) if !key.modifiers.control && !ch.chars().any(char::is_control) => {
-                if std::mem::take(all) {
-                    text.clear();
-                }
-                text.push_str(ch);
-                Edit::Changed
-            }
-            _ => Edit::Ignored,
-        },
+/// A click in a field's text: where (a byte offset), ⇧, the click count, and whether it is a drag.
+pub type Place = Rc<dyn Fn(usize, bool, usize, bool, &mut App)>;
+
+/// Makes `edit` the edit of `text`, unless it already is.
+pub fn sync(text: &str, edit: &mut TextEdit) {
+    if edit.text() != text {
+        *edit = TextEdit::new(text);
     }
 }
 
-/// The inside of a field: its text (tinted when all selected) and a caret while it has the
-/// keyboard, or the placeholder.
-pub fn field_text(text: &str, active: bool, all: bool, placeholder: &'static str) -> Div {
-    let caret = || {
-        div()
-            .flex_none()
-            .w(px(2.))
-            .h(px(15.))
-            .rounded_full()
-            .bg(theme::accent())
-    };
-    let row = div().flex_1().min_w_0().flex().items_center();
-    if text.is_empty() {
-        return row
-            .children(active.then(caret))
-            .child(div().text_color(theme::faint()).child(placeholder));
+/// Applies `key` to the one-line field `text`: the caret moves (⌥ by words, ⌘ to the ends, ⇧
+/// selects), ⌥⌫ ⌘⌫ delete a word or the line, ⌘A ⌘C ⌘X ⌘V ⌘Z ⇧⌘Z, typing. ↑ ↓ are left to the
+/// caller (lists step with them), and a pasted line break becomes a space.
+pub fn edit(text: &mut String, field: &mut TextEdit, key: &Keystroke, cx: &mut App) -> Edit {
+    if matches!(key.key.as_str(), "up" | "down") {
+        return Edit::Ignored;
     }
-    row.child(
-        div()
-            .min_w_0()
-            .truncate()
-            .when(all && active, |s| s.bg(theme::selection()).rounded(px(3.)))
-            .child(text.to_owned()),
+    sync(text, field);
+    let done = edit_with(field, key, cx, false);
+    if field.text() != text {
+        *text = field.text().to_owned();
+    }
+    done
+}
+
+/// Applies `key` to the multi-line field `text`; ↑ ↓ move between its lines. Return is the
+/// caller's.
+pub fn edit_area(text: &mut String, field: &mut TextEdit, key: &Keystroke, cx: &mut App) -> Edit {
+    sync(text, field);
+    let done = edit_with(field, key, cx, true);
+    if field.text() != text {
+        *text = field.text().to_owned();
+    }
+    done
+}
+
+/// How a field's text is drawn.
+#[derive(Clone, Default)]
+pub struct Look {
+    /// Wraps in its box (a multi-line field); else one line that scrolls sideways to its caret.
+    pub wrap: bool,
+    /// Every char shows as a dot (a token).
+    pub mask: bool,
+}
+
+/// A field's text as it is edited: the selection tinted, the caret where the layout puts it; a
+/// click places the caret, a double click takes a word, a drag selects. `edit` is the field's edit
+/// when it is `text`'s; else the caret stands at the end. `scroll` keeps a one-line field's
+/// sideways offset between frames.
+pub fn text_body(
+    text: &str,
+    edit: &TextEdit,
+    look: Look,
+    scroll: Rc<Cell<f32>>,
+    place: Option<Place>,
+) -> AnyElement {
+    use gpui::{Bounds, HighlightStyle, MouseButton, StyledText, canvas, fill, point, size};
+    let (caret, selection) = if edit.text() == text {
+        (edit.caret(), edit.selection())
+    } else {
+        (text.len(), None)
+    };
+    let dot = '•'.len_utf8();
+    let to_shown = |at: usize| {
+        if look.mask {
+            text[..at].chars().count() * dot
+        } else {
+            at
+        }
+    };
+    let owned = text.to_owned();
+    let from_shown = move |at: usize| {
+        if look.mask {
+            owned
+                .char_indices()
+                .nth(at / dot)
+                .map_or(owned.len(), |(i, _)| i)
+        } else {
+            at.min(owned.len())
+        }
+    };
+    let shown = if look.mask {
+        "•".repeat(text.chars().count())
+    } else {
+        text.to_owned()
+    };
+    let end = shown.len();
+    // A trailing space gives the caret a place on a last, empty line.
+    let styled = StyledText::new(format!("{shown} ")).with_highlights(selection.map(|sel| {
+        (
+            to_shown(sel.start)..to_shown(sel.end),
+            HighlightStyle {
+                background_color: Some(theme::selection().into()),
+                ..Default::default()
+            },
+        )
+    }));
+    let caret = to_shown(caret);
+    let layout = styled.layout().clone();
+    let (for_down, for_move) = (layout.clone(), layout.clone());
+    let offset = if look.wrap { 0. } else { scroll.get() };
+    let from_down = Rc::new(from_shown);
+    let from_move = from_down.clone();
+    let paint = canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let height = layout.line_height();
+            let at = layout.position_for_index(caret).unwrap_or(bounds.origin);
+            if !look.wrap {
+                // Scroll so the caret stays in view, with no empty room after the text's end.
+                let width = f32::from(bounds.size.width) - 2.;
+                let x = f32::from(at.x - bounds.origin.x);
+                let mut next = scroll.get();
+                if x > width {
+                    next += x - width;
+                } else if x < 0. {
+                    next += x;
+                }
+                if let Some(last) = layout.position_for_index(end) {
+                    let room = width - f32::from(last.x - bounds.origin.x) - (next - scroll.get());
+                    if room > 0. {
+                        next -= room;
+                    }
+                }
+                let next = next.max(0.);
+                if (next - scroll.get()).abs() > 0.5 {
+                    scroll.set(next);
+                    // The text was laid out with the old offset: draw once more.
+                    window.request_animation_frame();
+                }
+            }
+            window.paint_quad(fill(
+                Bounds::new(point(at.x, at.y), size(gpui::px(2.), height)),
+                theme::accent(),
+            ));
+        },
     )
-    .children((active && !all).then(caret))
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full();
+    let (down, drag) = (place.clone(), place);
+    div()
+        .relative()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .cursor_text()
+        .when(!look.wrap, |s| s.whitespace_nowrap())
+        .child(
+            div()
+                .when(!look.wrap, |s| s.flex_none().ml(gpui::px(-offset)))
+                .child(styled),
+        )
+        .child(paint)
+        .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+            if let Some(place) = &down {
+                let at = for_down
+                    .index_for_position(event.position)
+                    .unwrap_or_else(|nearest| nearest);
+                cx.stop_propagation();
+                place(
+                    from_down(at),
+                    event.modifiers.shift,
+                    event.click_count,
+                    false,
+                    cx,
+                );
+            }
+        })
+        .on_mouse_move(move |event, _, cx| {
+            if let Some(place) = &drag
+                && event.pressed_button == Some(MouseButton::Left)
+            {
+                let at = for_move
+                    .index_for_position(event.position)
+                    .unwrap_or_else(|nearest| nearest);
+                place(from_move(at), true, 1, true, cx);
+            }
+        })
+        .into_any_element()
+}
+
+/// Where a click in the field showing `text` goes: the caret to it, ⇧ or a drag selecting, a
+/// double click taking the word.
+fn place_field(text: &str, this: WeakEntity<Workspace>) -> Place {
+    let text = text.to_owned();
+    Rc::new(move |at, shift, clicks, drag, cx| {
+        this.update(cx, |this, cx| {
+            sync(&text, &mut this.field_edit);
+            if clicks >= 2 && !drag {
+                this.field_edit.select_word(at);
+            } else {
+                this.field_edit.place(at, shift || drag);
+            }
+            cx.notify();
+        })
+        .ok();
+    })
+}
+
+/// A caret standing alone: in an empty field.
+fn caret() -> Div {
+    div()
+        .flex_none()
+        .w(px(2.))
+        .h(px(15.))
+        .rounded_full()
+        .bg(theme::accent())
+}
+
+impl Workspace {
+    /// The inside of a one-line field: its text with the caret and selection while it has the
+    /// keyboard (`active`), the text alone while not, or the placeholder.
+    pub(super) fn field_text(
+        &self,
+        text: &str,
+        active: bool,
+        placeholder: &'static str,
+        cx: &Context<Self>,
+    ) -> Div {
+        self.field_look(
+            text,
+            active,
+            placeholder,
+            Look::default(),
+            cx.entity().downgrade(),
+        )
+    }
+
+    /// `field_text` drawn as `look` says (wrapping, or masked), for a view without its context.
+    pub(super) fn field_look(
+        &self,
+        text: &str,
+        active: bool,
+        placeholder: &'static str,
+        look: Look,
+        this: WeakEntity<Self>,
+    ) -> Div {
+        let row = div().flex_1().min_w_0().flex().items_center();
+        if text.is_empty() {
+            return row
+                .children(active.then(caret))
+                .child(div().text_color(theme::faint()).child(placeholder));
+        }
+        if !active {
+            let shown = if look.mask {
+                "•".repeat(text.chars().count())
+            } else {
+                text.to_owned()
+            };
+            return row.child(
+                div()
+                    .min_w_0()
+                    .when(!look.wrap, |s| s.truncate())
+                    .child(shown),
+            );
+        }
+        row.child(text_body(
+            text,
+            &self.field_edit,
+            look,
+            self.field_scroll.clone(),
+            Some(place_field(text, this)),
+        ))
+    }
+
+    /// A field takes the keyboard: its caret starts at the end of its text.
+    pub(super) fn reset_field_edit(&mut self) {
+        self.field_edit = TextEdit::default();
+        self.field_scroll.set(0.);
+    }
 }
 
 /// Applies `key` to a multi-line `edit`: the caret and selection move (⌥ by words, ⌘ to the line's
 /// or the text's ends, ⇧ selects), ⌥⌫ ⌘⌫ delete words and lines, ⌘A ⌘C ⌘X ⌘V ⌘Z ⇧⌘Z, and typing.
 /// Return and esc are left to the caller.
-pub fn edit_text(edit: &mut crate::textedit::TextEdit, key: &Keystroke, cx: &mut App) -> Edit {
+pub fn edit_text(edit: &mut TextEdit, key: &Keystroke, cx: &mut App) -> Edit {
+    edit_with(edit, key, cx, true)
+}
+
+/// `edit_text`; a one-line field (`lines` false) takes a pasted line break as a space.
+fn edit_with(edit: &mut TextEdit, key: &Keystroke, cx: &mut App, lines: bool) -> Edit {
     use crate::textedit::Move;
     let m = key.modifiers;
     let movement = match (key.key.as_str(), m.platform, m.alt) {
@@ -173,7 +360,11 @@ pub fn edit_text(edit: &mut crate::textedit::TextEdit, key: &Keystroke, cx: &mut
             },
             "v" => match cx.read_from_clipboard().and_then(|c| c.text()) {
                 Some(pasted) => {
-                    edit.insert(&pasted);
+                    edit.insert(&if lines {
+                        pasted
+                    } else {
+                        pasted.replace('\n', " ")
+                    });
                     Edit::Changed
                 }
                 None => Edit::Ignored,

@@ -93,7 +93,9 @@ impl Workspace {
     }
 
     pub(super) fn start_find(&mut self, cx: &mut Context<Self>) {
-        self.field_all = false;
+        if self.find.text.is_none() {
+            self.reset_field_edit();
+        }
         self.field = None;
         self.settings_open = false;
         self.dfind = None;
@@ -252,7 +254,7 @@ impl Workspace {
             return;
         }
         if let Some(mut text) = self.dfind.clone() {
-            match input::edit(&mut text, &mut self.field_all, key, cx) {
+            match input::edit(&mut text, &mut self.field_edit, key, cx) {
                 Edit::Changed => self.set_dfind(text, cx),
                 Edit::Selected => cx.notify(),
                 Edit::Enter { shift } => self.step_match(!shift, cx),
@@ -261,7 +263,7 @@ impl Workspace {
             return;
         }
         if let Some(mut text) = self.find.text.clone() {
-            match input::edit(&mut text, &mut self.field_all, key, cx) {
+            match input::edit(&mut text, &mut self.field_edit, key, cx) {
                 Edit::Changed => self.set_find_text(text, cx),
                 Edit::Selected => cx.notify(),
                 Edit::Enter { .. } => {
@@ -278,7 +280,9 @@ impl Workspace {
 
     /// ⌘F: a find bar over the open diff, like the page find of a browser or an IDE.
     pub(super) fn start_dfind(&mut self, cx: &mut Context<Self>) {
-        self.field_all = false;
+        if self.dfind.is_none() {
+            self.reset_field_edit();
+        }
         self.field = None;
         self.settings_open = false;
         self.find.text = None;
@@ -353,12 +357,7 @@ impl Workspace {
                                 .size(px(14.))
                                 .text_color(theme::faint()),
                         )
-                        .child(input::field_text(
-                            &text,
-                            true,
-                            self.field_all,
-                            "Find in this diff",
-                        )),
+                        .child(self.field_text(&text, true, "Find in this diff", cx)),
                 )
                 .child(
                     div()
@@ -455,12 +454,7 @@ impl Workspace {
                     .size(px(14.))
                     .text_color(theme::faint()),
             )
-            .child(input::field_text(
-                &text,
-                active,
-                self.field_all,
-                "Search commits",
-            ))
+            .child(self.field_text(&text, active, "Search commits", cx))
             .child(
                 div()
                     .text_size(px(11.))

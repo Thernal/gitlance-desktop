@@ -148,7 +148,6 @@ pub struct Palette {
     kind: Kind,
     query: String,
     at: usize,
-    all: bool,
     items: Vec<Item>,
     refs: Vec<NamedRef>,
 }
@@ -174,11 +173,11 @@ impl Workspace {
         self.find.text = None;
         self.ctx_menu = None;
         self.repo_menu = false;
+        self.reset_field_edit();
         self.palette = Some(Palette {
             kind,
             query: String::new(),
             at: 0,
-            all: false,
             items: Vec::new(),
             refs,
         });
@@ -430,7 +429,12 @@ impl Workspace {
         let Some(palette) = &mut self.palette else {
             return;
         };
-        match input::edit(&mut palette.query, &mut palette.all, &event.keystroke, cx) {
+        match input::edit(
+            &mut palette.query,
+            &mut self.field_edit,
+            &event.keystroke,
+            cx,
+        ) {
             Edit::Changed => {
                 palette.at = 0;
                 self.refresh_palette();
@@ -694,7 +698,7 @@ impl Workspace {
                                 .px(px(14.))
                                 .flex()
                                 .items_center()
-                                .child(input::field_text(&p.query, true, p.all, placeholder)),
+                                .child(self.field_text(&p.query, true, placeholder, cx)),
                         )
                         .child(div().h(px(1.)).bg(theme::island_border()))
                         .child(

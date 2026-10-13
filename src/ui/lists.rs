@@ -191,13 +191,7 @@ impl Workspace {
 
     pub(super) fn render_branches(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let filtering = !self.bfilter.trim().is_empty();
-        let field = self.render_field(
-            "branch-filter",
-            (self.field == Some(Field::Branches)).then_some(self.bfilter.as_str()),
-            &self.bfilter,
-            "Filter branches",
-            cx.listener(|this, _: &ClickEvent, _, cx| this.start_field(Field::Branches, cx)),
-        );
+        let field = self.render_field("branch-filter", Field::Branches, "Filter branches", cx);
         let items = self.branch_items().into_iter().map(|item| match item {
             BranchItem::Header(name, n) => div()
                 .px(px(8.))
@@ -287,17 +281,27 @@ impl Workspace {
             )
     }
 
-    /// A one-line field like the commit search: its text or a placeholder; `active` while typing.
+    /// The one-line field of `field`, like the commit search: its text or a placeholder; a click
+    /// gives it the keyboard.
     pub(super) fn render_field(
         &self,
         id: &'static str,
-        active: Option<&str>,
-        text: &str,
+        field: Field,
         placeholder: &'static str,
-        on_click: impl Fn(&ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+        cx: &Context<Self>,
     ) -> impl IntoElement {
-        let active = active.is_some();
-        let text = text.to_owned();
+        let active = self.field == Some(field);
+        let (text, look) = match field {
+            Field::Branches => (&self.bfilter, input::Look::default()),
+            Field::Files => (&self.pfilter, input::Look::default()),
+            Field::Token => (
+                &self.token_input,
+                input::Look {
+                    mask: true,
+                    ..Default::default()
+                },
+            ),
+        };
         div()
             .id(id)
             .flex_none()
@@ -317,22 +321,19 @@ impl Workspace {
             })
             .bg(theme::base())
             .cursor_text()
-            .on_click(on_click)
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.start_field(field, cx)))
             .child(
                 super::icons::icon("search")
                     .size(px(14.))
                     .text_color(theme::faint()),
             )
-            .child(input::field_text(
-                &text,
-                active,
-                self.field_all,
-                placeholder,
-            ))
+            .child(self.field_look(text, active, placeholder, look, cx.entity().downgrade()))
     }
 
     pub(super) fn start_field(&mut self, field: Field, cx: &mut Context<Self>) {
-        self.field_all = false;
+        if self.field != Some(field) {
+            self.reset_field_edit();
+        }
         self.find.text = None;
         self.dfind = None;
         self.dterms = Default::default();
@@ -355,7 +356,7 @@ impl Workspace {
             Field::Files => &mut self.pfilter,
             Field::Token => &mut self.token_input,
         };
-        match input::edit(text, &mut self.field_all, &event.keystroke, cx) {
+        match input::edit(text, &mut self.field_edit, &event.keystroke, cx) {
             Edit::Escape => {
                 text.clear();
                 self.field = None;
@@ -609,13 +610,7 @@ impl Workspace {
                     ),
             )
             .children(self.render_review_progress(cx))
-            .child(self.render_field(
-                "file-filter",
-                (self.field == Some(Field::Files)).then_some(self.pfilter.as_str()),
-                &self.pfilter,
-                "Filter by path  ⌘P",
-                cx.listener(|this, _: &ClickEvent, _, cx| this.start_field(Field::Files, cx)),
-            ))
+            .child(self.render_field("file-filter", Field::Files, "Filter by path  ⌘P", cx))
             .child(if count == 0 {
                 div()
                     .flex_1()

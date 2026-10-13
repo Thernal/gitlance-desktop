@@ -845,8 +845,10 @@ pub struct Workspace {
     jump: Option<u64>,
     /// "Copied ✓" on the Copy button until something changes.
     copied: bool,
-    /// Everything in the field that has the keyboard is selected (⌘A).
-    field_all: bool,
+    /// The caret, selection and undo of the field that has the keyboard (`input`).
+    field_edit: crate::textedit::TextEdit,
+    /// How far the one-line field with the keyboard is scrolled sideways.
+    field_scroll: Rc<Shared<f32>>,
     /// Back / forward through what was looked at.
     history: History,
     /// Where the View button was painted, so its menu hangs from it.
@@ -981,7 +983,8 @@ impl Workspace {
             me: "You".to_owned(),
             jump: None,
             copied: false,
-            field_all: false,
+            field_edit: Default::default(),
+            field_scroll: Rc::default(),
             history: History::default(),
             view_bounds: Rc::new(Shared::new(None)),
             bfilter: String::new(),
@@ -3625,7 +3628,7 @@ impl Workspace {
                     }))
             }))
             .children(self.render_dfind(cx))
-            .children(self.render_goline())
+            .children(self.render_goline(cx.entity().downgrade()))
             // Painted last, over the rows that come after it.
             .children(
                 self.render_done_card(cx)
@@ -3707,7 +3710,7 @@ impl Workspace {
                 }
                 Row::Draft(ix) => return workspace.render_draft(ix, indent, this.clone()),
                 Row::Composer if workspace.compose.is_none() => {
-                    return workspace.render_goline_row(indent);
+                    return workspace.render_goline_row(indent, this.clone());
                 }
                 Row::Composer => return workspace.render_composer(indent, this.clone()),
                 _ => {}
@@ -3868,7 +3871,10 @@ impl Render for Workspace {
                 {
                     if self.palette.is_some() || self.ffind.is_some() {
                         "Workspace Typing Palette"
-                    } else if self.compose.is_some() || self.goline.is_some() {
+                    } else if self.compose.is_some()
+                        || self.goline.is_some()
+                        || self.typing_description()
+                    {
                         // ↑ ↓ belong to the field: they move its caret or its line.
                         "Workspace Typing Caret"
                     } else {

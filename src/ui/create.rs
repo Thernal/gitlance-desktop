@@ -81,7 +81,7 @@ impl Workspace {
         // The picker it was opened from closes with it.
         self.picker_open = false;
         self.bfilter.clear();
-        self.field_all = false;
+        self.reset_field_edit();
         self.newreq = Some(NewRequest {
             source,
             local_only: !on_origin,
@@ -146,6 +146,13 @@ impl Workspace {
         }
     }
 
+    /// The card's description has the keyboard: ↑ ↓ move between its lines.
+    pub(super) fn typing_description(&self) -> bool {
+        self.newreq
+            .as_ref()
+            .is_some_and(|n| n.focus == Focus::Description)
+    }
+
     pub(super) fn close_create(&mut self, cx: &mut Context<Self>) {
         if self.newreq.take().is_some() {
             cx.notify();
@@ -173,14 +180,13 @@ impl Workspace {
                 (Focus::Title, false) | (Focus::Target, true) => Focus::Description,
                 (Focus::Description, false) | (Focus::Title, true) => Focus::Target,
             };
-            self.field_all = false;
+            self.reset_field_edit();
             return cx.notify();
         }
         if key.key == "enter" && n.focus == Focus::Description {
-            if std::mem::take(&mut self.field_all) {
-                n.description.clear();
-            }
-            n.description.push('\n');
+            input::sync(&n.description, &mut self.field_edit);
+            self.field_edit.insert("\n");
+            n.description = self.field_edit.text().to_owned();
             return cx.notify();
         }
         let text = match n.focus {
@@ -188,7 +194,12 @@ impl Workspace {
             Focus::Title => &mut n.title,
             Focus::Description => &mut n.description,
         };
-        match input::edit(text, &mut self.field_all, key, cx) {
+        let edit = if n.focus == Focus::Description {
+            input::edit_area
+        } else {
+            input::edit
+        };
+        match edit(text, &mut self.field_edit, key, cx) {
             Edit::Escape => return self.close_create(cx),
             Edit::Enter { .. } => {
                 // Return finishes a field; on the last one it asks for the same as ⌘↵.
@@ -311,42 +322,15 @@ impl Workspace {
                         .cursor_text()
                         .child(body)
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            if let Some(n) = this.newreq.as_mut() {
+                            if let Some(n) = this.newreq.as_mut()
+                                && n.focus != focus
+                            {
                                 n.focus = focus;
-                                this.field_all = false;
+                                this.reset_field_edit();
                                 cx.notify();
                             }
                         })),
                 )
-        };
-        let caret = || {
-            div()
-                .flex_none()
-                .w(px(2.))
-                .h(px(15.))
-                .rounded_full()
-                .bg(theme::accent())
-        };
-        let multi = |text: &str, on: bool| {
-            if text.is_empty() {
-                return div().min_h(px(64.)).flex().children(on.then(caret)).child(
-                    div()
-                        .text_color(theme::faint())
-                        .child("What it changes and why"),
-                );
-            }
-            div()
-                .min_h(px(64.))
-                .flex()
-                .flex_col()
-                .children(text.split('\n').enumerate().map(|(i, line)| {
-                    let last = i == text.matches('\n').count();
-                    div()
-                        .min_h(px(17.))
-                        .flex()
-                        .child(line.to_owned())
-                        .children((on && last).then(caret))
-                }))
         };
         let check = |id: &'static str, on: bool, label: &'static str, hint: &'static str| {
             div()
@@ -479,11 +463,11 @@ impl Workspace {
                                     "create-target",
                                     "Into",
                                     Focus::Target,
-                                    div().font_family(theme::CODE_FONT).child(input::field_text(
+                                    div().font_family(theme::CODE_FONT).child(self.field_text(
                                         &n.target,
                                         n.focus == Focus::Target,
-                                        self.field_all,
                                         "main",
+                                        cx,
                                     )),
                                 ))),
                         )
@@ -530,18 +514,26 @@ impl Workspace {
                             "create-title",
                             "Title",
                             Focus::Title,
-                            input::field_text(
-                                &n.title,
-                                n.focus == Focus::Title,
-                                self.field_all,
-                                "Title",
-                            ),
+                            self.field_text(&n.title, n.focus == Focus::Title, "Title", cx),
                         ))
                         .child(field(
                             "create-description",
                             "Description",
                             Focus::Description,
-                            multi(&n.description, n.focus == Focus::Description),
+                            div()
+                                .min_h(px(64.))
+                                .flex()
+                                .items_start()
+                                .child(self.field_look(
+                                    &n.description,
+                                    n.focus == Focus::Description,
+                                    "What it changes and why",
+                                    input::Look {
+                                        wrap: true,
+                                        ..Default::default()
+                                    },
+                                    cx.entity().downgrade(),
+                                )),
                         ))
                         .child(
                             check(
