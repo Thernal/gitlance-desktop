@@ -1,10 +1,13 @@
 //! Notifications for the open repository's GitLab project: the user's to-dos (mentions, review
-//! requests, being addressed) and new comments where they take part — in discussions they wrote
-//! in, and on their own merge requests. A bell in the title bar counts the unread; ⌘⇧N opens the
+//! requests, being addressed), new comments where they take part — in discussions they wrote in,
+//! on any open merge request, and on their own merge requests — and their discussions resolved by
+//! someone else. A bell in the title bar counts the unread; ⌘⇧N opens the
 //! list, newest first: j k move, ↵ opens the comment, e is done with it, esc closes.
 //!
-//! A request seen for the first time sets its comments so far as read: only what comes after is
-//! news. What was read is kept per project in `seen-notes.txt`.
+//! A request seen for the first time sets its comments so far as read, and its resolved discussions
+//! as known: only what comes after is news. Kept per project in `seen-notes.txt` and
+//! `seen-resolved.txt`. A request's discussions are read again only when it changed
+//! (`updated_at`), or when the list is opened.
 
 use super::keys::{self, On};
 use super::px;
@@ -18,8 +21,8 @@ use std::time::Duration;
 
 /// How often the list is read again while the app runs.
 const EVERY: Duration = Duration::from_secs(180);
-/// Requests whose discussions are read for replies, at most.
-const MOST_REQUESTS: usize = 15;
+/// Open requests whose discussions are read, at most.
+const MOST_REQUESTS: usize = 40;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -31,6 +34,8 @@ pub enum Kind {
     Reply,
     /// A comment on the user's own merge request.
     OnYours,
+    /// A discussion the user took part in, resolved by someone else.
+    Resolved,
 }
 
 impl Kind {
@@ -40,6 +45,7 @@ impl Kind {
             Kind::Review => "◎",
             Kind::Todo => "•",
             Kind::Reply | Kind::OnYours => "↩",
+            Kind::Resolved => "✓",
         }
     }
 
@@ -50,6 +56,7 @@ impl Kind {
             Kind::Todo => "has a to-do for you",
             Kind::Reply => "replied",
             Kind::OnYours => "commented on your request",
+            Kind::Resolved => "resolved your discussion",
         }
     }
 }
@@ -66,6 +73,8 @@ pub struct Notice {
     pub created: i64,
     pub note: Option<u64>,
     pub todo: Option<u64>,
+    /// `base|iid|discussion` of a resolved discussion.
+    pub resolved: Option<String>,
 }
 
 #[derive(Default)]
@@ -77,7 +86,11 @@ pub struct Notices {
     read: HashSet<String>,
     /// `base|iid` → the newest comment id already known.
     seen: HashMap<String, u64>,
+    /// `base|iid|discussion` of resolved discussions already known.
+    known_resolved: HashSet<String>,
     seen_loaded: bool,
+    /// A request's discussions as last read, with its `updated_at` then.
+    cache: HashMap<u64, (i64, Vec<Thread>)>,
     task: Option<Task<()>>,
     poll: Option<Task<()>>,
 }
@@ -102,12 +115,21 @@ impl Notices {
                 Some((key.to_owned(), id.parse().ok()?))
             })
             .collect();
+        self.known_resolved = storage::read("seen-resolved.txt")
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_owned)
+            .collect();
     }
 
     fn save_seen(&self) {
         let mut lines: Vec<String> = self.seen.iter().map(|(k, v)| format!("{k}\t{v}")).collect();
         lines.sort_unstable();
         storage::save("seen-notes.txt", lines.join("\n") + "\n");
+        let mut known: Vec<&String> = self.known_resolved.iter().collect();
+        known.sort_unstable();
+        let known: Vec<&str> = known.into_iter().map(String::as_str).collect();
+        storage::save("seen-resolved.txt", known.join("\n") + "\n");
     }
 }
 
@@ -136,10 +158,42 @@ pub fn replies(me: &str, mr: &Mr, threads: &[Thread], floor: u64) -> Vec<Notice>
                 created: n.created,
                 note: Some(n.id),
                 todo: None,
+                resolved: None,
             });
         }
     }
     out
+}
+
+/// The discussions of request `mr` that `me` took part in and someone else resolved, not yet in
+/// `known` (keys `base|iid|discussion`).
+pub fn resolutions(
+    me: &str,
+    base: &str,
+    mr: &Mr,
+    threads: &[Thread],
+    known: &HashSet<String>,
+) -> Vec<Notice> {
+    threads
+        .iter()
+        .filter(|t| t.resolved && t.notes.iter().any(|n| n.login == me))
+        .filter_map(|t| {
+            let (who, login) = t.resolved_by.clone()?;
+            let key = format!("{base}|{}|{}", mr.iid, t.id);
+            (login != me && !known.contains(&key)).then(|| Notice {
+                key: format!("resolved:{key}"),
+                kind: Kind::Resolved,
+                iid: mr.iid,
+                title: mr.title.clone(),
+                who,
+                text: t.notes.first().map(|n| n.body.clone()).unwrap_or_default(),
+                created: t.resolved_at,
+                note: t.notes.first().map(|n| n.id),
+                todo: None,
+                resolved: Some(key),
+            })
+        })
+        .collect()
 }
 
 fn from_todo(t: &Todo) -> Notice {
@@ -161,6 +215,7 @@ fn from_todo(t: &Todo) -> Notice {
         created: t.created,
         note,
         todo: Some(t.id),
+        resolved: None,
     }
 }
 
@@ -178,6 +233,8 @@ impl Workspace {
         let base = remote.base.clone();
         let requests = self.requests.list.clone();
         let seen = self.notices.seen.clone();
+        let known = self.notices.known_resolved.clone();
+        let cache = self.notices.cache.clone();
         self.notices.task = Some(cx.spawn(async move |this, cx| {
             let found = cx
                 .background_executor()
@@ -185,39 +242,68 @@ impl Workspace {
                     let me = mr::username(&remote)?;
                     let todos = mr::todos(&remote).unwrap_or_default();
                     let mut notices: Vec<Notice> = todos.iter().map(from_todo).collect();
-                    let mut newest = HashMap::new();
-                    let involved = requests
-                        .iter()
-                        .filter(|m| m.author_login == me || m.reviewers.contains(&me))
-                        .take(MOST_REQUESTS);
-                    for m in involved {
-                        let Ok(threads) = mr::threads(&remote, m.iid) else {
-                            continue;
+                    let mut floors = HashMap::new();
+                    let mut first_resolved = Vec::new();
+                    let mut reopened = Vec::new();
+                    let mut fresh = HashMap::new();
+                    for m in requests.iter().take(MOST_REQUESTS) {
+                        // Read again only what changed since the last look.
+                        let threads = match cache.get(&m.iid) {
+                            Some((updated, threads)) if *updated == m.updated => threads.clone(),
+                            _ => match mr::threads(&remote, m.iid) {
+                                Ok(threads) => threads,
+                                Err(_) => continue,
+                            },
                         };
-                        let top = threads
-                            .iter()
-                            .flat_map(|t| t.notes.iter().map(|n| n.id))
-                            .max()
-                            .unwrap_or(0);
                         let key = format!("{base}|{}", m.iid);
-                        // A request seen for the first time: what is there now is not news.
+                        let resolved_keys: Vec<String> = threads
+                            .iter()
+                            .filter(|t| t.resolved)
+                            .map(|t| format!("{key}|{}", t.id))
+                            .collect();
                         match seen.get(&key) {
-                            Some(&floor) => notices.extend(replies(&me, m, &threads, floor)),
+                            Some(&floor) => {
+                                notices.extend(replies(&me, m, &threads, floor));
+                                notices.extend(resolutions(&me, &base, m, &threads, &known));
+                                // Opened again: a later resolve is news again.
+                                reopened.extend(
+                                    threads
+                                        .iter()
+                                        .filter(|t| !t.resolved)
+                                        .map(|t| format!("{key}|{}", t.id))
+                                        .filter(|k| known.contains(k)),
+                                );
+                            }
+                            // A request seen for the first time: what is there now is not news.
                             None => {
-                                newest.insert(key, top);
+                                let top = threads
+                                    .iter()
+                                    .flat_map(|t| t.notes.iter().map(|n| n.id))
+                                    .max()
+                                    .unwrap_or(0);
+                                floors.insert(key, top);
+                                first_resolved.extend(resolved_keys);
                             }
                         }
+                        fresh.insert(m.iid, (m.updated, threads));
                     }
                     notices.sort_by_key(|n| std::cmp::Reverse(n.created));
-                    anyhow::Ok((notices, newest))
+                    anyhow::Ok((notices, floors, first_resolved, reopened, fresh))
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if let Ok((list, newest)) = found {
-                    if !newest.is_empty() {
-                        this.notices.seen.extend(newest);
+                if let Ok((list, floors, first_resolved, reopened, fresh)) = found {
+                    let changed =
+                        !floors.is_empty() || !first_resolved.is_empty() || !reopened.is_empty();
+                    this.notices.seen.extend(floors);
+                    this.notices.known_resolved.extend(first_resolved);
+                    for key in reopened {
+                        this.notices.known_resolved.remove(&key);
+                    }
+                    if changed {
                         this.notices.save_seen();
                     }
+                    this.notices.cache = fresh;
                     this.notices.list = list;
                     this.notices.at = this
                         .notices
@@ -244,7 +330,9 @@ impl Workspace {
     pub(super) fn toggle_notices(&mut self, cx: &mut Context<Self>) {
         self.notices.open = !self.notices.open;
         if self.notices.open {
+            // Opened: everything read afresh, not only what reports a change.
             self.notices.at = 0;
+            self.notices.cache.clear();
             self.load_notices(cx);
         }
         cx.notify();
@@ -285,7 +373,12 @@ impl Workspace {
                 .spawn(async move { mr::mark_todo_done(&remote, id) })
                 .detach();
         }
-        if let (Some(id), Some(base)) = (n.note.filter(|_| n.todo.is_none()), self.web.as_ref()) {
+        if let Some(key) = n.resolved.clone() {
+            self.notices.known_resolved.insert(key);
+            self.notices.save_seen();
+        } else if let (Some(id), Some(base)) =
+            (n.note.filter(|_| n.todo.is_none()), self.web.as_ref())
+        {
             let key = format!("{}|{}", base.base, n.iid);
             let floor = self.notices.seen.entry(key).or_default();
             *floor = (*floor).max(id);
@@ -585,6 +678,8 @@ mod tests {
             old_line: None,
             resolved: false,
             resolvable: true,
+            resolved_by: None,
+            resolved_at: 0,
         }
     }
 
@@ -616,6 +711,23 @@ mod tests {
         let ids: Vec<_> = got.iter().map(|n| n.note).collect();
         assert_eq!(ids, vec![Some(5)]);
         assert_eq!(got[0].kind, Kind::Reply);
+    }
+
+    #[test]
+    fn a_discussion_one_wrote_in_resolved_by_someone_else_is_news_once() {
+        let mut done = thread(vec![note(1, "you"), note(2, "anna")]);
+        done.resolved = true;
+        done.resolved_by = Some(("Anna".into(), "anna".into()));
+        let mut mine = thread(vec![note(3, "you")]);
+        mine.id = "u".into();
+        mine.resolved = true;
+        mine.resolved_by = Some(("You".into(), "you".into()));
+        let threads = [done, mine];
+        let got = resolutions("you", "b", &request("anna"), &threads, &HashSet::new());
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].kind, got[0].who.as_str()), (Kind::Resolved, "Anna"));
+        let known: HashSet<String> = ["b|7|t".to_owned()].into();
+        assert!(resolutions("you", "b", &request("anna"), &threads, &known).is_empty());
     }
 
     #[test]

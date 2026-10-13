@@ -52,6 +52,9 @@ pub struct Thread {
     pub resolved: bool,
     /// A discussion on code can be resolved; a plain comment cannot.
     pub resolvable: bool,
+    /// Who resolved it (name, username) and when, while it is resolved.
+    pub resolved_by: Option<(String, String)>,
+    pub resolved_at: i64,
 }
 
 /// The latest pipeline of a merge request, and when it failed, the job that did.
@@ -999,6 +1002,17 @@ pub fn parse_threads(value: &Value) -> Vec<Thread> {
                 new_line: line("new_line"),
                 old_line: line("old_line"),
                 resolved: !resolvable.is_empty() && resolvable.iter().all(|r| *r),
+                // The last note resolved says who closed the discussion.
+                resolved_by: notes
+                    .iter()
+                    .rev()
+                    .find_map(|n| n.get("resolved_by").filter(|b| !b.is_null()))
+                    .map(|b| (text(b, "name"), text(b, "username"))),
+                resolved_at: notes
+                    .iter()
+                    .map(|n| epoch(&text(n, "resolved_at")))
+                    .max()
+                    .unwrap_or(0),
             })
         })
         .collect()
