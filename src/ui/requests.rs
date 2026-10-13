@@ -1472,7 +1472,9 @@ impl Workspace {
         let items = shown.into_iter().map(|m| {
             let iid = m.iid;
             let current = self.requests.current == Some(iid);
-            let reviewed = git2::Oid::from_str(&m.head).is_ok_and(|h| self.head_reviewed(h));
+            let head = git2::Oid::from_str(&m.head).ok();
+            let reviewed = head.is_some_and(|h| self.head_reviewed(h));
+            let part = head.and_then(|h| self.head_part(h));
             row(("mr", iid), current)
                 .h(px(50.))
                 .flex_col()
@@ -1496,7 +1498,10 @@ impl Workspace {
                                 .text_size(px(11.))
                                 .text_color(theme::added())
                                 .child("✓ reviewed")
-                        })),
+                        }))
+                        .children(
+                            part.map(|(done, total)| super::lists::progress_badge(done, total)),
+                        ),
                 )
                 .child(
                     div()

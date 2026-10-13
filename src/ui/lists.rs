@@ -211,6 +211,8 @@ impl Workspace {
                     }
                     _ => b.name.as_str(),
                 };
+                let reviewed = self.head_reviewed(b.tip);
+                let part = self.head_part(b.tip);
                 div()
                     .py(px(1.))
                     .child(
@@ -229,18 +231,20 @@ impl Workspace {
                                     .min_w_0()
                                     .truncate()
                                     .text_color(match b.kind {
+                                        _ if reviewed => theme::added(),
                                         RefKind::Local => theme::text(),
                                         RefKind::Remote => theme::muted(),
                                     })
                                     .child(name.to_owned()),
                             )
-                            .children(self.head_reviewed(b.tip).then(|| {
+                            .children(reviewed.then(|| {
                                 div()
                                     .flex_none()
                                     .text_size(px(11.))
                                     .text_color(theme::added())
                                     .child("✓")
                             }))
+                            .children(part.map(|(done, total)| progress_badge(done, total)))
                             .children(self.request_of_branch(ix).map(|m| {
                                 div()
                                     .flex_none()
@@ -749,4 +753,16 @@ fn uniform_list_files(
     .flex_1()
     .pb(px(6.))
     .into_any_element()
+}
+
+/// "3/7" beside a branch or request whose review started: files reviewed of the whole diff.
+pub(super) fn progress_badge(done: u32, total: u32) -> gpui::Div {
+    div()
+        .flex_none()
+        .px(px(5.))
+        .rounded_full()
+        .bg(theme::hover())
+        .text_size(px(11.))
+        .text_color(theme::muted())
+        .child(format!("{done}/{total}"))
 }

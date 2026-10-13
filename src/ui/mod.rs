@@ -96,6 +96,7 @@ actions!(
         CommentLine,
         SubmitReview,
         ApproveRequest,
+        SwitchTo,
         NextDraft,
         PreviousDraft,
         CreateRequest,
@@ -185,9 +186,11 @@ pub fn run(path: Option<PathBuf>) {
                 ),
                 KeyBinding::new("cmd-alt-m", CreateRequest, Some("Workspace && !Typing")),
                 KeyBinding::new("a", ApproveRequest, Some("Workspace && !Typing")),
+                KeyBinding::new("cmd-b", SwitchTo, Some("Workspace && !Typing")),
                 KeyBinding::new("alt-n", NextDraft, Some("Workspace && !Typing")),
                 KeyBinding::new("alt-p", PreviousDraft, Some("Workspace && !Typing")),
                 KeyBinding::new("?", ShowShortcuts, Some("Workspace && !Typing")),
+                KeyBinding::new("cmd-/", ShowShortcuts, Some("Workspace")),
                 KeyBinding::new("shift-n", NextThread, Some("Workspace && !Typing")),
                 KeyBinding::new("shift-p", PreviousThread, Some("Workspace && !Typing")),
                 KeyBinding::new("r", ReplyThread, Some("Workspace && !Typing")),
@@ -219,6 +222,8 @@ pub fn run(path: Option<PathBuf>) {
                 KeyBinding::new("end", DiffEnd, Some("Workspace && !Typing")),
                 KeyBinding::new("h", PreviousFile, Some("Workspace && !Typing")),
                 KeyBinding::new("l", NextFile, Some("Workspace && !Typing")),
+                KeyBinding::new("[", PreviousFile, Some("Workspace && !Typing")),
+                KeyBinding::new("]", NextFile, Some("Workspace && !Typing")),
                 KeyBinding::new("ctrl-1", FocusBranches, Some("Workspace")),
                 KeyBinding::new("ctrl-2", FocusCommits, Some("Workspace")),
                 KeyBinding::new("ctrl-3", FocusFiles, Some("Workspace")),
@@ -384,6 +389,7 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
             MenuItem::action("Hide Whitespace Changes", ToggleWhitespace)
                 .checked(options.ignore_whitespace),
         ]),
+        Menu::new("Help").items([MenuItem::action("Keyboard Shortcuts", ShowShortcuts)]),
     ]
 }
 
@@ -767,6 +773,8 @@ pub struct Workspace {
     error: Option<SharedString>,
     /// Errors shown as toasts (`toast.rs`).
     toasts: toast::Toasts,
+    /// Zen (⌘.): what the branches and files islands were before it hid them.
+    zen: Option<(bool, bool)>,
     /// The Submit review card (`submit.rs`).
     submit: Option<submit::Submit>,
     /// The pending comment ⌥N / ⌥P is on.
@@ -944,6 +952,7 @@ impl Workspace {
             toasts: Default::default(),
             submit: None,
             draft_at: None,
+            zen: None,
             title: String::new(),
             branches: Vec::new(),
             branch: None,
@@ -962,7 +971,10 @@ impl Workspace {
             open_request: None,
             gitlab_check: None,
             newreq: None,
-            shortcuts: false,
+            // The keyboard card greets the first window of a run, unless turned off (or checking).
+            shortcuts: settings.keys_at_launch
+                && std::env::var_os("GITLANCE_SNAPSHOT").is_none()
+                && !shortcuts::SHOWN.swap(true, std::sync::atomic::Ordering::Relaxed),
             zoom_applied: false,
             bookmarks: bookmarks::Store::load(),
             recents: Vec::new(),
@@ -1977,13 +1989,55 @@ impl Workspace {
         )
     }
 
-    /// ⌘.: the diff alone; pressed again, the islands come back.
+    /// ⌘.: zen — the diff alone, without the rail, with a line of the keys that move a review on;
+    /// pressed again, the islands come back as they were.
     fn focus_diff(&mut self, _: &FocusDiff, _: &mut Window, cx: &mut Context<Self>) {
-        let hide = self.layout.show_sidebar || self.layout.show_files;
-        self.layout.show_sidebar = !hide;
-        self.layout.show_files = !hide;
+        match self.zen.take() {
+            Some((sidebar, files)) => {
+                self.layout.show_sidebar = sidebar;
+                self.layout.show_files = files;
+            }
+            None => {
+                self.zen = Some((self.layout.show_sidebar, self.layout.show_files));
+                self.layout.show_sidebar = false;
+                self.layout.show_files = false;
+            }
+        }
         self.layout.save();
         cx.notify();
+    }
+
+    /// Zen's line at the foot of the diff: the keys of a review, from the keyboard alone.
+    fn render_zen_keys(&self) -> Option<impl IntoElement + use<>> {
+        self.zen.is_some().then_some(())?;
+        // Keys are split by spaces: "[ ]" is two caps.
+        let pair = |spec: &'static str, what: &'static str| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .children(spec.split(' ').map(|key| keys::caps(key, keys::On::Plain)))
+                .child(what)
+        };
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .justify_center()
+                .gap(px(16.))
+                .px(px(12.))
+                .py(px(6.))
+                .text_size(px(12.))
+                .text_color(theme::muted())
+                .child(pair("⌘B", "switch"))
+                .child(pair("[ ]", "files"))
+                .child(pair("v", "reviewed, next"))
+                .child(pair("⌥↓", "next request"))
+                .child(pair("c", "comment"))
+                .child(pair("⌘.", "leave zen")),
+        )
     }
 
     fn toggle_unified(&mut self, _: &ToggleUnified, _: &mut Window, cx: &mut Context<Self>) {
@@ -3933,6 +3987,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CommentLine, _, cx| this.open_goline(cx)))
             .on_action(cx.listener(|this, _: &SubmitReview, _, cx| this.open_submit(cx)))
             .on_action(cx.listener(|this, _: &ApproveRequest, _, cx| this.toggle_approval(cx)))
+            .on_action(cx.listener(|this, _: &SwitchTo, _, cx| {
+                if this.root.is_some() {
+                    this.open_palette(palette::Kind::Switch, cx)
+                }
+            }))
             .on_action(cx.listener(|this, _: &NextDraft, _, cx| this.step_draft(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousDraft, _, cx| this.step_draft(false, cx)))
             .on_action(cx.listener(|this, _: &CreateRequest, _, cx| this.open_create(None, cx)))
@@ -4097,7 +4156,7 @@ impl Render for Workspace {
                     .flex()
                     .px(px(GAP))
                     .pb(px(GAP))
-                    .child(self.render_rail(cx))
+                    .children(self.zen.is_none().then(|| self.render_rail(cx)))
                     .children(self.layout.show_sidebar.then(|| {
                         div()
                             .flex()
@@ -4105,7 +4164,15 @@ impl Render for Workspace {
                             .child(self.render_sidebar(cx))
                             .child(self.handle(Split::Sidebar, cx))
                     }))
-                    .child(self.render_diff(cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(self.render_diff(cx))
+                            .children(self.render_zen_keys()),
+                    )
                     .into_any_element(),
             })
             // Last, so it paints over everything.

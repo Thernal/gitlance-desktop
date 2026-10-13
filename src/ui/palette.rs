@@ -19,6 +19,8 @@ pub enum Kind {
     Structure,
     /// The lines marked with F3 in the open diff (⌘F3).
     Bookmarks,
+    /// Switching to a branch or a merge request (⌘B), with how far each one's review got.
+    Switch,
     /// Picking the first side of a comparison.
     Base,
     /// Picking the second side, the first being `.0`.
@@ -62,9 +64,11 @@ pub enum Cmd {
     ZoomIn,
     ZoomOut,
     ZoomReset,
+    Switch,
 }
 
 const COMMANDS: &[(&str, &str, Cmd)] = &[
+    ("Switch to a branch or a merge request…", "⌘B", Cmd::Switch),
     ("Compare two refs…", "⌘⇧C", Cmd::Compare),
     ("Create merge request…", "⌥⌘M", Cmd::CreateRequest),
     ("Keyboard shortcuts", "?", Cmd::Shortcuts),
@@ -131,6 +135,7 @@ enum Pick {
     Commit(Oid),
     File(usize),
     Branch(usize),
+    Request(u64),
     Command(Cmd),
     Ref(String, Oid),
 }
@@ -148,6 +153,8 @@ pub struct Palette {
     kind: Kind,
     query: String,
     at: usize,
+    /// ⌘B: only what is not reviewed yet (⇥ switches).
+    open_only: bool,
     items: Vec<Item>,
     refs: Vec<NamedRef>,
 }
@@ -159,11 +166,64 @@ fn matches(words: &[String], hay: &str) -> bool {
 }
 
 impl Workspace {
+    /// ⌘B's list: the merge requests (when the project has them), then the local branches; each
+    /// says how far its review got.
+    fn switch_items(&self, query: &str, open_only: bool) -> Vec<Item> {
+        let state = |head: Option<Oid>| match head {
+            Some(h) if self.head_reviewed(h) => (true, "✓ reviewed".to_owned()),
+            Some(h) => match self.head_part(h) {
+                Some((done, total)) => (false, format!("{done}/{total} reviewed")),
+                None => (false, "not reviewed".to_owned()),
+            },
+            None => (false, String::new()),
+        };
+        let requests = crate::rank::rank(self.requests.list.iter(), query, |m| &m.title)
+            .into_iter()
+            .chain(
+                // `!12` or a branch name finds a request too.
+                self.requests.list.iter().filter(|m| {
+                    let q = query.trim().trim_start_matches('!');
+                    !q.is_empty()
+                        && (m.iid.to_string() == q || m.source.contains(q))
+                        && crate::rank::score(query, &m.title).is_none()
+                }),
+            )
+            .filter_map(|m| {
+                let (done, said) = state(Oid::from_str(&m.head).ok());
+                (!(open_only && done)).then(|| Item {
+                    group: "Merge requests",
+                    label: format!("!{} {}", m.iid, m.title),
+                    detail: format!("{} · {said}", m.source),
+                    key: "",
+                    pick: Pick::Request(m.iid),
+                })
+            });
+        let branches = crate::rank::rank(
+            self.branches
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.kind == crate::git::RefKind::Local),
+            query,
+            |(_, b)| &b.name,
+        )
+        .into_iter()
+        .filter_map(|(ix, b)| {
+            let (done, said) = state(Some(b.tip));
+            (!(open_only && done)).then(|| Item {
+                group: "Branches",
+                label: b.name.clone(),
+                detail: format!("{} · {said}", format::short(b.tip)),
+                key: "",
+                pick: Pick::Branch(ix),
+            })
+        });
+        requests.take(10).chain(branches.take(10)).collect()
+    }
+
     pub(super) fn open_palette(&mut self, kind: Kind, cx: &mut Context<Self>) {
         let refs = match (&kind, &self.root) {
-            (Kind::Jump | Kind::Recent | Kind::Structure | Kind::Bookmarks, _) | (_, None) => {
-                Vec::new()
-            }
+            (Kind::Jump | Kind::Recent | Kind::Structure | Kind::Bookmarks | Kind::Switch, _)
+            | (_, None) => Vec::new(),
             (_, Some(root)) => Repo::open(root)
                 .and_then(|r| r.compare_refs())
                 .unwrap_or_default(),
@@ -178,6 +238,7 @@ impl Workspace {
             kind,
             query: String::new(),
             at: 0,
+            open_only: false,
             items: Vec::new(),
             refs,
         });
@@ -252,6 +313,9 @@ impl Workspace {
                     },
                 })
                 .collect();
+        }
+        if matches!(p.kind, Kind::Switch) {
+            return self.switch_items(query, p.open_only);
         }
         if matches!(p.kind, Kind::Recent) {
             let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
@@ -429,6 +493,12 @@ impl Workspace {
         let Some(palette) = &mut self.palette else {
             return;
         };
+        if event.keystroke.key == "tab" && matches!(palette.kind, Kind::Switch) {
+            palette.open_only = !palette.open_only;
+            palette.at = 0;
+            self.refresh_palette();
+            return cx.notify();
+        }
         match input::edit(
             &mut palette.query,
             &mut self.field_edit,
@@ -536,7 +606,14 @@ impl Workspace {
             }
             Pick::Branch(ix) => {
                 self.palette = None;
+                if self.requests.current.is_some() {
+                    self.leave_request(cx);
+                }
                 self.select_branch(ix, None, cx);
+            }
+            Pick::Request(iid) => {
+                self.palette = None;
+                self.select_request(iid, cx);
             }
             Pick::Command(cmd) => {
                 self.palette = None;
@@ -597,11 +674,13 @@ impl Workspace {
             Kind::Recent => "Recent places — files, commits, merge requests",
             Kind::Structure => "Functions and types this file changes",
             Kind::Bookmarks => "Bookmarks — lines marked with F3",
+            Kind::Switch if p.open_only => "Switch to — only what is not reviewed yet   ⇥ all",
+            Kind::Switch => "Switch to a branch or a merge request   ⇥ only not reviewed",
             Kind::Base => "Compare — pick the base: a branch, a tag or a commit",
             Kind::Head(_) => "Compare — pick what to compare with it",
         };
         let title = match &p.kind {
-            Kind::Jump | Kind::Recent | Kind::Structure | Kind::Bookmarks => None,
+            Kind::Jump | Kind::Recent | Kind::Structure | Kind::Bookmarks | Kind::Switch => None,
             Kind::Base => Some("Compare · step 1 of 2".to_owned()),
             Kind::Head((name, _)) => Some(format!("Compare · {name} … ?")),
         };
@@ -663,6 +742,8 @@ impl Workspace {
                     Kind::Structure => "No function or type of this file is changed (or the language is not known).",
                     Kind::Jump if p.query.is_empty() => "Type to search.",
                     Kind::Jump => "Nothing matches.",
+                    Kind::Switch if p.open_only => "Nothing left to review here.",
+                    Kind::Switch => "No branch or merge request by that name.",
                     _ => "No branch, tag or commit by that name.",
                 })
         });
@@ -754,5 +835,6 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::ZoomIn => Box::new(ZoomIn),
         Cmd::ZoomOut => Box::new(ZoomOut),
         Cmd::ZoomReset => Box::new(ZoomReset),
+        Cmd::Switch => Box::new(SwitchTo),
     }
 }

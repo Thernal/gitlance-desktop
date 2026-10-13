@@ -26,6 +26,9 @@ pub struct Store {
     /// `root|commit` of every head whose whole diff was reviewed: a branch or merge request whose tip
     /// is one of them shows ✓, and a new push (a new tip) takes it away.
     heads: HashSet<String>,
+    /// `root|commit` → (files reviewed, files) of the last whole diff read up to that head: how far
+    /// a branch or request got, for the lists.
+    progress: HashMap<String, (u32, u32)>,
 }
 
 impl Store {
@@ -35,7 +38,46 @@ impl Store {
             .lines()
             .map(str::to_owned)
             .collect();
+        store.progress = storage::read("reviewed-progress.txt")
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.split('\t');
+                let key = parts.next()?.to_owned();
+                let done = parts.next()?.parse().ok()?;
+                let total = parts.next()?.parse().ok()?;
+                Some((key, (done, total)))
+            })
+            .collect();
         store
+    }
+
+    /// How far the whole diff up to `head` got: (files reviewed, files).
+    pub fn head_progress(&self, root: &str, head: git2::Oid) -> Option<(u32, u32)> {
+        self.progress.get(&Self::head_key(root, head)).copied()
+    }
+
+    fn set_progress(&mut self, root: &str, head: git2::Oid, done: u32, total: u32) {
+        let key = Self::head_key(root, head);
+        if self.progress.get(&key) == Some(&(done, total)) {
+            return;
+        }
+        if done == 0 {
+            self.progress.remove(&key);
+        } else {
+            self.progress.insert(key, (done, total));
+        }
+        while self.progress.len() > 500 {
+            if let Some(k) = self.progress.keys().next().cloned() {
+                self.progress.remove(&k);
+            }
+        }
+        let mut lines: Vec<String> = self
+            .progress
+            .iter()
+            .map(|(k, (d, t))| format!("{k}\t{d}\t{t}"))
+            .collect();
+        lines.sort_unstable();
+        storage::save("reviewed-progress.txt", lines.join("\n") + "\n");
     }
 
     fn save_heads(&self) {
@@ -103,7 +145,7 @@ impl Store {
         }
         Self {
             marks,
-            heads: HashSet::new(),
+            ..Self::default()
         }
     }
 
@@ -297,7 +339,23 @@ impl Workspace {
         }
         if whole {
             self.reviewed.set_head(&root, head, done);
+            if let Some((reviewed, total)) = self.review_progress() {
+                self.reviewed
+                    .set_progress(&root, head, reviewed as u32, total as u32);
+            }
         }
+    }
+
+    /// How far the review of the branch or request ending at `head` got, when it started and is
+    /// not done: (files reviewed, files).
+    pub(super) fn head_part(&self, head: git2::Oid) -> Option<(u32, u32)> {
+        let root = self.root.as_ref()?.display().to_string();
+        if self.reviewed.head_done(&root, head) {
+            return None;
+        }
+        self.reviewed
+            .head_progress(&root, head)
+            .filter(|&(done, total)| done > 0 && done < total)
     }
 
     /// Whether the whole diff of a branch or request ending at `head` was reviewed.

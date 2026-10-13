@@ -4,6 +4,10 @@
 use super::px;
 use super::{ISLAND_RADIUS, Workspace, theme};
 use gpui::{ClickEvent, Context, FontWeight, MouseButton, div, prelude::*};
+use std::sync::atomic::AtomicBool;
+
+/// The card was shown at launch in this run already (a new tab does not show it again).
+pub static SHOWN: AtomicBool = AtomicBool::new(false);
 
 /// (group, [(keys, what it does)]).
 const GROUPS: &[(&str, &[(&str, &str)])] = &[
@@ -14,6 +18,8 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌃1 ⌃2 ⌃3 ⌃4", "branches, commits, files, diff"),
             ("j k", "next / previous commit"),
             ("h l  ← →", "previous / next file"),
+            ("[  ]", "previous / next file"),
+            ("⌘B", "switch to a branch or a merge request"),
             ("n p", "next / previous change"),
             (
                 "v  ⇧v",
@@ -67,7 +73,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌥E ⌥W", "full file, whitespace"),
             ("⌥⌘B", "annotate: who wrote each line"),
             ("⌥⌘1 ⌥⌘2 ⌥⌘3", "branches, files, merge requests"),
-            ("⌘.", "the diff alone"),
+            ("⌘.", "zen: the diff alone, the keys of a review below"),
             ("⌘+  ⌘−  ⌘0", "interface bigger, smaller, actual size"),
             ("⌘T ⌘W ⌘1…9", "tabs"),
             ("⌥⌘M", "new merge request"),
@@ -146,6 +152,8 @@ impl Workspace {
                     div()
                         .occlude()
                         .w(px(760.))
+                        // Taller than the window, the groups scroll; the switch stays in view.
+                        .max_h(gpui::relative(0.86))
                         .flex()
                         .flex_col()
                         .gap_3()
@@ -184,13 +192,67 @@ impl Workspace {
                         )
                         .child(
                             div()
+                                .id("shortcut-groups")
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
                                 .flex()
                                 .flex_wrap()
                                 .gap_x(px(24.))
                                 .gap_y(px(16.))
                                 .children(groups),
-                        ),
+                        )
+                        .child(self.render_launch_switch(cx)),
                 ),
         )
+    }
+
+    /// "Show this when GitLance starts", and that ⌘/ or `?` brings it back.
+    fn render_launch_switch(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let on = self.settings.keys_at_launch;
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .pt(px(4.))
+            .border_t_1()
+            .border_color(theme::island_border())
+            .child(
+                div()
+                    .id("keys-at-launch")
+                    .pt(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .size(px(14.))
+                            .rounded(px(3.))
+                            .border_2()
+                            .border_color(if on { theme::accent() } else { theme::faint() })
+                            .when(on, |s| s.bg(theme::accent()))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(10.))
+                            .text_color(theme::base())
+                            .child(if on { "✓" } else { "" }),
+                    )
+                    .child("Show this when GitLance starts")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.settings.keys_at_launch = !this.settings.keys_at_launch;
+                        this.settings.save();
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .pt(px(8.))
+                    .flex_1()
+                    .text_size(px(12.))
+                    .text_color(theme::faint())
+                    .child("? or ⌘/ shows it again, and Help → Keyboard Shortcuts"),
+            )
     }
 }
