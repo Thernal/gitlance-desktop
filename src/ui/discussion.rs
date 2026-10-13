@@ -45,9 +45,10 @@ impl Source {
 }
 
 /// The card of a discussion: a quiet surface with no outline (variant D, `d-calm.html`). Being
-/// selected is a rail on its left edge in the source's colour — never a ring, since an outline
-/// means only "you are typing here".
+/// selected is a rail on its left edge in the source's colour, bending with the card's corners —
+/// never a ring, since an outline means only "you are typing here".
 pub fn frame(source: Source, selected: bool) -> Div {
+    const RAIL: f32 = 3.;
     div()
         .relative()
         .w_full()
@@ -56,7 +57,13 @@ pub fn frame(source: Source, selected: bool) -> Div {
         .flex_col()
         .rounded(px(10.))
         .bg(theme::panel())
-        .pl(px(14.))
+        // The rail takes its width out of the padding, so the text does not move.
+        .when(selected, |s| {
+            s.border_l(px(RAIL))
+                .border_color(source.color())
+                .pl(px(14. - RAIL))
+        })
+        .when(!selected, |s| s.pl(px(14.)))
         .pr(px(14.))
         .pt(px(10.))
         .pb(px(12.))
@@ -64,16 +71,6 @@ pub fn frame(source: Source, selected: bool) -> Div {
         .text_size(px(13.))
         .line_height(px(20.))
         .text_color(theme::text())
-        .children(selected.then(|| {
-            div()
-                .absolute()
-                .left_0()
-                .top(px(10.))
-                .bottom(px(10.))
-                .w(px(3.))
-                .rounded_r(px(3.))
-                .bg(source.color())
-        }))
 }
 
 /// The source's pill at the start of a header bar.
