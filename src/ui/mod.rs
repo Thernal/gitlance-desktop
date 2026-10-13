@@ -12,6 +12,7 @@ mod findfiles;
 mod format;
 mod icons;
 mod input;
+mod keymap;
 mod keys;
 mod lists;
 mod markdown;
@@ -161,127 +162,132 @@ const GAP: f32 = 8.;
 const ISLAND_RADIUS: f32 = 10.;
 const ROW_RADIUS: f32 = 6.;
 
+/// The keys of the app as shipped; `keymap.txt` changes them (`keymap.rs`).
+fn default_bindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("cmd-o", Open, None),
+        KeyBinding::new("cmd-r", Refresh, None),
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
+        KeyBinding::new("cmd-f", Find, Some("Workspace")),
+        KeyBinding::new("cmd-shift-f", FindCommits, Some("Workspace")),
+        KeyBinding::new("cmd-p", FilterFiles, Some("Workspace")),
+        KeyBinding::new("cmd-[", GoBack, Some("Workspace")),
+        KeyBinding::new("cmd-]", GoForward, Some("Workspace")),
+        KeyBinding::new("cmd-alt-1", ToggleSidebar, Some("Workspace")),
+        KeyBinding::new("cmd-alt-2", ToggleFiles, Some("Workspace")),
+        KeyBinding::new("cmd-alt-3", ToggleRequests, Some("Workspace")),
+        KeyBinding::new("c", CommentLine, Some("Workspace && !Typing")),
+        KeyBinding::new(
+            "cmd-shift-enter",
+            SubmitReview,
+            Some("Workspace && !Typing"),
+        ),
+        KeyBinding::new("cmd-alt-m", CreateRequest, Some("Workspace && !Typing")),
+        KeyBinding::new("a", ApproveRequest, Some("Workspace && !Typing")),
+        KeyBinding::new("cmd-b", SwitchTo, Some("Workspace && !Typing")),
+        KeyBinding::new("alt-n", NextDraft, Some("Workspace && !Typing")),
+        KeyBinding::new("alt-p", PreviousDraft, Some("Workspace && !Typing")),
+        KeyBinding::new("?", ShowShortcuts, Some("Workspace && !Typing")),
+        KeyBinding::new("cmd-/", ShowShortcuts, Some("Workspace")),
+        KeyBinding::new("shift-n", NextThread, Some("Workspace && !Typing")),
+        KeyBinding::new("shift-p", PreviousThread, Some("Workspace && !Typing")),
+        KeyBinding::new("r", ReplyThread, Some("Workspace && !Typing")),
+        KeyBinding::new("x", ResolveThread, Some("Workspace && !Typing")),
+        KeyBinding::new("o", ToggleThread, Some("Workspace && !Typing")),
+        KeyBinding::new("cmd-shift-r", ToggleComments, Some("Workspace && !Typing")),
+        KeyBinding::new("v", MarkReviewed, Some("Workspace && !Typing")),
+        KeyBinding::new("cmd-e", OpenRecent, Some("Workspace")),
+        KeyBinding::new("cmd-=", ZoomIn, Some("Workspace")),
+        KeyBinding::new("cmd-+", ZoomIn, Some("Workspace")),
+        KeyBinding::new("cmd-shift-=", ZoomIn, Some("Workspace")),
+        KeyBinding::new("cmd--", ZoomOut, Some("Workspace")),
+        KeyBinding::new("cmd-_", ZoomOut, Some("Workspace")),
+        KeyBinding::new("cmd-0", ZoomReset, Some("Workspace")),
+        KeyBinding::new("f3", ToggleBookmark, Some("Workspace && !Typing")),
+        KeyBinding::new("cmd-f3", ShowBookmarks, Some("Workspace")),
+        KeyBinding::new("cmd-shift-o", ShowStructure, Some("Workspace")),
+        KeyBinding::new("cmd-alt-b", ToggleAnnotate, Some("Workspace && !Typing")),
+        KeyBinding::new("cmd-alt-f", FindInFiles, Some("Workspace")),
+        KeyBinding::new("shift-v", ToggleReviewed, Some("Workspace && !Typing")),
+        KeyBinding::new("tab", NextZone, Some("Workspace && !Typing")),
+        KeyBinding::new("shift-tab", PreviousZone, Some("Workspace && !Typing")),
+        KeyBinding::new("enter", Activate, Some("Workspace && !Typing")),
+        KeyBinding::new("pagedown", PageDown, Some("Workspace && !Typing")),
+        KeyBinding::new("space", PageDown, Some("Workspace && !Typing")),
+        KeyBinding::new("pageup", PageUp, Some("Workspace && !Typing")),
+        KeyBinding::new("shift-space", PageUp, Some("Workspace && !Typing")),
+        KeyBinding::new("home", DiffStart, Some("Workspace && !Typing")),
+        KeyBinding::new("end", DiffEnd, Some("Workspace && !Typing")),
+        KeyBinding::new("h", PreviousFile, Some("Workspace && !Typing")),
+        KeyBinding::new("l", NextFile, Some("Workspace && !Typing")),
+        KeyBinding::new("[", PreviousFile, Some("Workspace && !Typing")),
+        KeyBinding::new("]", NextFile, Some("Workspace && !Typing")),
+        KeyBinding::new("ctrl-1", FocusBranches, Some("Workspace")),
+        KeyBinding::new("ctrl-2", FocusCommits, Some("Workspace")),
+        KeyBinding::new("ctrl-3", FocusFiles, Some("Workspace")),
+        KeyBinding::new("ctrl-4", FocusDiffZone, Some("Workspace")),
+        KeyBinding::new("cmd-t", NewTab, Some("Workspace")),
+        KeyBinding::new("cmd-w", CloseTab, Some("Workspace")),
+        KeyBinding::new("cmd-shift-t", ReopenTab, Some("Workspace")),
+        KeyBinding::new("cmd-shift-]", NextTab, Some("Workspace")),
+        KeyBinding::new("cmd-shift-[", PreviousTab, Some("Workspace")),
+        KeyBinding::new("cmd-1", Tab1, Some("Workspace")),
+        KeyBinding::new("cmd-2", Tab2, Some("Workspace")),
+        KeyBinding::new("cmd-3", Tab3, Some("Workspace")),
+        KeyBinding::new("cmd-4", Tab4, Some("Workspace")),
+        KeyBinding::new("cmd-5", Tab5, Some("Workspace")),
+        KeyBinding::new("cmd-6", Tab6, Some("Workspace")),
+        KeyBinding::new("cmd-7", Tab7, Some("Workspace")),
+        KeyBinding::new("cmd-8", Tab8, Some("Workspace")),
+        KeyBinding::new("cmd-9", Tab9, Some("Workspace")),
+        KeyBinding::new("cmd-.", FocusDiff, Some("Workspace")),
+        KeyBinding::new("cmd-c", CopySelection, Some("Workspace")),
+        KeyBinding::new("cmd-a", SelectAll, Some("Workspace && !Typing")),
+        KeyBinding::new("f7", NextChange, Some("Workspace")),
+        KeyBinding::new("shift-f7", PreviousChange, Some("Workspace")),
+        KeyBinding::new("n", NextChange, Some("Workspace && !Typing")),
+        KeyBinding::new("p", PreviousChange, Some("Workspace && !Typing")),
+        KeyBinding::new("cmd-g", NextMatch, Some("Workspace")),
+        KeyBinding::new("cmd-shift-g", PreviousMatch, Some("Workspace")),
+        KeyBinding::new(
+            "up",
+            PreviousCommit,
+            Some("Workspace && !Palette && !Caret"),
+        ),
+        KeyBinding::new("down", NextCommit, Some("Workspace && !Palette && !Caret")),
+        KeyBinding::new("up", PaletteUp, Some("Palette")),
+        KeyBinding::new("down", PaletteDown, Some("Palette")),
+        KeyBinding::new("cmd-k", OpenPalette, Some("Workspace")),
+        KeyBinding::new("cmd-shift-c", Compare, Some("Workspace")),
+        // Bare letters and arrows are typing while the search field is active.
+        KeyBinding::new("k", PreviousCommit, Some("Workspace && !Typing")),
+        KeyBinding::new("j", NextCommit, Some("Workspace && !Typing")),
+        KeyBinding::new("left", PreviousFile, Some("Workspace && !Typing")),
+        KeyBinding::new("right", NextFile, Some("Workspace && !Typing")),
+        KeyBinding::new("w", CycleMode, Some("Workspace && !Typing")),
+        KeyBinding::new("alt-u", ToggleUnified, Some("Workspace")),
+        KeyBinding::new("alt-d", CycleMode, Some("Workspace")),
+        KeyBinding::new("alt-z", ToggleWrap, Some("Workspace")),
+        KeyBinding::new("alt-e", ToggleFullContext, Some("Workspace")),
+        KeyBinding::new("alt-w", ToggleWhitespace, Some("Workspace")),
+        KeyBinding::new("alt-m", ToggleRichComments, Some("Workspace && !Typing")),
+        KeyBinding::new("cmd-alt-l", LeaveRequest, Some("Workspace")),
+        KeyBinding::new(
+            "alt-shift-v",
+            ToggleAllReviewed,
+            Some("Workspace && !Typing"),
+        ),
+        KeyBinding::new("alt-down", NextRequest, Some("Workspace && !Typing")),
+        KeyBinding::new("alt-up", PreviousRequest, Some("Workspace && !Typing")),
+    ]
+}
+
 pub fn run(path: Option<PathBuf>) {
     gpui_platform::application()
         .with_assets(icons::Icons)
         .run(move |cx: &mut App| {
-            cx.bind_keys([
-                KeyBinding::new("cmd-o", Open, None),
-                KeyBinding::new("cmd-r", Refresh, None),
-                KeyBinding::new("cmd-q", Quit, None),
-                KeyBinding::new("cmd-,", OpenSettings, None),
-                KeyBinding::new("cmd-f", Find, Some("Workspace")),
-                KeyBinding::new("cmd-shift-f", FindCommits, Some("Workspace")),
-                KeyBinding::new("cmd-p", FilterFiles, Some("Workspace")),
-                KeyBinding::new("cmd-[", GoBack, Some("Workspace")),
-                KeyBinding::new("cmd-]", GoForward, Some("Workspace")),
-                KeyBinding::new("cmd-alt-1", ToggleSidebar, Some("Workspace")),
-                KeyBinding::new("cmd-alt-2", ToggleFiles, Some("Workspace")),
-                KeyBinding::new("cmd-alt-3", ToggleRequests, Some("Workspace")),
-                KeyBinding::new("c", CommentLine, Some("Workspace && !Typing")),
-                KeyBinding::new(
-                    "cmd-shift-enter",
-                    SubmitReview,
-                    Some("Workspace && !Typing"),
-                ),
-                KeyBinding::new("cmd-alt-m", CreateRequest, Some("Workspace && !Typing")),
-                KeyBinding::new("a", ApproveRequest, Some("Workspace && !Typing")),
-                KeyBinding::new("cmd-b", SwitchTo, Some("Workspace && !Typing")),
-                KeyBinding::new("alt-n", NextDraft, Some("Workspace && !Typing")),
-                KeyBinding::new("alt-p", PreviousDraft, Some("Workspace && !Typing")),
-                KeyBinding::new("?", ShowShortcuts, Some("Workspace && !Typing")),
-                KeyBinding::new("cmd-/", ShowShortcuts, Some("Workspace")),
-                KeyBinding::new("shift-n", NextThread, Some("Workspace && !Typing")),
-                KeyBinding::new("shift-p", PreviousThread, Some("Workspace && !Typing")),
-                KeyBinding::new("r", ReplyThread, Some("Workspace && !Typing")),
-                KeyBinding::new("x", ResolveThread, Some("Workspace && !Typing")),
-                KeyBinding::new("o", ToggleThread, Some("Workspace && !Typing")),
-                KeyBinding::new("cmd-shift-r", ToggleComments, Some("Workspace && !Typing")),
-                KeyBinding::new("v", MarkReviewed, Some("Workspace && !Typing")),
-                KeyBinding::new("cmd-e", OpenRecent, Some("Workspace")),
-                KeyBinding::new("cmd-=", ZoomIn, Some("Workspace")),
-                KeyBinding::new("cmd-+", ZoomIn, Some("Workspace")),
-                KeyBinding::new("cmd-shift-=", ZoomIn, Some("Workspace")),
-                KeyBinding::new("cmd--", ZoomOut, Some("Workspace")),
-                KeyBinding::new("cmd-_", ZoomOut, Some("Workspace")),
-                KeyBinding::new("cmd-0", ZoomReset, Some("Workspace")),
-                KeyBinding::new("f3", ToggleBookmark, Some("Workspace && !Typing")),
-                KeyBinding::new("cmd-f3", ShowBookmarks, Some("Workspace")),
-                KeyBinding::new("cmd-shift-o", ShowStructure, Some("Workspace")),
-                KeyBinding::new("cmd-alt-b", ToggleAnnotate, Some("Workspace && !Typing")),
-                KeyBinding::new("cmd-alt-f", FindInFiles, Some("Workspace")),
-                KeyBinding::new("shift-v", ToggleReviewed, Some("Workspace && !Typing")),
-                KeyBinding::new("tab", NextZone, Some("Workspace && !Typing")),
-                KeyBinding::new("shift-tab", PreviousZone, Some("Workspace && !Typing")),
-                KeyBinding::new("enter", Activate, Some("Workspace && !Typing")),
-                KeyBinding::new("pagedown", PageDown, Some("Workspace && !Typing")),
-                KeyBinding::new("space", PageDown, Some("Workspace && !Typing")),
-                KeyBinding::new("pageup", PageUp, Some("Workspace && !Typing")),
-                KeyBinding::new("shift-space", PageUp, Some("Workspace && !Typing")),
-                KeyBinding::new("home", DiffStart, Some("Workspace && !Typing")),
-                KeyBinding::new("end", DiffEnd, Some("Workspace && !Typing")),
-                KeyBinding::new("h", PreviousFile, Some("Workspace && !Typing")),
-                KeyBinding::new("l", NextFile, Some("Workspace && !Typing")),
-                KeyBinding::new("[", PreviousFile, Some("Workspace && !Typing")),
-                KeyBinding::new("]", NextFile, Some("Workspace && !Typing")),
-                KeyBinding::new("ctrl-1", FocusBranches, Some("Workspace")),
-                KeyBinding::new("ctrl-2", FocusCommits, Some("Workspace")),
-                KeyBinding::new("ctrl-3", FocusFiles, Some("Workspace")),
-                KeyBinding::new("ctrl-4", FocusDiffZone, Some("Workspace")),
-                KeyBinding::new("cmd-t", NewTab, Some("Workspace")),
-                KeyBinding::new("cmd-w", CloseTab, Some("Workspace")),
-                KeyBinding::new("cmd-shift-t", ReopenTab, Some("Workspace")),
-                KeyBinding::new("cmd-shift-]", NextTab, Some("Workspace")),
-                KeyBinding::new("cmd-shift-[", PreviousTab, Some("Workspace")),
-                KeyBinding::new("cmd-1", Tab1, Some("Workspace")),
-                KeyBinding::new("cmd-2", Tab2, Some("Workspace")),
-                KeyBinding::new("cmd-3", Tab3, Some("Workspace")),
-                KeyBinding::new("cmd-4", Tab4, Some("Workspace")),
-                KeyBinding::new("cmd-5", Tab5, Some("Workspace")),
-                KeyBinding::new("cmd-6", Tab6, Some("Workspace")),
-                KeyBinding::new("cmd-7", Tab7, Some("Workspace")),
-                KeyBinding::new("cmd-8", Tab8, Some("Workspace")),
-                KeyBinding::new("cmd-9", Tab9, Some("Workspace")),
-                KeyBinding::new("cmd-.", FocusDiff, Some("Workspace")),
-                KeyBinding::new("cmd-c", CopySelection, Some("Workspace")),
-                KeyBinding::new("cmd-a", SelectAll, Some("Workspace && !Typing")),
-                KeyBinding::new("f7", NextChange, Some("Workspace")),
-                KeyBinding::new("shift-f7", PreviousChange, Some("Workspace")),
-                KeyBinding::new("n", NextChange, Some("Workspace && !Typing")),
-                KeyBinding::new("p", PreviousChange, Some("Workspace && !Typing")),
-                KeyBinding::new("cmd-g", NextMatch, Some("Workspace")),
-                KeyBinding::new("cmd-shift-g", PreviousMatch, Some("Workspace")),
-                KeyBinding::new(
-                    "up",
-                    PreviousCommit,
-                    Some("Workspace && !Palette && !Caret"),
-                ),
-                KeyBinding::new("down", NextCommit, Some("Workspace && !Palette && !Caret")),
-                KeyBinding::new("up", PaletteUp, Some("Palette")),
-                KeyBinding::new("down", PaletteDown, Some("Palette")),
-                KeyBinding::new("cmd-k", OpenPalette, Some("Workspace")),
-                KeyBinding::new("cmd-shift-c", Compare, Some("Workspace")),
-                // Bare letters and arrows are typing while the search field is active.
-                KeyBinding::new("k", PreviousCommit, Some("Workspace && !Typing")),
-                KeyBinding::new("j", NextCommit, Some("Workspace && !Typing")),
-                KeyBinding::new("left", PreviousFile, Some("Workspace && !Typing")),
-                KeyBinding::new("right", NextFile, Some("Workspace && !Typing")),
-                KeyBinding::new("w", CycleMode, Some("Workspace && !Typing")),
-                KeyBinding::new("alt-u", ToggleUnified, Some("Workspace")),
-                KeyBinding::new("alt-d", CycleMode, Some("Workspace")),
-                KeyBinding::new("alt-z", ToggleWrap, Some("Workspace")),
-                KeyBinding::new("alt-e", ToggleFullContext, Some("Workspace")),
-                KeyBinding::new("alt-w", ToggleWhitespace, Some("Workspace")),
-                KeyBinding::new("alt-m", ToggleRichComments, Some("Workspace && !Typing")),
-                KeyBinding::new("cmd-alt-l", LeaveRequest, Some("Workspace")),
-                KeyBinding::new(
-                    "alt-shift-v",
-                    ToggleAllReviewed,
-                    Some("Workspace && !Typing"),
-                ),
-                KeyBinding::new("alt-down", NextRequest, Some("Workspace && !Typing")),
-                KeyBinding::new("alt-up", PreviousRequest, Some("Workspace && !Typing")),
-            ]);
+            keymap::install(default_bindings(), cx);
             if !cfg!(feature = "snapshot") || std::env::var_os("GITLANCE_SNAPSHOT").is_none() {
                 crate::dock::set_icon();
             }
@@ -773,6 +779,8 @@ pub struct Workspace {
     error: Option<SharedString>,
     /// Errors shown as toasts (`toast.rs`).
     toasts: toast::Toasts,
+    /// The action whose new key Settings → Keyboard is waiting for.
+    recording: Option<&'static str>,
     /// Zen (⌘.): what the branches and files islands were before it hid them.
     zen: Option<(bool, bool)>,
     /// The Submit review card (`submit.rs`).
@@ -953,6 +961,7 @@ impl Workspace {
             submit: None,
             draft_at: None,
             zen: None,
+            recording: None,
             title: String::new(),
             branches: Vec::new(),
             branch: None,
@@ -3930,7 +3939,10 @@ impl Render for Workspace {
         div()
             .id("workspace")
             .key_context(
-                if self.find.text.is_some()
+                // Recording a key in Settings → Keyboard: no binding may take it first.
+                if self.recording.is_some() {
+                    "Recording"
+                } else if self.find.text.is_some()
                     || self.dfind.is_some()
                     || self.compose.is_some()
                     || self.field.is_some()
@@ -4104,6 +4116,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::palette_up))
             .on_action(cx.listener(Self::palette_down))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.recording.is_some() {
+                    return this.record_key(event, cx);
+                }
                 this.find_key(event, window, cx)
             }))
             .on_action(cx.listener(Self::toggle_wrap))

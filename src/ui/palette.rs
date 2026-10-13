@@ -719,10 +719,17 @@ impl Workspace {
                             .text_color(theme::muted())
                             .child(item.detail.clone()),
                     )
-                    .children(
-                        (!item.key.is_empty())
-                            .then(|| super::keys::caps(item.key, super::keys::On::Plain)),
-                    )
+                    .children({
+                        // A command whose key was changed in Settings → Keyboard shows the new one.
+                        let key = match item.pick {
+                            Pick::Command(cmd) => cx
+                                .global::<super::keymap::Keymap>()
+                                .shown(command_action(cmd).as_ref())
+                                .unwrap_or_else(|| item.key.to_owned()),
+                            _ => item.key.to_owned(),
+                        };
+                        (!key.is_empty()).then(|| super::keys::caps(&key, super::keys::On::Plain))
+                    })
                     .on_click(
                         cx.listener(move |this, _, window, cx| {
                             this.run_palette_item(ix, window, cx)

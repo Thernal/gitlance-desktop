@@ -190,6 +190,7 @@ impl Workspace {
                                         })),
                                 ),
                         )
+                        .children(self.render_changed_keys(cx))
                         .child(
                             div()
                                 .id("shortcut-groups")
@@ -205,6 +206,36 @@ impl Workspace {
                         .child(self.render_launch_switch(cx)),
                 ),
         )
+    }
+
+    /// The keys changed in Settings → Keyboard, above the shipped ones the card lists.
+    fn render_changed_keys(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let changes = cx.global::<super::keymap::Keymap>().changes();
+        (!changes.is_empty()).then(|| {
+            div()
+                .px_3()
+                .py_2()
+                .rounded(px(super::ROW_RADIUS))
+                .bg(theme::hover())
+                .text_size(px(12.))
+                .text_color(theme::muted())
+                .child(format!(
+                    "Changed by you: {} — the list below shows the shipped keys.",
+                    changes
+                        .iter()
+                        .map(|(label, keys)| {
+                            let keys: Vec<String> =
+                                keys.iter().map(|k| super::keymap::symbols(k)).collect();
+                            if keys.is_empty() {
+                                format!("{label} (no key)")
+                            } else {
+                                format!("{label} {}", keys.join(" "))
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" · ")
+                ))
+        })
     }
 
     /// "Show this when GitLance starts", and that ⌘/ or `?` brings it back.

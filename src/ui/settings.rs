@@ -336,7 +336,8 @@ impl Workspace {
                                 "Runs git fetch --all --prune for this repository every 5 minutes and when the window comes back to the front, so other people’s force pushes show up as versions. It writes remote-tracking refs and objects — the one exception to the read-only rule — and uses your own git, SSH agent and VPN. Off until you turn it on, per repository.",
                                 fetch,
                             ))
-                            .children(gitlab),
+                            .children(gitlab)
+                            .child(self.render_keyboard_settings(cx)),
                     ),
             )
     }
@@ -407,4 +408,122 @@ fn switch(id: &'static str, on: bool) -> gpui::Stateful<gpui::Div> {
         } else {
             theme::muted()
         }))
+}
+
+impl Workspace {
+    /// Settings → Keyboard: every action with its keys; Change waits for the next key, Reset
+    /// takes the shipped ones back, and a key two actions share is shown in red.
+    fn render_keyboard_settings(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        use super::keymap::{self, Keymap};
+        use super::keys::{self, On};
+        let entries = cx.global::<Keymap>().entries();
+        use super::discussion::{Kind, button};
+        let rows = entries.into_iter().enumerate().map(|(ix, e)| {
+            let name = e.name;
+            let waiting = self.recording == Some(name);
+            let caps = div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .children(
+                    e.keys
+                        .iter()
+                        .map(|k| keys::caps(&keymap::symbols(k), On::Plain)),
+                )
+                .children(e.keys.is_empty().then(|| {
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme::faint())
+                        .child("no key")
+                }));
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .py(px(6.))
+                .border_b_1()
+                .border_color(theme::island_border())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .when(e.changed, |s| s.font_weight(FontWeight::SEMIBOLD))
+                                .child(e.label),
+                        )
+                        .children(e.clash.map(|(key, other)| {
+                            div()
+                                .text_size(px(12.))
+                                .text_color(theme::removed())
+                                .child(format!("{} is also {other}", keymap::symbols(&key)))
+                        })),
+                )
+                .child(if waiting {
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme::accent())
+                        .child("Press the new key — esc cancels, ⌫ leaves none")
+                } else {
+                    caps
+                })
+                .child(
+                    button(
+                        ("key-change", ix),
+                        if waiting { "Cancel" } else { "Change" },
+                        None,
+                        Kind::Plain,
+                    )
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.recording = if waiting { None } else { Some(name) };
+                            cx.notify();
+                        },
+                    )),
+                )
+                .children(e.changed.then(|| {
+                    button(("key-reset", ix), "Reset", None, Kind::Quiet).on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            keymap::set(name, None, cx);
+                            cx.set_menus(super::menus(&this.options));
+                            cx.notify();
+                        },
+                    ))
+                }))
+        });
+        div()
+            .flex()
+            .flex_col()
+            .child(heading("Keyboard"))
+            .child(
+                div()
+                    .pt(px(4.))
+                    .pb(px(8.))
+                    .text_size(px(12.))
+                    .text_color(theme::muted())
+                    .child("Change gives an action one new key in place of its keys. The changes are kept in keymap.txt in GitLance’s Application Support folder; Reset brings the shipped keys back."),
+            )
+            .children(rows)
+    }
+
+    /// The key pressed while Settings → Keyboard waits for one.
+    pub(super) fn record_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+        let Some(name) = self.recording.take() else {
+            return;
+        };
+        let key = &event.keystroke;
+        let plain = !(key.modifiers.platform
+            || key.modifiers.alt
+            || key.modifiers.control
+            || key.modifiers.shift);
+        match key.key.as_str() {
+            "escape" if plain => {}
+            "backspace" if plain => super::keymap::set(name, Some(Vec::new()), cx),
+            _ => super::keymap::set(name, Some(vec![key.unparse()]), cx),
+        }
+        cx.set_menus(super::menus(&self.options));
+        cx.notify();
+    }
 }
