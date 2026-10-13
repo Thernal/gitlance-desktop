@@ -232,6 +232,129 @@ impl Workspace {
         ));
 
         let gitlab = self.render_gitlab_settings(cx);
+        let section = self.settings_section;
+        let column = || div().flex().flex_col().gap_5();
+        let content: gpui::AnyElement = match section {
+            Section::Diff => column()
+                .child(item(
+                    "Changed words",
+                    "How the words that changed inside a changed line are marked, in Words and Structural modes.",
+                    marks,
+                ))
+                .child(
+                    div()
+                        .rounded(px(ISLAND_RADIUS))
+                        .overflow_hidden()
+                        .bg(theme::editor())
+                        .border_1()
+                        .border_color(theme::island_border())
+                        .child(diff_view::mark_preview(s.mark_style)),
+                )
+                .child(item(
+                    "Default mode",
+                    "What a diff opens in. Lines, Words and Structural are also in the toolbar and the View menu.",
+                    modes,
+                ))
+                .child(item(
+                    "Interface size",
+                    "How big everything in the window is, 60 % to 250 %. ⌘+ and ⌘− change it anywhere, ⌘0 puts it back; a click on the percentage does the same.",
+                    ui_zoom,
+                ))
+                .child(item(
+                    "Code size",
+                    "The code in a diff, as a share of the interface size, 60 % to 250 %. It follows the interface size too, so this is only for making code larger or smaller than the rest.",
+                    zoom,
+                ))
+                .child(item(
+                    "Fold generated files",
+                    "Lock files, minified and generated code (Cargo.lock, package-lock.json, *.min.js, *.pb.go …) start folded when they change by more than 40 lines. They stay in the file list, tagged “generated”; one click shows them.",
+                    fold,
+                ))
+                .child(item(
+                    "Format comments as markdown",
+                    "Draws headings, lists, code, tables and links in comments — GitLab discussions are written in markdown. Off shows the text as written; ⌥M or Raw / Rich beside a comment switches it anywhere.",
+                    rich,
+                ))
+                .into_any_element(),
+            Section::General => column()
+                .child(item(
+                    "Appearance",
+                    "Follow the system, or stay dark. Only the dark theme exists so far, so both look the same until a light one is designed.",
+                    appearance,
+                ))
+                .child(item(
+                    "Open files in",
+                    "The editor behind “Open in …” on a file or a line. It opens the file in the working tree.",
+                    if installed.is_empty() {
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::faint())
+                            .child("Android Studio, Zed or VS Code not found")
+                            .into_any_element()
+                    } else {
+                        editors.into_any_element()
+                    },
+                ))
+                .into_any_element(),
+            Section::Repository => column()
+                .child(item(
+                    "Refresh when the repository changes",
+                    "Re-reads refs and history when something outside the app commits, amends or rebases. Never writes to the repository.",
+                    refresh,
+                ))
+                .child(item(
+                    "Fetch in the background",
+                    "Runs git fetch --all --prune for this repository every 5 minutes and when the window comes back to the front, so other people’s force pushes show up as versions. It writes remote-tracking refs and objects — the one exception to the read-only rule — and uses your own git, SSH agent and VPN. Off until you turn it on, per repository.",
+                    fetch,
+                ))
+                .into_any_element(),
+            Section::Requests => gitlab.unwrap_or_else(|| {
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme::muted())
+                    .child("This repository has no GitLab remote, so there are no merge requests to set up. GitHub pull requests are not supported yet.")
+                    .into_any_element()
+            }),
+            Section::Keyboard => self.render_keyboard_settings(cx).into_any_element(),
+        };
+        let nav = div()
+            .w(px(200.))
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .p(px(12.))
+            .border_r_1()
+            .border_color(theme::island_border())
+            .child(
+                div()
+                    .px(px(10.))
+                    .pt(px(8.))
+                    .pb(px(12.))
+                    .text_size(px(17.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Settings"),
+            )
+            .children(Section::ALL.map(|sec| {
+                div()
+                    .id(sec.label())
+                    .h(px(30.))
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(super::ROW_RADIUS))
+                    .cursor_pointer()
+                    .when(sec == section, |s| {
+                        s.bg(theme::selected()).text_color(theme::text())
+                    })
+                    .when(sec != section, |s| s.text_color(theme::muted()))
+                    .hover(|s| s.bg(theme::hover()))
+                    .child(sec.label())
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.settings_section = sec;
+                        cx.notify();
+                    }))
+            }));
         div()
             .flex_1()
             .min_w_0()
@@ -241,105 +364,74 @@ impl Workspace {
             .pb(px(GAP))
             .child(
                 island()
-                    .id("settings")
                     .flex_1()
+                    .flex_row()
                     .bg(theme::editor())
-                    .overflow_y_scroll()
+                    .child(nav)
                     .child(
                         div()
-                            .w_full()
-                            .max_w(px(760.))
-                            .mx_auto()
-                            .flex()
-                            .flex_col()
-                            .gap_5()
-                            .p(px(24.))
+                            .id("settings")
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_y_scroll()
                             .child(
                                 div()
+                                    .w_full()
+                                    .max_w(px(760.))
+                                    .mx_auto()
                                     .flex()
-                                    .items_center()
-                                    .child(div().flex_1().text_size(px(17.)).font_weight(FontWeight::SEMIBOLD).child("Settings"))
-                                    .child(button("settings-done", "Done", "esc").on_click(cx.listener(
-                                        |this, _: &ClickEvent, _, cx| {
-                                            this.settings_open = false;
-                                            cx.notify();
-                                        },
-                                    ))),
-                            )
-                            .child(heading("Diff"))
-                            .child(item(
-                                "Changed words",
-                                "How the words that changed inside a changed line are marked, in Words and Structural modes.",
-                                marks,
-                            ))
-                            .child(
-                                div()
-                                    .rounded(px(ISLAND_RADIUS))
-                                    .overflow_hidden()
-                                    .bg(theme::editor())
-                                    .border_1()
-                                    .border_color(theme::island_border())
-                                    .child(diff_view::mark_preview(s.mark_style)),
-                            )
-                            .child(item(
-                                "Default mode",
-                                "What a diff opens in. Lines, Words and Structural are also in the toolbar and the View menu.",
-                                modes,
-                            ))
-                            .child(item(
-                                "Interface size",
-                                "How big everything in the window is, 60 % to 250 %. ⌘+ and ⌘− change it anywhere, ⌘0 puts it back; a click on the percentage does the same.",
-                                ui_zoom,
-                            ))
-                            .child(item(
-                                "Code size",
-                                "The code in a diff, as a share of the interface size, 60 % to 250 %. It follows the interface size too, so this is only for making code larger or smaller than the rest.",
-                                zoom,
-                            ))
-                            .child(item(
-                                "Fold generated files",
-                                "Lock files, minified and generated code (Cargo.lock, package-lock.json, *.min.js, *.pb.go …) start folded when they change by more than 40 lines. They stay in the file list, tagged “generated”; one click shows them.",
-                                fold,
-                            ))
-                            .child(item(
-                                "Format comments as markdown",
-                                "Draws headings, lists, code, tables and links in comments — GitLab discussions are written in markdown. Off shows the text as written; ⌥M or Raw / Rich beside a comment switches it anywhere.",
-                                rich,
-                            ))
-                            .child(heading("General"))
-                            .child(item(
-                                "Appearance",
-                                "Follow the system, or stay dark. Only the dark theme exists so far, so both look the same until a light one is designed.",
-                                appearance,
-                            ))
-                            .child(item(
-                                "Open files in",
-                                "The editor behind “Open in …” on a file or a line. It opens the file in the working tree.",
-                                if installed.is_empty() {
-                                    div()
-                                        .text_size(px(12.))
-                                        .text_color(theme::faint())
-                                        .child("Android Studio, Zed or VS Code not found")
-                                        .into_any_element()
-                                } else {
-                                    editors.into_any_element()
-                                },
-                            ))
-                            .child(heading("Repository"))
-                            .child(item(
-                                "Refresh when the repository changes",
-                                "Re-reads refs and history when something outside the app commits, amends or rebases. Never writes to the repository.",
-                                refresh,
-                            ))
-                            .child(item(
-                                "Fetch in the background",
-                                "Runs git fetch --all --prune for this repository every 5 minutes and when the window comes back to the front, so other people’s force pushes show up as versions. It writes remote-tracking refs and objects — the one exception to the read-only rule — and uses your own git, SSH agent and VPN. Off until you turn it on, per repository.",
-                                fetch,
-                            ))
-                            .children(gitlab)
-                            .child(self.render_keyboard_settings(cx)),
+                                    .flex_col()
+                                    .gap_5()
+                                    .p(px(24.))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .child(div().flex_1().child(heading(section.label())))
+                                            .child(
+                                                button("settings-done", "Done", "esc").on_click(
+                                                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                        this.settings_open = false;
+                                                        cx.notify();
+                                                    }),
+                                                ),
+                                            ),
+                                    )
+                                    .child(content),
+                            ),
                     ),
             )
+    }
+}
+
+/// The parts of Settings, in its left column.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum Section {
+    #[default]
+    Diff,
+    General,
+    Repository,
+    Requests,
+    Keyboard,
+}
+
+impl Section {
+    const ALL: [Section; 5] = [
+        Section::Diff,
+        Section::General,
+        Section::Repository,
+        Section::Requests,
+        Section::Keyboard,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Section::Diff => "Diff",
+            Section::General => "General",
+            Section::Repository => "Repository",
+            Section::Requests => "Merge requests",
+            Section::Keyboard => "Keyboard",
+        }
     }
 }
 
@@ -411,36 +503,49 @@ fn switch(id: &'static str, on: bool) -> gpui::Stateful<gpui::Div> {
 }
 
 impl Workspace {
-    /// Settings → Keyboard: every action with its keys; Change waits for the next key, Reset
-    /// takes the shipped ones back, and a key two actions share is shown in red.
+    /// Settings → Keyboard: every action with its keys, filtered by name or key. Change waits for
+    /// the next key, Reset takes the shipped ones back; a changed action has a dot, and a key two
+    /// actions share is outlined in red, the other one named in its tooltip.
     fn render_keyboard_settings(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        use super::discussion::{Kind, button};
         use super::keymap::{self, Keymap};
         use super::keys::{self, On};
-        let entries = cx.global::<Keymap>().entries();
-        use super::discussion::{Kind, button};
+        let query = self.keys_filter.trim().to_lowercase();
+        let entries: Vec<_> = cx
+            .global::<Keymap>()
+            .entries()
+            .into_iter()
+            .filter(|e| matches_keys(e, &query))
+            .collect();
+        let count = entries.len();
         let rows = entries.into_iter().enumerate().map(|(ix, e)| {
             let name = e.name;
             let waiting = self.recording == Some(name);
-            let caps = div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .children(
-                    e.keys
-                        .iter()
-                        .map(|k| keys::caps(&keymap::symbols(k), On::Plain)),
-                )
-                .children(e.keys.is_empty().then(|| {
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme::faint())
-                        .child("no key")
-                }));
+            let clash = e.clash.clone();
+            let keys = e.keys.iter().map(|k| {
+                let mine = clash
+                    .as_ref()
+                    .filter(|(key, _)| key == k)
+                    .map(|(_, other)| {
+                        gpui::SharedString::from(format!("Also {other} — the one you set wins"))
+                    });
+                div()
+                    .id(gpui::SharedString::from(format!("key-{name}-{k}")))
+                    .p(px(2.))
+                    .rounded(px(5.))
+                    .when(mine.is_some(), |s| {
+                        s.border_1().border_color(theme::removed())
+                    })
+                    .child(keys::caps(&keymap::symbols(k), On::Plain))
+                    .when_some(mine, |s, tip| {
+                        s.tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
+                    })
+            });
             div()
                 .flex()
                 .items_center()
                 .gap_3()
-                .py(px(6.))
+                .min_h(px(44.))
                 .border_b_1()
                 .border_color(theme::island_border())
                 .child(
@@ -448,64 +553,103 @@ impl Workspace {
                         .flex_1()
                         .min_w_0()
                         .flex()
-                        .flex_col()
+                        .items_center()
+                        .gap_2()
                         .child(
                             div()
-                                .when(e.changed, |s| s.font_weight(FontWeight::SEMIBOLD))
-                                .child(e.label),
+                                .flex_none()
+                                .size(px(6.))
+                                .rounded_full()
+                                .when(e.changed, |s| s.bg(theme::accent())),
                         )
-                        .children(e.clash.map(|(key, other)| {
-                            div()
-                                .text_size(px(12.))
-                                .text_color(theme::removed())
-                                .child(format!("{} is also {other}", keymap::symbols(&key)))
-                        })),
+                        .child(div().truncate().child(e.label)),
                 )
-                .child(if waiting {
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme::accent())
-                        .child("Press the new key — esc cancels, ⌫ leaves none")
-                } else {
-                    caps
-                })
                 .child(
-                    button(
-                        ("key-change", ix),
-                        if waiting { "Cancel" } else { "Change" },
-                        None,
-                        Kind::Plain,
-                    )
-                    .on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            this.recording = if waiting { None } else { Some(name) };
-                            cx.notify();
-                        },
-                    )),
+                    div()
+                        .flex_none()
+                        .w(px(200.))
+                        .flex()
+                        .justify_end()
+                        .items_center()
+                        .gap(px(6.))
+                        .when(waiting, |s| {
+                            s.child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(theme::accent())
+                                    .child("Press a key…"),
+                            )
+                        })
+                        .when(!waiting, |s| s.children(keys))
+                        .when(!waiting && e.keys.is_empty(), |s| {
+                            s.child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(theme::faint())
+                                    .child("no key"),
+                            )
+                        }),
                 )
-                .children(e.changed.then(|| {
-                    button(("key-reset", ix), "Reset", None, Kind::Quiet).on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            keymap::set(name, None, cx);
-                            cx.set_menus(super::menus(&this.options));
-                            cx.notify();
-                        },
-                    ))
-                }))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(168.))
+                        .flex()
+                        .justify_end()
+                        .gap(px(6.))
+                        .children(e.changed.then(|| {
+                            button(("key-reset", ix), "Reset", None, Kind::Quiet).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    keymap::set(name, None, cx);
+                                    cx.set_menus(super::menus(&this.options));
+                                    cx.notify();
+                                }),
+                            )
+                        }))
+                        .child(
+                            button(
+                                ("key-change", ix),
+                                if waiting { "Cancel" } else { "Change" },
+                                None,
+                                Kind::Plain,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _: &ClickEvent, _, cx| {
+                                    this.recording = if waiting { None } else { Some(name) };
+                                    cx.notify();
+                                },
+                            )),
+                        ),
+                )
         });
         div()
             .flex()
             .flex_col()
-            .child(heading("Keyboard"))
             .child(
                 div()
-                    .pt(px(4.))
-                    .pb(px(8.))
+                    .pb(px(12.))
                     .text_size(px(12.))
                     .text_color(theme::muted())
-                    .child("Change gives an action one new key in place of its keys. The changes are kept in keymap.txt in GitLance’s Application Support folder; Reset brings the shipped keys back."),
+                    .child("Change gives an action one new key in place of its keys; esc cancels, ⌫ leaves it without one. The changes are kept in keymap.txt in GitLance’s Application Support folder; Reset brings the shipped keys back."),
+            )
+            .child(
+                div()
+                    .pb(px(8.))
+                    .child(self.render_field(
+                        "keys-filter",
+                        super::lists::Field::Keys,
+                        "Filter by name or key — mark, ⌘B, cmd-b",
+                        cx,
+                    )),
             )
             .children(rows)
+            .children((count == 0).then(|| {
+                div()
+                    .py(px(12.))
+                    .text_size(px(12.))
+                    .text_color(theme::muted())
+                    .child("No action by that name or key.")
+            }))
     }
 
     /// The key pressed while Settings → Keyboard waits for one.
@@ -526,4 +670,17 @@ impl Workspace {
         cx.set_menus(super::menus(&self.options));
         cx.notify();
     }
+}
+
+/// Whether a keyboard row answers `query` (lower case): every word in its name, or a key written
+/// as the app writes it (`⌘B`) or as GPUI does (`cmd-b`).
+fn matches_keys(e: &super::keymap::Entry, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let label = e.label.to_lowercase();
+    query.split_whitespace().all(|w| label.contains(w))
+        || e.keys
+            .iter()
+            .any(|k| k.contains(query) || super::keymap::symbols(k).to_lowercase().contains(query))
 }

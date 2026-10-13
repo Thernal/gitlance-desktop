@@ -560,6 +560,12 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.open_settings(cx);
                             continue;
                         }
+                        "keyboard" => {
+                            this.open_settings(cx);
+                            this.settings_section = settings::Section::Keyboard;
+                            this.start_field(Field::Keys, cx);
+                            continue;
+                        }
                         "wrap" => Opt::Wrap,
                         "all-lines" => Opt::FullContext,
                         "whitespace" => Opt::Whitespace,
@@ -784,6 +790,10 @@ pub struct Workspace {
     error: Option<SharedString>,
     /// Errors shown as toasts (`toast.rs`).
     toasts: toast::Toasts,
+    /// What Settings → Keyboard is filtered by.
+    keys_filter: String,
+    /// The part of Settings shown.
+    settings_section: settings::Section,
     /// A selection in the text of a comment (`markdown::TextSel`).
     note_sel: Option<markdown::TextSel>,
     /// The action whose new key Settings → Keyboard is waiting for.
@@ -978,6 +988,8 @@ impl Workspace {
             zen: None,
             recording: None,
             note_sel: None,
+            settings_section: Default::default(),
+            keys_filter: String::new(),
             title: String::new(),
             branches: Vec::new(),
             branch: None,

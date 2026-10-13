@@ -305,6 +305,7 @@ impl Workspace {
                     ..Default::default()
                 },
             ),
+            Field::Keys => (&self.keys_filter, input::Look::default()),
         };
         div()
             .id(id)
@@ -359,6 +360,7 @@ impl Workspace {
             Field::Branches => &mut self.bfilter,
             Field::Files => &mut self.pfilter,
             Field::Token => &mut self.token_input,
+            Field::Keys => &mut self.keys_filter,
         };
         match input::edit(text, &mut self.field_edit, &event.keystroke, cx) {
             Edit::Escape => {
@@ -387,6 +389,8 @@ pub enum Field {
     Files,
     /// The GitLab token being typed or pasted in the connect panel.
     Token,
+    /// The filter of Settings → Keyboard.
+    Keys,
 }
 
 // ---- changed files ----------------------------------------------------------------------

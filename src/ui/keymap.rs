@@ -200,6 +200,15 @@ pub fn symbols(keys: &str) -> String {
                     out.push_str(sign);
                 }
             }
+            // F1 … F12 as written on the key.
+            let function = key.len() > 1
+                && key.starts_with('f')
+                && key[1..].bytes().all(|b| b.is_ascii_digit());
+            if function {
+                out.push('F');
+                out.push_str(&key[1..]);
+                return out;
+            }
             out.push_str(match key {
                 "enter" => "↵",
                 "escape" => "esc",
@@ -328,5 +337,6 @@ mod tests {
         assert_eq!(symbols("alt-down"), "⌥↓");
         assert_eq!(symbols("cmd--"), "⌘-");
         assert_eq!(symbols("ctrl-1"), "⌃1");
+        assert_eq!(symbols("cmd-f3"), "⌘F3");
     }
 }
