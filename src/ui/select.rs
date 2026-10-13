@@ -187,6 +187,7 @@ impl Workspace {
             || self.ffind.is_some()
             || self.goline.is_some()
             || self.newreq.is_some()
+            || self.submit.is_some()
             || self.field.is_some_and(|f| f != super::lists::Field::Token);
         typing
             .then(|| self.field_edit.selected_text().map(str::to_owned))

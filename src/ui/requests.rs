@@ -7,7 +7,7 @@ use super::rows::Row;
 use super::{Header, Selection, Workspace, format, island, island_label, plural, row, theme};
 use crate::git::{RefKind, Repo, Version};
 use crate::mr::{self, Draft, Mr, Pipeline, Thread};
-use gpui::{ClickEvent, Context, FontWeight, Task, WeakEntity, div, prelude::*};
+use gpui::{ClickEvent, Context, FontWeight, SharedString, Task, WeakEntity, div, prelude::*};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Side {
@@ -32,6 +32,8 @@ pub struct Requests {
     pub drafts: Vec<Draft>,
     /// The request's newest pipeline.
     pub pipeline: Option<Pipeline>,
+    /// Who approved the request, and where the reviewer stands.
+    pub approvals: Option<mr::Approvals>,
     /// The pushes GitLab kept for a request, as versions of this repository.
     pub versions: Option<(u64, Vec<Version>)>,
     version_task: Option<Task<()>>,
@@ -120,6 +122,8 @@ impl Workspace {
             self.requests.threads.clear();
             self.requests.drafts.clear();
             self.requests.pipeline = None;
+            self.requests.approvals = None;
+            self.draft_at = None;
         }
         self.requests.current = iid;
         let (Some(iid), Some(remote)) = (iid, self.web.clone()) else {
@@ -132,16 +136,18 @@ impl Workspace {
                     // Drafts need a recent GitLab; without them the rest still works.
                     let drafts = mr::drafts(&remote, iid).unwrap_or_default();
                     let pipeline = mr::pipeline(&remote, iid).ok().flatten();
-                    mr::threads(&remote, iid).map(|t| (t, drafts, pipeline))
+                    let approvals = mr::approvals(&remote, iid).ok();
+                    mr::threads(&remote, iid).map(|t| (t, drafts, pipeline, approvals))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if this.requests.current == Some(iid) {
                     match result {
-                        Ok((threads, drafts, pipeline)) => {
+                        Ok((threads, drafts, pipeline, approvals)) => {
                             this.requests.threads = threads;
                             this.requests.drafts = drafts;
                             this.requests.pipeline = pipeline;
+                            this.requests.approvals = approvals;
                         }
                         Err(e) => this.requests.error = Some(format!("{e:#}")),
                     }
@@ -342,6 +348,23 @@ impl Workspace {
                                     cx.notify();
                                 })),
                         ),
+                )
+                .children(
+                    self.requests
+                        .approvals
+                        .as_ref()
+                        .filter(|a| a.can && !a.mine && current.is_some())
+                        .map(|_| {
+                            button(
+                                "done-approve",
+                                format!("Approve !{}", current.unwrap_or_default()),
+                                "a",
+                                false,
+                            )
+                            .on_click(
+                                cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_approval(cx)),
+                            )
+                        }),
                 )
                 .children(next.clone().map(|(iid, title)| {
                     button("done-next", format!("Next: !{iid} {title}"), "⌥↓", true).on_click(
@@ -816,7 +839,7 @@ impl Workspace {
             .pr(px(12.))
             .py(px(6.))
             .child(
-                discussion::frame(Source::Pending, false)
+                discussion::frame(Source::Pending, self.draft_at == Some(ix))
                     .child(bar)
                     .child(div().child(discussion::note(
                         &self.me,
@@ -872,15 +895,71 @@ impl Workspace {
         self.request_action(move |remote| mr::resolve(&remote, iid, &id, resolved), cx);
     }
 
-    /// Publishes every pending comment: the review is submitted.
-    pub(super) fn submit_review(&mut self, cx: &mut Context<Self>) {
-        let Some(iid) = self.requests.current else {
+    /// `a`: approves the open request, or takes one's approval back.
+    pub(super) fn toggle_approval(&mut self, cx: &mut Context<Self>) {
+        let (Some(iid), Some(a)) = (self.requests.current, self.requests.approvals.clone()) else {
             return;
         };
-        if self.requests.drafts.is_empty() {
+        if !self.showing_request() {
             return;
         }
-        self.request_action(move |remote| mr::publish_drafts(&remote, iid), cx);
+        if a.mine {
+            self.request_action(move |remote| mr::unapprove(&remote, iid), cx);
+        } else if a.can {
+            let head = self
+                .requests
+                .list
+                .iter()
+                .find(|m| m.iid == iid)
+                .map(|m| m.head.clone())
+                .unwrap_or_default();
+            self.request_action(move |remote| mr::approve(&remote, iid, &head), cx);
+        } else {
+            self.error = Some("GitLab does not let you approve this merge request.".into());
+            cx.notify();
+        }
+    }
+
+    /// ⌥N / ⌥P: the next or previous of one's pending comments, across the files of the request.
+    pub(super) fn step_draft(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some(diff) = self.diff.as_ref().filter(|_| self.showing_request()) else {
+            return;
+        };
+        let mut order: Vec<(usize, u32, usize)> = self
+            .requests
+            .drafts
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, d)| {
+                let file = diff
+                    .files
+                    .iter()
+                    .position(|f| Some(f.path()) == d.path.as_deref())?;
+                Some((file, d.new_line.or(d.old_line)?, ix))
+            })
+            .collect();
+        if order.is_empty() {
+            return;
+        }
+        order.sort_unstable();
+        let at = self
+            .draft_at
+            .and_then(|d| order.iter().position(|&(_, _, ix)| ix == d));
+        let n = order.len();
+        let next = match (at, forward) {
+            (None, true) => 0,
+            (None, false) => n - 1,
+            (Some(i), true) => (i + 1) % n,
+            (Some(i), false) => (i + n - 1) % n,
+        };
+        let ix = order[next].2;
+        self.draft_at = Some(ix);
+        let d = &self.requests.drafts[ix];
+        if let Some(path) = d.path.clone() {
+            let (line, old) = (d.new_line.or(d.old_line).unwrap_or(1), d.new_line.is_none());
+            self.jump_to_line(&path, line, old, cx);
+        }
+        cx.notify();
     }
 
     fn discard_draft(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -926,7 +1005,28 @@ impl Workspace {
             Vec::new()
         };
         let pending = drafts.len();
-        let total = theirs.len() + drafts.len() + self.comments.len();
+        let (discussions, agents) = (theirs.len(), self.comments.len());
+        let total = discussions + pending + agents;
+        // Group headings once there is more than one kind; the pending ones say how to walk them.
+        let grouped = [discussions, pending, agents]
+            .iter()
+            .filter(|&&n| n > 0)
+            .count()
+            > 1;
+        let heading = |text: String, keys: Option<&'static str>| {
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px(px(14.))
+                .pt(px(10.))
+                .pb(px(4.))
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme::muted())
+                .child(div().flex_1().child(text.to_uppercase()))
+                .children(keys.map(|k| super::keys::caps(k, super::keys::On::Plain)))
+        };
         let item = |id: (&'static str, usize), tone, where_: String, body: String| {
             div()
                 .id(id)
@@ -1053,7 +1153,7 @@ impl Workspace {
                 .font_weight(FontWeight::SEMIBOLD)
                 .cursor_pointer()
                 .child(format!("Submit review · {pending}"))
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.submit_review(cx)))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_submit(cx)))
         });
         // Slides in over the right edge of the diff; the diff keeps its width underneath.
         Some(
@@ -1108,8 +1208,19 @@ impl Workspace {
                         .min_h_0()
                         .overflow_y_scroll()
                         .pb(px(6.))
-                        .children(request_items)
+                        .children((pending > 0 && (grouped || pending > 1)).then(|| {
+                            heading(format!("Pending · {pending}"), Some("⌥N"))
+                        }))
                         .children(draft_items)
+                        .children(
+                            (grouped && discussions > 0)
+                                .then(|| heading(format!("Discussions · {discussions}"), None)),
+                        )
+                        .children(request_items)
+                        .children(
+                            (grouped && agents > 0)
+                                .then(|| heading(format!("For your agent · {agents}"), None)),
+                        )
                         .children(agent_items)
                         .children((total == 0).then(|| {
                             div()
@@ -1506,6 +1617,56 @@ impl Workspace {
                 .children(ago.map(|a| div().text_color(theme::faint()).child(a)))
                 .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url)))
         });
+        let approval = self.requests.approvals.clone().map(|a| {
+            let count = if a.required > 0 {
+                format!(" {}/{}", a.required - a.left.min(a.required), a.required)
+            } else if !a.by.is_empty() && !a.mine {
+                format!(" {}", a.by.len())
+            } else {
+                String::new()
+            };
+            let tip: SharedString = match (a.by.is_empty(), a.mine, a.can) {
+                (_, true, _) => format!("Approved by {} — a takes yours back", a.by.join(", ")),
+                (true, false, true) => "Approve this merge request  a".to_owned(),
+                (false, false, true) => format!("Approved by {} — a approves", a.by.join(", ")),
+                (true, false, false) => "No approvals yet".to_owned(),
+                (false, false, false) => format!("Approved by {}", a.by.join(", ")),
+            }
+            .into();
+            let (label, color) = if a.mine {
+                ("✓ Approved", theme::added())
+            } else if a.can {
+                ("Approve", theme::text())
+            } else {
+                ("✓", theme::muted())
+            };
+            div()
+                .id("approval")
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .px(px(8.))
+                .h(px(22.))
+                .rounded_full()
+                .border_1()
+                .border_color(if a.mine {
+                    theme::added()
+                } else {
+                    theme::island_border()
+                })
+                .text_size(px(12.))
+                .text_color(color)
+                .when(a.mine || a.can, |s| {
+                    s.cursor_pointer().hover(|s| s.bg(theme::hover()))
+                })
+                .child(format!("{label}{count}"))
+                .when(a.can && !a.mine, |s| {
+                    s.child(super::keys::caps("a", super::keys::On::Plain))
+                })
+                .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_approval(cx)))
+        });
         Some(
             div()
                 .flex()
@@ -1535,6 +1696,7 @@ impl Workspace {
                         ),
                 )
                 .children(pill)
+                .children(approval)
                 .child(
                     div()
                         .id("leave-request")

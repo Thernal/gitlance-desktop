@@ -70,6 +70,21 @@ pub struct Draft {
     pub old_line: Option<u32>,
 }
 
+/// Who approved a merge request, how many approvals it needs, and where the reviewer stands.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Approvals {
+    /// Names of those who approved.
+    pub by: Vec<String>,
+    /// Approvals the rules require (0 when there are no rules).
+    pub required: u32,
+    /// Approvals still missing.
+    pub left: u32,
+    /// The token's user approved it.
+    pub mine: bool,
+    /// The token's user may approve it (not the author on a project that forbids that, …).
+    pub can: bool,
+}
+
 /// One push of the merge request's branch, as GitLab keeps it: the commit it ended on, the commit
 /// the merge request was based on then, and when.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -329,26 +344,61 @@ fn call(
     method: &str,
     form: &[(&str, String)],
 ) -> Result<Value> {
-    let token = token(remote).ok_or_else(|| {
-        anyhow!("no GitLab token — add one in Settings, or put it in ~/.config/gitlab-token")
-    })?;
     let (host, project) = api(remote)?;
     let url = match endpoint.strip_prefix('/') {
         Some(rest) => format!("{host}/api/v4/{rest}"),
         None => format!("{host}/api/v4/projects/{project}/{endpoint}"),
     };
+    send(remote, &url, method, form, None)
+}
+
+/// A GraphQL query or mutation; its `errors` come back as an error.
+fn graphql(remote: &WebRemote, query: &str, variables: Value) -> Result<Value> {
+    let (host, _) = api(remote)?;
+    let body = serde_json::json!({ "query": query, "variables": variables }).to_string();
+    let value = send(
+        remote,
+        &format!("{host}/api/graphql"),
+        "POST",
+        &[],
+        Some(&body),
+    )?;
+    if let Some(first) = value
+        .get("errors")
+        .and_then(Value::as_array)
+        .and_then(|e| e.first())
+    {
+        bail!("GitLab would not take that: {}", text(first, "message"));
+    }
+    Ok(value)
+}
+
+/// Sends a request to `url`: form fields, or a JSON body.
+fn send(
+    remote: &WebRemote,
+    url: &str,
+    method: &str,
+    form: &[(&str, String)],
+    json: Option<&str>,
+) -> Result<Value> {
+    let token = token(remote).ok_or_else(|| {
+        anyhow!("no GitLab token — add one in Settings, or put it in ~/.config/gitlab-token")
+    })?;
+    let (host, _) = api(remote)?;
     let mut config = format!(
         "url = \"{}\"\nheader = \"PRIVATE-TOKEN: {}\"\n",
-        quote(&url),
+        quote(url),
         quote(&token)
     );
     if method != "GET" {
         config.push_str(&format!("request = \"{method}\"\n"));
     }
-    if !form.is_empty() {
-        for (name, value) in form {
-            config.push_str(&format!("data-urlencode = \"{name}={}\"\n", quote(value)));
-        }
+    for (name, value) in form {
+        config.push_str(&format!("data-urlencode = \"{name}={}\"\n", quote(value)));
+    }
+    if let Some(json) = json {
+        config.push_str("header = \"Content-Type: application/json\"\n");
+        config.push_str(&format!("data-raw = \"{}\"\n", quote(json)));
     }
     // The token goes in on stdin, not on the command line, where `ps` would show it.
     let mut child = Command::new("curl")
@@ -373,7 +423,7 @@ fn call(
         "401" | "403" => bail!("GitLab refused the token"),
         "404" => bail!("GitLab does not know this project (or the token cannot see it)"),
         "400" | "422" => bail!("GitLab would not take that: {}", message(body)),
-        "409" => bail!("A merge request for these branches already exists"),
+        "409" => bail!("GitLab refused it: {}", message(body)),
         other => bail!("GitLab answered {other}"),
     }
 }
@@ -539,6 +589,119 @@ pub fn reply(remote: &WebRemote, iid: u64, discussion: &str, body: &str) -> Resu
         "POST",
         &[("body", body.to_owned())],
     )?;
+    Ok(())
+}
+
+/// Who approved request `iid`, and whether the token's user did or may.
+pub fn approvals(remote: &WebRemote, iid: u64) -> Result<Approvals> {
+    let value = match fixture() {
+        Some(dir) => match std::fs::read_to_string(dir.join(format!("approvals-{iid}.json"))) {
+            Ok(text) => serde_json::from_str(&text)?,
+            Err(_) => return Ok(Approvals::default()),
+        },
+        None => get(remote, &format!("merge_requests/{iid}/approvals"))?,
+    };
+    Ok(parse_approvals(&value))
+}
+
+pub fn parse_approvals(value: &Value) -> Approvals {
+    let count = |key: &str| value.get(key).and_then(Value::as_u64).unwrap_or(0) as u32;
+    let flag = |key: &str| value.get(key).and_then(Value::as_bool).unwrap_or(false);
+    Approvals {
+        by: value
+            .get("approved_by")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|a| a.get("user"))
+            .map(|user| match text(user, "name") {
+                n if n.is_empty() => text(user, "username"),
+                n => n,
+            })
+            .collect(),
+        required: count("approvals_required"),
+        left: count("approvals_left"),
+        mine: flag("user_has_approved"),
+        can: flag("user_can_approve"),
+    }
+}
+
+/// Approves request `iid` as of `head`: GitLab refuses when its head moved on since.
+pub fn approve(remote: &WebRemote, iid: u64, head: &str) -> Result<()> {
+    if record(format!("approve {iid} {head}"))? {
+        return Ok(());
+    }
+    call(
+        remote,
+        &format!("merge_requests/{iid}/approve"),
+        "POST",
+        &[("sha", head.to_owned())],
+    )?;
+    Ok(())
+}
+
+/// Takes one's approval of request `iid` back.
+pub fn unapprove(remote: &WebRemote, iid: u64) -> Result<()> {
+    if record(format!("unapprove {iid}"))? {
+        return Ok(());
+    }
+    call(
+        remote,
+        &format!("merge_requests/{iid}/unapprove"),
+        "POST",
+        &[],
+    )?;
+    Ok(())
+}
+
+/// A comment on request `iid` as a whole (a review's summary).
+pub fn comment(remote: &WebRemote, iid: u64, body: &str) -> Result<()> {
+    if record(format!("note {iid} {body}"))? {
+        return Ok(());
+    }
+    request(
+        remote,
+        &format!("merge_requests/{iid}/notes"),
+        &[("body", body.to_owned())],
+    )?;
+    Ok(())
+}
+
+/// Marks the token's user as asking for changes on request `iid` (GitLab 17 and later; an older
+/// one answers with an error that says so).
+pub fn request_changes(remote: &WebRemote, iid: u64) -> Result<()> {
+    if record(format!("request-changes {iid}"))? {
+        return Ok(());
+    }
+    let user = call(remote, "/user", "GET", &[])?;
+    let id = user
+        .get("id")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("GitLab did not say who the token belongs to"))?;
+    let project = remote
+        .base
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split_once('/'))
+        .map(|(_, path)| path.to_owned())
+        .ok_or_else(|| anyhow!("no project in {}", remote.base))?;
+    let answer = graphql(
+        remote,
+        "mutation($project: ID!, $iid: String!, $user: UserID!) { \
+         mergeRequestUpdateReviewerState(input: { projectPath: $project, iid: $iid, \
+         userId: $user, state: REQUESTED_CHANGES }) { errors } }",
+        serde_json::json!({
+            "project": project,
+            "iid": iid.to_string(),
+            "user": format!("gid://gitlab/User/{id}"),
+        }),
+    )?;
+    let errors = &answer["data"]["mergeRequestUpdateReviewerState"]["errors"];
+    if let Some(first) = errors.as_array().and_then(|e| e.first()) {
+        bail!(
+            "GitLab would not take that: {}",
+            first.as_str().unwrap_or("error")
+        );
+    }
     Ok(())
 }
 
@@ -880,6 +1043,20 @@ mod tests {
         assert_eq!(threads[0].notes.len(), 2);
         assert!(!threads[0].resolved);
         assert_eq!(threads[1].path, None);
+    }
+
+    #[test]
+    fn approvals_read_who_approved_and_where_the_reviewer_stands() {
+        let value: Value = serde_json::from_str(
+            r#"{"approvals_required": 2, "approvals_left": 1, "user_has_approved": false,
+                "user_can_approve": true,
+                "approved_by": [{"user": {"name": "Anna", "username": "anna"}}]}"#,
+        )
+        .unwrap();
+        let a = parse_approvals(&value);
+        assert_eq!(a.by, vec!["Anna".to_owned()]);
+        assert_eq!((a.required, a.left, a.mine, a.can), (2, 1, false, true));
+        assert_eq!(parse_approvals(&Value::Null), Approvals::default());
     }
 
     #[test]

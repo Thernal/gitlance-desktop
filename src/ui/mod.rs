@@ -25,6 +25,7 @@ mod select;
 mod settings;
 mod shell;
 mod shortcuts;
+mod submit;
 mod theme;
 mod toast;
 mod watch;
@@ -94,6 +95,9 @@ actions!(
         PreviousRequest,
         CommentLine,
         SubmitReview,
+        ApproveRequest,
+        NextDraft,
+        PreviousDraft,
         CreateRequest,
         ShowShortcuts,
         ToggleThread,
@@ -180,6 +184,9 @@ pub fn run(path: Option<PathBuf>) {
                     Some("Workspace && !Typing"),
                 ),
                 KeyBinding::new("cmd-alt-m", CreateRequest, Some("Workspace && !Typing")),
+                KeyBinding::new("a", ApproveRequest, Some("Workspace && !Typing")),
+                KeyBinding::new("alt-n", NextDraft, Some("Workspace && !Typing")),
+                KeyBinding::new("alt-p", PreviousDraft, Some("Workspace && !Typing")),
                 KeyBinding::new("?", ShowShortcuts, Some("Workspace && !Typing")),
                 KeyBinding::new("shift-n", NextThread, Some("Workspace && !Typing")),
                 KeyBinding::new("shift-p", PreviousThread, Some("Workspace && !Typing")),
@@ -760,6 +767,10 @@ pub struct Workspace {
     error: Option<SharedString>,
     /// Errors shown as toasts (`toast.rs`).
     toasts: toast::Toasts,
+    /// The Submit review card (`submit.rs`).
+    submit: Option<submit::Submit>,
+    /// The pending comment ⌥N / ⌥P is on.
+    draft_at: Option<usize>,
     title: String,
     branches: Vec<BranchRef>,
     branch: Option<usize>,
@@ -931,6 +942,8 @@ impl Workspace {
             recent,
             error: None,
             toasts: Default::default(),
+            submit: None,
+            draft_at: None,
             title: String::new(),
             branches: Vec::new(),
             branch: None,
@@ -3871,12 +3884,14 @@ impl Render for Workspace {
                     || self.ffind.is_some()
                     || self.goline.is_some()
                     || self.newreq.is_some()
+                    || self.submit.is_some()
                 {
                     if self.palette.is_some() || self.ffind.is_some() {
                         "Workspace Typing Palette"
                     } else if self.compose.is_some()
                         || self.goline.is_some()
                         || self.typing_description()
+                        || self.submit.is_some()
                     {
                         // ↑ ↓ belong to the field: they move its caret or its line.
                         "Workspace Typing Caret"
@@ -3916,7 +3931,10 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::next_match))
             .on_action(cx.listener(Self::previous_match))
             .on_action(cx.listener(|this, _: &CommentLine, _, cx| this.open_goline(cx)))
-            .on_action(cx.listener(|this, _: &SubmitReview, _, cx| this.submit_review(cx)))
+            .on_action(cx.listener(|this, _: &SubmitReview, _, cx| this.open_submit(cx)))
+            .on_action(cx.listener(|this, _: &ApproveRequest, _, cx| this.toggle_approval(cx)))
+            .on_action(cx.listener(|this, _: &NextDraft, _, cx| this.step_draft(true, cx)))
+            .on_action(cx.listener(|this, _: &PreviousDraft, _, cx| this.step_draft(false, cx)))
             .on_action(cx.listener(|this, _: &CreateRequest, _, cx| this.open_create(None, cx)))
             .on_action(cx.listener(|this, _: &ShowShortcuts, _, cx| this.toggle_shortcuts(cx)))
             .on_action(cx.listener(|this, _: &NextThread, _, cx| this.step_thread(true, cx)))
@@ -4096,6 +4114,7 @@ impl Render for Workspace {
             .children(self.render_picker(cx))
             .children(self.render_find_files(cx))
             .children(self.render_create(cx))
+            .children(self.render_submit(cx))
             .children(self.render_shortcuts(cx))
             .children(self.render_palette(cx))
     }

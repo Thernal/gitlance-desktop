@@ -873,18 +873,19 @@ impl Workspace {
         let Some(layout) = self.field_lines.borrow().clone() else {
             return false;
         };
-        let moved = if let Some(compose) = self.compose.as_mut() {
+        // A card's field (the review summary, a description) is over the composer when both are open.
+        let moved = if let Some(text) = self.review_summary().or_else(|| self.description_text()) {
+            input::sync(&text, &mut self.field_edit);
             input::vertical(
-                &mut compose.edit,
+                &mut self.field_edit,
                 &layout,
                 &mut self.field_goal,
                 up,
                 m.shift,
             )
-        } else if let Some(text) = self.description_text() {
-            input::sync(&text, &mut self.field_edit);
+        } else if let Some(compose) = self.compose.as_mut() {
             input::vertical(
-                &mut self.field_edit,
+                &mut compose.edit,
                 &layout,
                 &mut self.field_goal,
                 up,
@@ -1404,7 +1405,10 @@ impl Workspace {
             }),
         );
         let layout = styled.layout().clone();
-        *self.field_lines.borrow_mut() = Some(layout.clone());
+        // A card over the diff (a review's summary, a description) owns the arrows while open.
+        if self.submit.is_none() && self.newreq.is_none() {
+            *self.field_lines.borrow_mut() = Some(layout.clone());
+        }
         let (for_caret, for_down, for_move) = (layout.clone(), layout.clone(), layout);
         let caret = compose.edit.caret();
         let (down, drag) = (this.clone(), this);

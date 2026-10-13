@@ -227,6 +227,9 @@ impl Workspace {
         if self.palette.is_some() {
             return self.palette_key(event, window, cx);
         }
+        if self.submit.is_some() {
+            return self.submit_key(event, cx);
+        }
         if self.newreq.is_some() {
             return self.newreq_key(event, cx);
         }
