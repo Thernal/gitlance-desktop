@@ -193,10 +193,7 @@ fn text_block(text_el: AnyElement, layout: TextLayout, text: &str, ctx: &mut Ctx
         )
         .child(text_el)
         .on_mouse_down(MouseButton::Left, move |event, _, cx| {
-            let at = for_down
-                .index_for_position(event.position)
-                .unwrap_or_else(|nearest| nearest)
-                .min(len);
+            let at = super::input::nearest_index(&for_down, event.position).min(len);
             on_down(
                 Press::Down {
                     note: note_down.clone(),
@@ -211,10 +208,7 @@ fn text_block(text_el: AnyElement, layout: TextLayout, text: &str, ctx: &mut Ctx
         })
         .on_mouse_move(move |event, _, cx| {
             if event.pressed_button == Some(MouseButton::Left) {
-                let at = for_move
-                    .index_for_position(event.position)
-                    .unwrap_or_else(|nearest| nearest)
-                    .min(len);
+                let at = super::input::nearest_index(&for_move, event.position).min(len);
                 on_move(
                     Press::Drag {
                         note: note_move.clone(),

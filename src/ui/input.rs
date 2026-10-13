@@ -50,6 +50,27 @@ pub fn caret_point(
     Some(at)
 }
 
+/// The offset nearest to `point` in a laid-out text: GPUI gives the start of the char under the
+/// point, so a point past a char's middle goes after it.
+pub fn nearest_index(layout: &TextLayout, point: gpui::Point<Pixels>) -> usize {
+    let text = layout.text();
+    let at = layout
+        .index_for_position(point)
+        .unwrap_or_else(|n| n)
+        .min(text.len());
+    let Some(c) = text[at..].chars().next().filter(|c| *c != '\n') else {
+        return at;
+    };
+    let next = at + c.len_utf8();
+    match (
+        layout.position_for_index(at),
+        layout.position_for_index(next),
+    ) {
+        (Some(a), Some(b)) if a.y == b.y && point.x - a.x > b.x - point.x => next,
+        _ => at,
+    }
+}
+
 /// Whether a press at height `y` that hit offset `index` was on the line below where the layout
 /// puts that offset: the start of a wrapped line.
 pub fn lower_line(layout: &TextLayout, index: usize, y: Pixels) -> bool {
@@ -137,12 +158,7 @@ pub fn drawn(
     };
     let height = layout.line_height();
     let bounds = layout.bounds();
-    let index = |x: Pixels, y: Pixels| {
-        layout
-            .index_for_position(gpui::point(x, y))
-            .unwrap_or_else(|nearest| nearest)
-            .min(len)
-    };
+    let index = |x: Pixels, y: Pixels| nearest_index(layout, gpui::point(x, y)).min(len);
     let target = match motion {
         Drawn::Up | Drawn::Down => {
             let x = *goal.get_or_insert(at.x);
@@ -301,9 +317,7 @@ pub fn text_body(
         .child(paint)
         .on_mouse_down(MouseButton::Left, move |event, _, cx| {
             if let Some(place) = &down {
-                let at = for_down
-                    .index_for_position(event.position)
-                    .unwrap_or_else(|nearest| nearest);
+                let at = nearest_index(&for_down, event.position);
                 cx.stop_propagation();
                 let lower = lower_line(&for_down, at, event.position.y);
                 place(
@@ -320,9 +334,7 @@ pub fn text_body(
             if let Some(place) = &drag
                 && event.pressed_button == Some(MouseButton::Left)
             {
-                let at = for_move
-                    .index_for_position(event.position)
-                    .unwrap_or_else(|nearest| nearest);
+                let at = nearest_index(&for_move, event.position);
                 place(from_move(at), true, 1, true, false, cx);
             }
         })

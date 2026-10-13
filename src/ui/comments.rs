@@ -1460,9 +1460,7 @@ impl Workspace {
                 .size_full(),
             )
             .on_mouse_down(MouseButton::Left, move |event, _, cx| {
-                let at = for_down
-                    .index_for_position(event.position)
-                    .unwrap_or_else(|nearest| nearest);
+                let at = input::nearest_index(&for_down, event.position);
                 let (shift, clicks) = (event.modifiers.shift, event.click_count);
                 let lower = input::lower_line(&for_down, at, event.position.y);
                 down.update(cx, |this, cx| {
@@ -1472,9 +1470,7 @@ impl Workspace {
             })
             .on_mouse_move(move |event, _, cx| {
                 if event.pressed_button == Some(MouseButton::Left) {
-                    let at = for_move
-                        .index_for_position(event.position)
-                        .unwrap_or_else(|nearest| nearest);
+                    let at = input::nearest_index(&for_move, event.position);
                     drag.update(cx, |this, cx| {
                         this.compose_place(at, true, 1, true, false, cx)
                     })
