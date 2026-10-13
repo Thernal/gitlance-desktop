@@ -779,6 +779,8 @@ pub struct Workspace {
     error: Option<SharedString>,
     /// Errors shown as toasts (`toast.rs`).
     toasts: toast::Toasts,
+    /// A selection in the text of a comment (`markdown::TextSel`).
+    note_sel: Option<markdown::TextSel>,
     /// The action whose new key Settings → Keyboard is waiting for.
     recording: Option<&'static str>,
     /// Zen (⌘.): what the branches and files islands were before it hid them.
@@ -962,6 +964,7 @@ impl Workspace {
             draft_at: None,
             zen: None,
             recording: None,
+            note_sel: None,
             title: String::new(),
             branches: Vec::new(),
             branch: None,

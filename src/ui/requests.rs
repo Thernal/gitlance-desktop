@@ -522,8 +522,14 @@ impl Workspace {
         let open = self.mr_open(ix);
         let focused = self.thread_at == Some(ix);
         let can_act = self.request_target().is_some();
-        let (fold, pick, reply, resolve, raw) =
-            (this.clone(), this.clone(), this.clone(), this.clone(), this);
+        let (fold, pick, reply, resolve, raw) = (
+            this.clone(),
+            this.clone(),
+            this.clone(),
+            this.clone(),
+            this.clone(),
+        );
+        let selecting = self.selecting(this);
         let first = &t.notes[0];
         let author = self
             .requests
@@ -601,6 +607,7 @@ impl Workspace {
                     self.settings.rich_comments,
                     format!("md-note-{ix}-{n}"),
                     self.link_base(),
+                    Some(selecting.clone()),
                 ),
                 n == last && !replying,
             )
@@ -836,6 +843,7 @@ impl Workspace {
             return div().into_any_element();
         };
         let id = d.id;
+        let selecting = self.selecting(this.clone());
         let (delete, raw) = (this.clone(), this);
         let bar = discussion::bar(("draft-bar", ix), true)
             .cursor_default()
@@ -882,6 +890,7 @@ impl Workspace {
                             self.settings.rich_comments,
                             format!("md-draft-{ix}"),
                             self.link_base(),
+                            Some(selecting),
                         ),
                         true,
                     ))),

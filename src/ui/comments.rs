@@ -1017,6 +1017,7 @@ impl Workspace {
             return div().into_any_element();
         };
         let open = !self.toggled_agent.contains(&id);
+        let selecting = self.selecting(this.clone());
         let (fold, delete, raw) = (this.clone(), this.clone(), this);
         let bar = discussion::bar(("agent-bar", id), open)
             .child(discussion::source_pill(Source::Agent))
@@ -1064,6 +1065,7 @@ impl Workspace {
                 self.settings.rich_comments,
                 format!("md-agent-{id}"),
                 None,
+                Some(selecting),
             ),
             true,
         );
@@ -1281,6 +1283,7 @@ impl Workspace {
                         true,
                         "md-compose",
                         self.link_base(),
+                        None,
                     ))
                 })
                 .into_any_element()

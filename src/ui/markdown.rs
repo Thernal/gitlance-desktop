@@ -7,9 +7,82 @@ use super::theme;
 use crate::highlight::{self, palette};
 use crate::markdown::{self, Block, Helper, Inline};
 use gpui::{
-    AnyElement, Div, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText,
-    SharedString, StrikethroughStyle, StyledText, UnderlineStyle, div, prelude::*,
+    AnyElement, App, Div, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText,
+    MouseButton, SharedString, StrikethroughStyle, StyledText, TextLayout, UnderlineStyle, div,
+    prelude::*,
 };
+use std::cell::RefCell;
+use std::ops::Range;
+use std::rc::Rc;
+
+/// A selection in the text of one comment. The comment's text blocks (paragraphs, headings, list
+/// items, lines of code) are numbered in reading order; an end is (block, byte in it).
+#[derive(Clone, Debug)]
+pub struct TextSel {
+    pub note: SharedString,
+    pub anchor: (usize, usize),
+    pub head: (usize, usize),
+    /// The blocks' text, for copying.
+    pub texts: Rc<RefCell<Vec<String>>>,
+}
+
+impl TextSel {
+    fn ends(&self) -> ((usize, usize), (usize, usize)) {
+        (self.anchor.min(self.head), self.anchor.max(self.head))
+    }
+
+    /// What is selected in block `block` of length `len`.
+    fn in_block(&self, block: usize, len: usize) -> Option<Range<usize>> {
+        let (start, end) = self.ends();
+        if block < start.0 || block > end.0 || start == end {
+            return None;
+        }
+        let from = if block == start.0 { start.1 } else { 0 };
+        let to = if block == end.0 { end.1 } else { len };
+        (from < to).then_some(from..to.min(len))
+    }
+
+    /// The selected text, blocks joined by line breaks; `None` when nothing is selected.
+    pub fn text(&self) -> Option<String> {
+        let (start, end) = self.ends();
+        if start == end {
+            return None;
+        }
+        let texts = self.texts.borrow();
+        let parts: Vec<&str> = (start.0..=end.0)
+            .filter_map(|b| {
+                let t = texts.get(b)?;
+                let range = self.in_block(b, t.len())?;
+                t.get(range)
+            })
+            .collect();
+        Some(parts.join("\n"))
+    }
+}
+
+/// A press in a comment's text.
+pub enum Press {
+    Down {
+        note: SharedString,
+        block: usize,
+        at: usize,
+        clicks: usize,
+        shift: bool,
+        texts: Rc<RefCell<Vec<String>>>,
+    },
+    Drag {
+        note: SharedString,
+        block: usize,
+        at: usize,
+    },
+}
+
+/// Selecting in comments: the selection now, and where presses go.
+#[derive(Clone)]
+pub struct Selecting {
+    pub current: Option<TextSel>,
+    pub on: Rc<dyn Fn(Press, &mut App)>,
+}
 
 /// Where relative links of a comment point: GitLab writes uploads as `/uploads/…`, relative to the
 /// project, and other pages relative to the host.
@@ -29,25 +102,32 @@ fn resolve(url: &str, base: Option<&str>) -> String {
 
 /// A comment's body: formatted when `rich` and it has markdown, else the text as written.
 /// `key` makes the ids of its links unique among the comments on screen.
+/// With `sel`, its text can be selected with the mouse (a drag, a double click for a word, three
+/// for a block) and copied.
 pub fn body(
     text: &str,
     rich: bool,
     key: impl Into<SharedString>,
     base: Option<&str>,
+    sel: Option<Selecting>,
 ) -> AnyElement {
-    if !rich {
-        return div().child(text.to_owned()).into_any_element();
-    }
-    let blocks = markdown::parse(text);
-    if !markdown::is_rich(&blocks) {
-        return div().child(text.to_owned()).into_any_element();
-    }
     let mut ctx = Ctx {
         key: key.into(),
         next: 0,
         base: base.map(str::to_owned),
+        sel,
+        blocks: 0,
+        texts: Rc::default(),
     };
-    blocks_of(&blocks, &mut ctx).into_any_element()
+    let blocks = rich.then(|| markdown::parse(text));
+    match blocks.filter(|b| markdown::is_rich(b)) {
+        Some(blocks) => blocks_of(&blocks, &mut ctx).into_any_element(),
+        None => {
+            let styled = StyledText::new(text.to_owned());
+            let layout = styled.layout().clone();
+            text_block(styled.into_any_element(), layout, text, &mut ctx)
+        }
+    }
 }
 
 /// Does `text` look different as markdown? Only then is the Rich/Raw switch worth showing.
@@ -59,6 +139,123 @@ struct Ctx {
     key: SharedString,
     next: usize,
     base: Option<String>,
+    sel: Option<Selecting>,
+    /// Text blocks drawn so far: the next one's number.
+    blocks: usize,
+    texts: Rc<RefCell<Vec<String>>>,
+}
+
+/// A block of text that can be selected: numbered, its selection painted under it, the mouse
+/// turned into presses. Without a `Selecting`, the text alone.
+fn text_block(text_el: AnyElement, layout: TextLayout, text: &str, ctx: &mut Ctx) -> AnyElement {
+    let Some(sel) = ctx.sel.clone() else {
+        return div().child(text_el).into_any_element();
+    };
+    let block = ctx.blocks;
+    ctx.blocks += 1;
+    {
+        let mut texts = ctx.texts.borrow_mut();
+        if texts.len() <= block {
+            texts.resize(block + 1, String::new());
+        }
+        texts[block] = text.to_owned();
+    }
+    let note = ctx.key.clone();
+    let range = sel
+        .current
+        .as_ref()
+        .filter(|s| s.note == note)
+        .and_then(|s| s.in_block(block, text.len()));
+    let (for_paint, for_down, for_move) = (layout.clone(), layout.clone(), layout);
+    let (on_down, on_move) = (sel.on.clone(), sel.on);
+    let (note_down, note_move) = (note.clone(), note);
+    let texts = ctx.texts.clone();
+    let len = text.len();
+    div()
+        .relative()
+        .cursor_text()
+        .child(
+            gpui::canvas(
+                |_, _, _| (),
+                move |_, _, window, _| {
+                    if let Some(r) = range.clone() {
+                        paint_selection(&for_paint, r, window);
+                    }
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        )
+        .child(text_el)
+        .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+            let at = for_down
+                .index_for_position(event.position)
+                .unwrap_or_else(|nearest| nearest)
+                .min(len);
+            on_down(
+                Press::Down {
+                    note: note_down.clone(),
+                    block,
+                    at,
+                    clicks: event.click_count,
+                    shift: event.modifiers.shift,
+                    texts: texts.clone(),
+                },
+                cx,
+            );
+        })
+        .on_mouse_move(move |event, _, cx| {
+            if event.pressed_button == Some(MouseButton::Left) {
+                let at = for_move
+                    .index_for_position(event.position)
+                    .unwrap_or_else(|nearest| nearest)
+                    .min(len);
+                on_move(
+                    Press::Drag {
+                        note: note_move.clone(),
+                        block,
+                        at,
+                    },
+                    cx,
+                );
+            }
+        })
+        .into_any_element()
+}
+
+/// The selection's tint over `range` of a laid-out text, line by line as it wraps.
+fn paint_selection(layout: &TextLayout, range: Range<usize>, window: &mut gpui::Window) {
+    use gpui::{Bounds, fill, point};
+    let (Some(start), Some(end)) = (
+        layout.position_for_index(range.start),
+        layout.position_for_index(range.end),
+    ) else {
+        return;
+    };
+    let height = layout.line_height();
+    let bounds = layout.bounds();
+    let tint = theme::selection();
+    let mut rect = |x0: gpui::Pixels, x1: gpui::Pixels, y: gpui::Pixels| {
+        if x1 > x0 {
+            window.paint_quad(fill(
+                Bounds::from_corners(point(x0, y), point(x1, y + height)),
+                tint,
+            ));
+        }
+    };
+    if start.y == end.y {
+        rect(start.x, end.x, start.y);
+        return;
+    }
+    rect(start.x, bounds.right(), start.y);
+    let mut y = start.y + height;
+    while y < end.y {
+        rect(bounds.left(), bounds.right(), y);
+        y += height;
+    }
+    rect(bounds.left(), end.x, end.y);
 }
 
 fn blocks_of(blocks: &[Block], ctx: &mut Ctx) -> Div {
@@ -86,7 +283,7 @@ fn block(block: &Block, ctx: &mut Ctx) -> AnyElement {
             }))
             .child(inline(i, ctx))
             .into_any_element(),
-        Block::Code { lang, text } => code_block(lang, text),
+        Block::Code { lang, text } => code_block(lang, text, ctx),
         Block::Quote(blocks) => blocks_of(blocks, ctx)
             .pl(px(10.))
             .border_l_2()
@@ -181,39 +378,44 @@ fn block(block: &Block, ctx: &mut Ctx) -> AnyElement {
 
 /// A fenced block: highlighted by its language; GitLab's `suggestion` blocks as the lines they
 /// would put in.
-fn code_block(lang: &str, text: &str) -> AnyElement {
+fn code_block(lang: &str, text: &str, ctx: &mut Ctx) -> AnyElement {
     let suggestion = lang.starts_with("suggestion");
     let spans = if suggestion {
         vec![Vec::new(); text.lines().count()]
     } else {
         highlight::highlight_lang(lang, text)
     };
-    let lines = text.split('\n').enumerate().map(|(n, line)| {
-        let runs = spans.get(n).cloned().unwrap_or_default();
-        let styled = StyledText::new(if line.is_empty() {
-            " ".to_owned()
-        } else {
-            line.to_owned()
+    let lines: Vec<Div> = text
+        .split('\n')
+        .enumerate()
+        .map(|(n, line)| {
+            let runs = spans.get(n).cloned().unwrap_or_default();
+            let styled = StyledText::new(if line.is_empty() {
+                " ".to_owned()
+            } else {
+                line.to_owned()
+            })
+            .with_highlights(
+                runs.into_iter()
+                    .filter(|s| s.range.end <= line.len())
+                    .map(|s| {
+                        (
+                            s.range,
+                            HighlightStyle {
+                                color: Some(theme::code(s.color)),
+                                font_style: s.italic.then_some(FontStyle::Italic),
+                                ..Default::default()
+                            },
+                        )
+                    }),
+            );
+            let layout = styled.layout().clone();
+            div()
+                .px(px(8.))
+                .when(suggestion, |s| s.bg(theme::added_line()))
+                .child(text_block(styled.into_any_element(), layout, line, ctx))
         })
-        .with_highlights(
-            runs.into_iter()
-                .filter(|s| s.range.end <= line.len())
-                .map(|s| {
-                    (
-                        s.range,
-                        HighlightStyle {
-                            color: Some(theme::code(s.color)),
-                            font_style: s.italic.then_some(FontStyle::Italic),
-                            ..Default::default()
-                        },
-                    )
-                }),
-        );
-        div()
-            .px(px(8.))
-            .when(suggestion, |s| s.bg(theme::added_line()))
-            .child(styled)
-    });
+        .collect();
     div()
         .flex()
         .flex_col()
@@ -291,22 +493,19 @@ fn inline(i: &Inline, ctx: &mut Ctx) -> AnyElement {
             Some((s.range.clone(), resolve(url, ctx.base.as_deref())))
         })
         .collect();
+    let layout = styled.layout().clone();
     if links.is_empty() {
-        return div().child(styled).into_any_element();
+        return text_block(styled.into_any_element(), layout, &i.text, ctx);
     }
     ctx.next += 1;
     let id = ElementId::NamedInteger(ctx.key.clone(), ctx.next as u64);
     let (ranges, urls): (Vec<_>, Vec<_>) = links.into_iter().unzip();
-    div()
-        .cursor_pointer()
-        .child(
-            InteractiveText::new(id, styled).on_click(ranges, move |ix, _, cx| {
-                if let Some(url) = urls.get(ix) {
-                    cx.open_url(url);
-                }
-            }),
-        )
-        .into_any_element()
+    let linked = InteractiveText::new(id, styled).on_click(ranges, move |ix, _, cx| {
+        if let Some(url) = urls.get(ix) {
+            cx.open_url(url);
+        }
+    });
+    text_block(linked.into_any_element(), layout, &i.text, ctx)
 }
 
 /// The icon and the name (with its key, if it has one) of a composer helper.
@@ -326,7 +525,7 @@ pub fn helper_look(h: Helper) -> (&'static str, &'static str) {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve;
+    use super::*;
 
     #[test]
     fn relative_links_point_into_the_project_or_the_host() {
@@ -341,5 +540,38 @@ mod tests {
         );
         assert_eq!(resolve("https://a.b/c", base), "https://a.b/c");
         assert_eq!(resolve("/x", None), "/x");
+    }
+
+    fn sel(anchor: (usize, usize), head: (usize, usize)) -> TextSel {
+        TextSel {
+            note: "n".into(),
+            anchor,
+            head,
+            texts: Rc::new(RefCell::new(vec![
+                "first para".into(),
+                "second one".into(),
+                "third".into(),
+            ])),
+        }
+    }
+
+    #[test]
+    fn a_selection_copies_across_blocks_in_reading_order() {
+        // Dragged upwards: the head is before the anchor.
+        assert_eq!(
+            sel((2, 3), (0, 6)).text().as_deref(),
+            Some("para\nsecond one\nthi")
+        );
+        assert_eq!(sel((1, 0), (1, 6)).text().as_deref(), Some("second"));
+        assert_eq!(sel((1, 4), (1, 4)).text(), None);
+    }
+
+    #[test]
+    fn a_block_shows_only_its_part() {
+        let s = sel((0, 6), (2, 3));
+        assert_eq!(s.in_block(0, 10), Some(6..10));
+        assert_eq!(s.in_block(1, 10), Some(0..10));
+        assert_eq!(s.in_block(2, 5), Some(0..3));
+        assert_eq!(s.in_block(3, 5), None);
     }
 }

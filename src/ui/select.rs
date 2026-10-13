@@ -83,6 +83,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.ctx_menu = None;
+        self.note_sel = None;
         let at = Pos { line, byte };
         let text = self.line_text(old, line);
         self.selecting = true;
@@ -170,8 +171,13 @@ impl Workspace {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // A selection in the field being typed in wins; with none there, the diff's.
-        if let Some(text) = self.field_selection().or_else(|| self.selected_text()) {
+        // A selection in the field being typed in wins; then one in a comment's text; then the
+        // diff's.
+        let text = self
+            .field_selection()
+            .or_else(|| self.note_sel.as_ref().and_then(|s| s.text()))
+            .or_else(|| self.selected_text());
+        if let Some(text) = text {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
@@ -264,5 +270,71 @@ mod tests {
         assert_eq!(word_at(text, 3), 3..4);
         assert_eq!(word_at(text, text.len()), text.len() - 1..text.len());
         assert_eq!(word_at("", 0), 0..0);
+    }
+}
+
+impl Workspace {
+    /// How the text of comments can be selected: the selection now, and presses back to here.
+    pub(super) fn selecting(&self, this: gpui::WeakEntity<Self>) -> super::markdown::Selecting {
+        super::markdown::Selecting {
+            current: self.note_sel.clone(),
+            on: std::rc::Rc::new(move |press, cx| {
+                this.update(cx, |this, cx| this.note_press(press, cx)).ok();
+            }),
+        }
+    }
+
+    /// A press in a comment's text: the caret (nothing selected yet), a word, the block, or
+    /// growing the selection with ⇧ or a drag. The diff's selection goes.
+    fn note_press(&mut self, press: super::markdown::Press, cx: &mut Context<Self>) {
+        use super::markdown::{Press, TextSel};
+        match press {
+            Press::Down {
+                note,
+                block,
+                at,
+                clicks,
+                shift,
+                texts,
+            } => {
+                self.sel = None;
+                self.ctx_menu = None;
+                let text = texts.borrow().get(block).cloned().unwrap_or_default();
+                let same = self.note_sel.as_ref().is_some_and(|s| s.note == note);
+                self.note_sel = Some(match (clicks, shift) {
+                    (1, true) if same => {
+                        let mut s = self.note_sel.clone().expect("checked");
+                        s.head = (block, at);
+                        s
+                    }
+                    (2, _) => {
+                        let w = word_at(&text, at);
+                        TextSel {
+                            note,
+                            anchor: (block, w.start),
+                            head: (block, w.end),
+                            texts,
+                        }
+                    }
+                    (c, _) if c >= 3 => TextSel {
+                        note,
+                        anchor: (block, 0),
+                        head: (block, text.len()),
+                        texts,
+                    },
+                    _ => TextSel {
+                        note,
+                        anchor: (block, at),
+                        head: (block, at),
+                        texts,
+                    },
+                });
+            }
+            Press::Drag { note, block, at } => match self.note_sel.as_mut() {
+                Some(s) if s.note == note => s.head = (block, at),
+                _ => return,
+            },
+        }
+        cx.notify();
     }
 }
