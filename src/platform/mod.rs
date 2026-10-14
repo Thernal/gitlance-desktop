@@ -19,7 +19,7 @@ use linux as os;
 
 use std::path::PathBuf;
 
-pub use os::{TRANSPARENT_TITLEBAR, set_icon};
+pub use os::{TRANSPARENT_TITLEBAR, owner_only, set_icon};
 
 /// The folder for what GitLance remembers between runs.
 pub fn data_dir() -> Option<PathBuf> {

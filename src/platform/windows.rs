@@ -25,3 +25,8 @@ pub fn launcher(launcher: &super::Launcher) -> Option<PathBuf> {
         .collect();
     super::on_path(launcher.on_path, &exts)
 }
+
+/// A file under the user's profile is already theirs alone; nothing to narrow.
+pub fn owner_only(_file: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
+}

@@ -43,3 +43,9 @@ pub fn launcher(launcher: &super::Launcher) -> Option<PathBuf> {
         })
     })
 }
+
+/// Makes `file` readable and writable by its owner only (a token).
+pub fn owner_only(file: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600))
+}

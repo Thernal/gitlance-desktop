@@ -165,7 +165,6 @@ fn token_file(home: &std::path::Path, host: &str) -> std::path::PathBuf {
 
 /// Keeps `token` for the host of `remote`, readable by the owner only.
 pub fn save_token(remote: &WebRemote, token: &str) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     let home = std::env::home_dir().ok_or_else(|| anyhow!("no home directory"))?;
     let (host, _) = api(remote)?;
     let file = token_file(&home, &host);
@@ -173,7 +172,7 @@ pub fn save_token(remote: &WebRemote, token: &str) -> Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     std::fs::write(&file, format!("{}\n", token.trim()))?;
-    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))?;
+    crate::platform::owner_only(&file)?;
     Ok(())
 }
 

@@ -19,3 +19,9 @@ pub fn data_dir() -> Option<PathBuf> {
 pub fn launcher(launcher: &super::Launcher) -> Option<PathBuf> {
     super::on_path(launcher.on_path, &[])
 }
+
+/// Makes `file` readable and writable by its owner only (a token).
+pub fn owner_only(file: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600))
+}
