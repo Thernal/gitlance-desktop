@@ -87,7 +87,7 @@ pub fn source_pill(source: Source) -> Div {
             s.border_1().border_color(theme::warning())
         })
         .text_color(source.color())
-        .child(source.label())
+        .child(super::words::say(source.label()).into_owned())
 }
 
 /// The head of a discussion: a chevron that folds it, then whatever the caller puts in. The whole

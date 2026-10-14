@@ -36,12 +36,13 @@ pub struct NewRequest {
 impl Workspace {
     /// Opens the card for branch `ix` (the open one when `None`).
     pub(super) fn open_create(&mut self, ix: Option<usize>, cx: &mut Context<Self>) {
-        let (Some(root), Some(remote)) = (self.root.clone(), self.web.clone()) else {
+        let (Some(root), Some(_)) = (self.root.clone(), self.web.as_ref()) else {
             return;
         };
-        if remote.github || !self.requests.available {
+        if !self.requests.available {
             self.error = Some(
-                "Creating a merge request needs a GitLab token — connect GitLab from the merge requests button on the left."
+                super::words::say("Creating a merge request needs a GitLab token — connect GitLab from the merge requests button on the left.")
+                    .into_owned()
                     .into(),
             );
             return cx.notify();
@@ -385,8 +386,10 @@ impl Workspace {
             n.existing.map(|iid| {
                 (
                     super::keys::text(&format!(
-                        "!{iid} already exists for {} → {}. Press ↵ or ⌘↵ to open it.",
-                        n.source, n.target
+                        "{} already exists for {} → {}. Press ↵ or ⌘↵ to open it.",
+                        super::words::number(iid),
+                        n.source,
+                        n.target
                     ))
                     .into_owned(),
                     false,
@@ -437,7 +440,7 @@ impl Workspace {
                                     div()
                                         .text_size(px(15.))
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .child("New merge request"),
+                                        .child(super::words::say("New merge request").into_owned()),
                                 )
                                 .child(div().text_color(theme::faint()).child(host)),
                         )

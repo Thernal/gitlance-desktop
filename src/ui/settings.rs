@@ -28,7 +28,7 @@ impl Workspace {
         let token = text.trim();
         if token.len() < 8 || token.contains(char::is_whitespace) {
             self.gitlab_check = Some(Err(
-                "The clipboard does not hold a token — copy one from GitLab → Preferences → Access tokens (scope: api).".to_owned(),
+                super::words::say("The clipboard does not hold a token — copy one from GitLab → Preferences → Access tokens (scope: api).").into_owned(),
             ));
             return cx.notify();
         }
@@ -68,21 +68,6 @@ impl Workspace {
     fn render_gitlab_settings(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let remote = self.web.as_ref()?;
         let host = crate::mr::host(remote);
-        if remote.github {
-            return Some(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_5()
-                    .child(heading("Pull requests"))
-                    .child(item(
-                        "GitHub",
-                        "Pull requests of GitHub are not supported yet; GitLab merge requests are.",
-                        div(),
-                    ))
-                    .into_any_element(),
-            );
-        }
         let source = crate::mr::token_source(remote).map(|(_, from)| from);
         let status = match (&self.gitlab_check, source) {
             (Some(Ok(who)), _) => (format!("Connected as {who}"), theme::added()),
@@ -98,10 +83,14 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap_5()
-                .child(heading("GitLab"))
+                .child(heading(if remote.github { "GitHub" } else { "GitLab" }))
                 .child(item(
                     "Merge requests",
-                    "The host is read from this repository's origin remote, so any GitLab works — gitlab.com or your own. The token needs the api scope (to comment, reply and resolve); read_api is enough to only read. It is kept per host in ~/.config/gitlance/tokens, for you only, and sent to curl on its stdin.",
+                    if remote.github {
+                        "The host is read from this repository's origin remote — github.com or GitHub Enterprise. A classic token with the repo scope reads and reviews pull requests (private ones too); without one, GitLance uses the GitHub CLI's (gh auth login). It is kept per host in ~/.config/gitlance/tokens, for you only, and sent to curl on its stdin."
+                    } else {
+                        "The host is read from this repository's origin remote, so any GitLab works — gitlab.com or your own. The token needs the api scope (to comment, reply and resolve); read_api is enough to only read. It is kept per host in ~/.config/gitlance/tokens, for you only, and sent to curl on its stdin."
+                    },
                     div()
                         .flex()
                         .flex_col()
@@ -324,7 +313,7 @@ impl Workspace {
                 div()
                     .text_size(px(12.))
                     .text_color(theme::muted())
-                    .child("This repository has no GitLab remote, so there are no merge requests to set up. GitHub pull requests are not supported yet.")
+                    .child("This repository has no GitLab or GitHub remote, so there are no merge requests to set up.")
                     .into_any_element()
             }),
             Section::Agents => self.render_agents_settings(cx).into_any_element(),
@@ -362,7 +351,7 @@ impl Workspace {
                     })
                     .when(sec != section, |s| s.text_color(theme::muted()))
                     .hover(|s| s.bg(theme::hover()))
-                    .child(sec.label())
+                    .child(super::words::say(sec.label()).into_owned())
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.settings_section = sec;
                         cx.notify();
@@ -400,7 +389,9 @@ impl Workspace {
                                         div()
                                             .flex()
                                             .items_center()
-                                            .child(div().flex_1().child(heading(section.label())))
+                                            .child(div().flex_1().child(heading(
+                                                super::words::say(section.label()).into_owned(),
+                                            )))
                                             .child(
                                                 button("settings-done", "Done", "esc").on_click(
                                                     cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -492,7 +483,7 @@ pub(super) fn item(
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .child(title)
+                .child(super::keys::text(title).into_owned())
                 .child(
                     div()
                         .text_size(px(12.))

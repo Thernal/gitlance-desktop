@@ -98,11 +98,13 @@ fn pc_text(text: &str) -> String {
 
 /// `text` with every shortcut in it in this OS's words: as written on macOS, `Ctrl+Shift+Enter`
 /// for `⇧⌘↵` on Windows and Linux. Every shortcut shown to the user goes through this.
+/// It also says the host's words (`words::say`): GitHub's pull requests.
 pub fn text(text: &str) -> Cow<'_, str> {
-    if platform::MAC || !text.chars().any(is_modifier) {
-        Cow::Borrowed(text)
+    let said = super::words::say(text);
+    if platform::MAC || !said.chars().any(is_modifier) {
+        said
     } else {
-        Cow::Owned(pc_text(text))
+        Cow::Owned(pc_text(&said))
     }
 }
 

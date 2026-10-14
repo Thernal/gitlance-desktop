@@ -35,6 +35,7 @@ mod submit;
 mod theme;
 mod toast;
 mod watch;
+mod words;
 mod working;
 mod zones;
 
@@ -4044,6 +4045,8 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The host's words (pull requests on GitHub) for everything drawn from here.
+        words::set(self.web.as_ref().is_some_and(|w| w.github));
         self.take_error(cx);
         let title = match &self.root {
             Some(root) => format!("GitLance — {}", root.display()),
@@ -4529,7 +4532,11 @@ fn commit_chip(id: &'static str, on: bool) -> gpui::Stateful<gpui::Div> {
 }
 
 fn island_label(text: impl Into<SharedString>) -> gpui::Div {
-    section_label(text).px(px(14.)).pt(px(10.)).pb(px(6.))
+    let text: SharedString = text.into();
+    section_label(SharedString::from(words::say(&text).into_owned()))
+        .px(px(14.))
+        .pt(px(10.))
+        .pb(px(6.))
 }
 
 /// A clickable list row: a rounded pill, filled when selected.

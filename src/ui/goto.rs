@@ -64,7 +64,13 @@ impl Workspace {
                     if self.requests.loading {
                         self.pending_link = Some(Target::Request { iid, note, line });
                     } else {
-                        self.error = Some(format!("!{iid} is not an open merge request.").into());
+                        self.error = Some(
+                            format!(
+                                "{} is not an open merge request.",
+                                super::words::number(iid)
+                            )
+                            .into(),
+                        );
                     }
                     return cx.notify();
                 }

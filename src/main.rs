@@ -7,6 +7,7 @@ mod agents;
 mod editor;
 mod generated;
 mod git;
+mod github;
 mod highlight;
 mod links;
 mod markdown;

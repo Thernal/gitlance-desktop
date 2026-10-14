@@ -51,7 +51,7 @@ impl Workspace {
             return;
         };
         let available = mr::available(&remote);
-        let connectable = !available && !remote.github;
+        let connectable = !available;
         let side = if available || connectable {
             self.requests.side
         } else {
@@ -180,7 +180,7 @@ impl Workspace {
         self.requests.dismissed = None;
         self.load_request_versions(iid, cx);
         if let Some(m) = self.requests.list.iter().find(|m| m.iid == iid) {
-            let (label, detail) = (m.title.clone(), format!("!{iid}"));
+            let (label, detail) = (m.title.clone(), super::words::number(iid));
             self.remember_place(super::recents::Key::Request(iid), label, detail);
         }
         let pick = |name: &str| {
@@ -194,11 +194,21 @@ impl Workspace {
             })
         };
         self.pending_compare = None;
-        let Some(src) = pick(&source) else {
+        // A GitHub pull request from a fork has no branch here; `pr/<n>` is where the hint below
+        // fetches its head.
+        let github = self.web.as_ref().is_some_and(|w| w.github);
+        let found = pick(&source).or_else(|| github.then(|| pick(&format!("pr/{iid}"))).flatten());
+        let Some(src) = found else {
             self.error = Some(
-                format!(
-                    "!{iid}: the branch {source} is not here yet — fetch (Settings → Fetch in the background, or git fetch)."
-                )
+                if github {
+                    format!(
+                        "#{iid}: its branch {source} is not here (a fork's, or not fetched) — fetch it: git fetch origin pull/{iid}/head:refs/remotes/origin/pr/{iid}"
+                    )
+                } else {
+                    format!(
+                        "!{iid}: the branch {source} is not here yet — fetch (Settings → Fetch in the background, or git fetch)."
+                    )
+                }
                 .into(),
             );
             cx.notify();
@@ -1022,7 +1032,7 @@ impl Workspace {
         let n = self.commits.len();
         Some(
             super::commit_chip("request-row", selected)
-                .child(format!("!{iid}"))
+                .child(super::words::number(iid))
                 .tooltip(|_, cx| cx.new(|_| super::Tip("The whole merge request")).into())
                 .child(div().text_color(theme::warning()).child(n.to_string()))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -1332,8 +1342,14 @@ impl Workspace {
             .list
             .iter()
             .filter(|m| {
-                let hay =
-                    format!("!{} {} {} {}", m.iid, m.title, m.author, m.source).to_lowercase();
+                let hay = format!(
+                    "{} {} {} {}",
+                    super::words::number(m.iid),
+                    m.title,
+                    m.author,
+                    m.source
+                )
+                .to_lowercase();
                 words.iter().all(|w| hay.contains(w))
             })
             .collect();
@@ -1364,9 +1380,9 @@ impl Workspace {
         if self.requests.available && self.requests.side == Side::Requests {
             let n = self.requests.list.len();
             let label = if self.requests.loading && n == 0 {
-                "Merge requests …".to_owned()
+                super::words::say("Merge requests …").into_owned()
             } else {
-                format!("Merge requests · {n}")
+                super::words::say(&format!("Merge requests · {n}")).into_owned()
             };
             return super::island_label(format!(
                 "{label}{}",
@@ -1456,9 +1472,15 @@ impl Workspace {
                     .px(px(6.))
                     .text_size(px(12.))
                     .text_color(theme::muted())
-                    .child(format!(
-                        "See the merge requests of {host}: comment, reply and resolve here. GitLance needs a personal access token with the api scope. It stays on this Mac."
-                    )),
+                    .child(if remote.github {
+                        format!(
+                            "See the pull requests of {host}: comment, reply, resolve and review here. GitLance needs a token with the repo scope — or sign in once with the GitHub CLI (gh auth login) and it uses that. It stays on this Mac."
+                        )
+                    } else {
+                        format!(
+                            "See the merge requests of {host}: comment, reply and resolve here. GitLance needs a personal access token with the api scope. It stays on this Mac."
+                        )
+                    }),
             )
             .child(
                 div()
@@ -1504,8 +1526,10 @@ impl Workspace {
         let shown = self.shown_requests();
         let note = match (&self.requests.error, shown.is_empty()) {
             (Some(e), _) => Some(e.clone()),
-            (None, true) if self.requests.loading => Some("Loading merge requests…".to_owned()),
-            (None, true) => Some("No open merge requests.".to_owned()),
+            (None, true) if self.requests.loading => {
+                Some(super::words::say("Loading merge requests…").into_owned())
+            }
+            (None, true) => Some(super::words::say("No open merge requests.").into_owned()),
             _ => None,
         };
         let items = shown.into_iter().map(|m| {
@@ -1528,7 +1552,7 @@ impl Workspace {
                             div()
                                 .flex_none()
                                 .text_color(theme::accent())
-                                .child(format!("!{iid}")),
+                                .child(super::words::number(iid)),
                         )
                         .child(div().flex_1().min_w_0().truncate().child(m.title.clone()))
                         .children(reviewed.then(|| {
@@ -1627,7 +1651,7 @@ impl Workspace {
                                 .h(px(32.))
                                 .gap_2()
                                 .text_color(theme::warning())
-                                .child("＋ New merge request…")
+                                .child(super::words::say("＋ New merge request…").into_owned())
                                 .child(div().flex_1())
                                 .child(super::keys::caps("⌥⌘M", super::keys::On::Plain))
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -1761,7 +1785,7 @@ impl Workspace {
                                 .flex_none()
                                 .text_color(theme::accent())
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(format!("!{}", m.iid)),
+                                .child(super::words::number(m.iid)),
                         )
                         .child(
                             div()

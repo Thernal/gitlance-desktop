@@ -59,6 +59,14 @@ Rust end to end.
 Fork, Sublime Merge and Zed's git panel show diffs, but none compares the versions of a force-pushed
 branch, tracks what was reviewed, or sends comments back to an agent.
 
+## Merge and pull requests
+
+With a token, the requests of the repository's GitLab project or GitHub repository open in the app:
+the list, the discussions on the lines, replying, resolving, pending comments, Submit review (comment,
+approve, request changes), the pipeline or checks, versions, the bell. GitLab: a token with the `api`
+scope (Settings → Merge requests, or `~/.config/gitlab-token`). GitHub (github.com or Enterprise): a
+classic token with the `repo` scope, `GITHUB_TOKEN`, or the GitHub CLI's (`gh auth login`).
+
 ## Agents
 
 Comments for your coding agent (purple) are drafts until you send them: *Send to agent* (⇧⌘A) lists the

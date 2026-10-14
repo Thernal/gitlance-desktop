@@ -149,17 +149,20 @@ impl Workspace {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    if drafts {
-                        mr::publish_drafts(&remote, iid)?;
-                    }
-                    if !summary.is_empty() {
-                        mr::comment(&remote, iid, &summary)?;
-                    }
-                    match verdict {
-                        Verdict::Approve if !approve_already => mr::approve(&remote, iid, &head),
-                        Verdict::RequestChanges => mr::request_changes(&remote, iid),
-                        _ => Ok(()),
-                    }
+                    let verdict = match verdict {
+                        Verdict::Comment => mr::Verdict::Comment,
+                        Verdict::Approve => mr::Verdict::Approve,
+                        Verdict::RequestChanges => mr::Verdict::RequestChanges,
+                    };
+                    mr::submit(
+                        &remote,
+                        iid,
+                        &head,
+                        drafts,
+                        &summary,
+                        verdict,
+                        approve_already,
+                    )
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -348,7 +351,7 @@ impl Workspace {
                                         .min_w_0()
                                         .truncate()
                                         .text_color(theme::faint())
-                                        .child(format!("!{iid} {title}")),
+                                        .child(format!("{} {title}", super::words::number(iid))),
                                 ),
                         )
                         .child(

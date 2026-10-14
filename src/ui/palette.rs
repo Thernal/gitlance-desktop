@@ -205,7 +205,7 @@ impl Workspace {
                 let (done, said) = state(Oid::from_str(&m.head).ok());
                 (!(open_only && done)).then(|| Item {
                     group: "Merge requests",
-                    label: format!("!{} {}", m.iid, m.title),
+                    label: format!("{} {}", super::words::number(m.iid), m.title),
                     detail: format!("{} · {said}", m.source),
                     key: "",
                     pick: Pick::Request(m.iid),
@@ -723,7 +723,7 @@ impl Workspace {
                         .pb(px(2.))
                         .text_size(px(11.))
                         .text_color(theme::faint())
-                        .child(item.group.to_uppercase())
+                        .child(super::words::say(item.group).to_uppercase())
                         .into_any_element(),
                 );
             }
@@ -737,7 +737,7 @@ impl Workspace {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .child(item.label.clone()),
+                            .child(super::keys::text(&item.label).into_owned()),
                     )
                     .child(
                         div()

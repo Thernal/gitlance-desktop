@@ -139,7 +139,12 @@ impl Workspace {
                                 ""
                             },
                         ))
-                        .child(div().flex_1().truncate().child(entry.label.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .truncate()
+                                .child(super::keys::text(&entry.label).into_owned()),
+                        )
                         .child(
                             div()
                                 .text_size(px(11.))

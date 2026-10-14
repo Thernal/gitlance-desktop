@@ -1,8 +1,10 @@
 //! Merge requests of a GitLab project: the open ones with their titles, and the discussions on one.
-//! Read-only, through `curl` and the token in `~/.config/gitlab-token` (so the VPN routes and
-//! proxies of the machine apply, and no HTTP client is linked in). GitHub is not supported yet.
+//! Through `curl` and the token in `~/.config/gitlab-token` (so the VPN routes and proxies of the
+//! machine apply, and no HTTP client is linked in). A GitHub remote's pull requests come in the same
+//! shapes: every public function hands a GitHub remote to `crate::github`.
 
 use crate::git::WebRemote;
+use crate::github;
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
 use std::io::Write;
@@ -124,6 +126,9 @@ pub struct Push {
 /// Where the token for a GitLab host comes from, best first: `GITLAB_TOKEN`, the token saved by this
 /// app for that host, then the shared `~/.config/gitlab-token`.
 pub fn token_source(remote: &WebRemote) -> Option<(String, &'static str)> {
+    if remote.github {
+        return github::token_source(remote);
+    }
     let clean = |t: String| {
         let t = t.trim().to_owned();
         (!t.is_empty()).then_some(t)
@@ -147,6 +152,11 @@ pub fn token_source(remote: &WebRemote) -> Option<(String, &'static str)> {
 
 pub fn token(remote: &WebRemote) -> Option<String> {
     token_source(remote).map(|(t, _)| t)
+}
+
+/// The token this app saved for `host` (`https://host`), as written.
+pub(crate) fn saved_token(host: &str) -> Option<String> {
+    std::fs::read_to_string(token_file(&std::env::home_dir()?, host)).ok()
 }
 
 fn token_file(home: &std::path::Path, host: &str) -> std::path::PathBuf {
@@ -185,12 +195,18 @@ pub fn forget_token(remote: &WebRemote) {
 
 /// Where a token for this host is made, with the name and the scope filled in.
 pub fn token_page(remote: &WebRemote) -> String {
+    if remote.github {
+        return github::token_page(remote);
+    }
     let (host, _) = api(remote).unwrap_or_default();
     format!("{host}/-/user_settings/personal_access_tokens?name=GitLance&scopes=api")
 }
 
 /// The host the requests go to, without the scheme.
 pub fn host(remote: &WebRemote) -> String {
+    if remote.github {
+        return github::host(remote);
+    }
     api(remote)
         .map(|(h, _)| {
             h.split_once("://")
@@ -201,6 +217,9 @@ pub fn host(remote: &WebRemote) -> String {
 
 /// The name the token belongs to: proof that the host, the token and the network work.
 pub fn me(remote: &WebRemote) -> Result<String> {
+    if remote.github {
+        return github::me(remote);
+    }
     if fixture().is_some() {
         return Ok("Fixture".to_owned());
     }
@@ -214,7 +233,7 @@ pub fn me(remote: &WebRemote) -> Result<String> {
 
 /// Whether merge requests can be read for this remote at all.
 pub fn available(remote: &WebRemote) -> bool {
-    fixture().is_some() || (!remote.github && token(remote).is_some())
+    fixture().is_some() || token(remote).is_some()
 }
 
 /// Whether the checks' fixture stands in for GitLab.
@@ -229,6 +248,9 @@ fn fixture() -> Option<std::path::PathBuf> {
 }
 
 pub fn list(remote: &WebRemote) -> Result<Vec<Mr>> {
+    if remote.github {
+        return github::list(remote);
+    }
     let value = match fixture() {
         Some(dir) => serde_json::from_str(&std::fs::read_to_string(dir.join("mrs.json"))?)?,
         None => get(
@@ -240,6 +262,9 @@ pub fn list(remote: &WebRemote) -> Result<Vec<Mr>> {
 }
 
 pub fn threads(remote: &WebRemote, iid: u64) -> Result<Vec<Thread>> {
+    if remote.github {
+        return github::threads(remote, iid);
+    }
     let value = match fixture() {
         Some(dir) => {
             let file = dir.join(format!("discussions-{iid}.json"));
@@ -258,6 +283,9 @@ pub fn threads(remote: &WebRemote, iid: u64) -> Result<Vec<Thread>> {
 
 /// The merge request's newest pipeline; `None` when it has none.
 pub fn pipeline(remote: &WebRemote, iid: u64) -> Result<Option<Pipeline>> {
+    if remote.github {
+        return github::pipeline(remote, iid);
+    }
     let value = match fixture() {
         Some(dir) => match std::fs::read_to_string(dir.join(format!("pipeline-{iid}.json"))) {
             Ok(text) => serde_json::from_str(&text)?,
@@ -311,6 +339,9 @@ fn parse_failed_job(jobs: &Value) -> Option<(String, String)> {
 
 /// The versions (pushes) of a merge request, oldest first.
 pub fn versions(remote: &WebRemote, iid: u64) -> Result<Vec<Push>> {
+    if remote.github {
+        return github::versions(remote, iid);
+    }
     let value = match fixture() {
         Some(dir) => match std::fs::read_to_string(dir.join(format!("versions-{iid}.json"))) {
             Ok(text) => serde_json::from_str(&text)?,
@@ -481,6 +512,9 @@ pub fn post_discussion(
     body: &str,
     draft: bool,
 ) -> Result<()> {
+    if remote.github {
+        return github::post_discussion(remote, iid, head, place, body, draft);
+    }
     if let Some(dir) = fixture() {
         // UI checks: record what would have been sent.
         let file = dir.join("posted.txt");
@@ -529,7 +563,7 @@ pub fn post_discussion(
 }
 
 /// A line of the audit trail that UI checks read back: what the app would have sent.
-fn record(line: String) -> Result<bool> {
+pub(crate) fn record(line: String) -> Result<bool> {
     let Some(dir) = fixture() else {
         return Ok(false);
     };
@@ -551,6 +585,9 @@ pub fn create(
     draft: bool,
     remove_source: bool,
 ) -> Result<Mr> {
+    if remote.github {
+        return github::create(remote, source, target, title, description, draft);
+    }
     let title = if draft && !title.to_lowercase().starts_with("draft:") {
         format!("Draft: {title}")
     } else {
@@ -594,6 +631,9 @@ pub fn create(
 
 /// Marks a discussion resolved or open again.
 pub fn resolve(remote: &WebRemote, iid: u64, discussion: &str, resolved: bool) -> Result<()> {
+    if remote.github {
+        return github::resolve(remote, iid, discussion, resolved);
+    }
     if record(format!("resolve {iid} {discussion} {resolved}"))? {
         return Ok(());
     }
@@ -608,6 +648,9 @@ pub fn resolve(remote: &WebRemote, iid: u64, discussion: &str, resolved: bool) -
 
 /// Adds a reply to a discussion.
 pub fn reply(remote: &WebRemote, iid: u64, discussion: &str, body: &str) -> Result<()> {
+    if remote.github {
+        return github::reply(remote, iid, discussion, body);
+    }
     if record(format!("reply {iid} {discussion} {body}"))? {
         return Ok(());
     }
@@ -631,6 +674,9 @@ fn project_path(remote: &WebRemote) -> Option<String> {
 
 /// The token's username (`GITLANCE_MR_FIXTURE`: `user.json`, else "you").
 pub fn username(remote: &WebRemote) -> Result<String> {
+    if remote.github {
+        return github::username(remote);
+    }
     let user = match fixture() {
         Some(dir) => match std::fs::read_to_string(dir.join("user.json")) {
             Ok(text) => serde_json::from_str(&text)?,
@@ -643,6 +689,9 @@ pub fn username(remote: &WebRemote) -> Result<String> {
 
 /// The user's pending to-dos on merge requests of this project, newest first.
 pub fn todos(remote: &WebRemote) -> Result<Vec<Todo>> {
+    if remote.github {
+        return github::todos(remote);
+    }
     let value = match fixture() {
         Some(dir) => match std::fs::read_to_string(dir.join("todos.json")) {
             Ok(text) => serde_json::from_str(&text)?,
@@ -688,6 +737,9 @@ pub fn parse_todos(value: &Value, project: &str) -> Vec<Todo> {
 
 /// Marks to-do `id` done on GitLab.
 pub fn mark_todo_done(remote: &WebRemote, id: u64) -> Result<()> {
+    if remote.github {
+        return github::mark_todo_done(remote, id);
+    }
     if record(format!("todo-done {id}"))? {
         return Ok(());
     }
@@ -697,6 +749,9 @@ pub fn mark_todo_done(remote: &WebRemote, id: u64) -> Result<()> {
 
 /// Who approved request `iid`, and whether the token's user did or may.
 pub fn approvals(remote: &WebRemote, iid: u64) -> Result<Approvals> {
+    if remote.github {
+        return github::approvals(remote, iid);
+    }
     let value = match fixture() {
         Some(dir) => match std::fs::read_to_string(dir.join(format!("approvals-{iid}.json"))) {
             Ok(text) => serde_json::from_str(&text)?,
@@ -731,6 +786,9 @@ pub fn parse_approvals(value: &Value) -> Approvals {
 
 /// Approves request `iid` as of `head`: GitLab refuses when its head moved on since.
 pub fn approve(remote: &WebRemote, iid: u64, head: &str) -> Result<()> {
+    if remote.github {
+        return github::submit(remote, iid, head, "", Verdict::Approve);
+    }
     if record(format!("approve {iid} {head}"))? {
         return Ok(());
     }
@@ -745,6 +803,11 @@ pub fn approve(remote: &WebRemote, iid: u64, head: &str) -> Result<()> {
 
 /// Takes one's approval of request `iid` back.
 pub fn unapprove(remote: &WebRemote, iid: u64) -> Result<()> {
+    if remote.github {
+        bail!(
+            "GitHub cannot take an approval back — a later review (comment or changes) replaces it"
+        );
+    }
     if record(format!("unapprove {iid}"))? {
         return Ok(());
     }
@@ -759,6 +822,9 @@ pub fn unapprove(remote: &WebRemote, iid: u64) -> Result<()> {
 
 /// A comment on request `iid` as a whole (a review's summary).
 pub fn comment(remote: &WebRemote, iid: u64, body: &str) -> Result<()> {
+    if remote.github {
+        return github::comment(remote, iid, body);
+    }
     if record(format!("note {iid} {body}"))? {
         return Ok(());
     }
@@ -803,8 +869,47 @@ pub fn request_changes(remote: &WebRemote, iid: u64) -> Result<()> {
     Ok(())
 }
 
+/// A review's verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    Comment,
+    Approve,
+    RequestChanges,
+}
+
+/// Submits a review of request `iid` (whose head the reviewer sees as `head`): one's pending
+/// comments when there are, the summary, the verdict. GitLab takes them as three calls; GitHub as
+/// one review. `approved` says the reviewer approved already, so approving again is skipped.
+pub fn submit(
+    remote: &WebRemote,
+    iid: u64,
+    head: &str,
+    drafts: bool,
+    summary: &str,
+    verdict: Verdict,
+    approved: bool,
+) -> Result<()> {
+    if remote.github {
+        return github::submit(remote, iid, head, summary, verdict);
+    }
+    if drafts {
+        publish_drafts(remote, iid)?;
+    }
+    if !summary.is_empty() {
+        comment(remote, iid, summary)?;
+    }
+    match verdict {
+        Verdict::Approve if !approved => approve(remote, iid, head),
+        Verdict::RequestChanges => request_changes(remote, iid),
+        _ => Ok(()),
+    }
+}
+
 /// The author's own unpublished comments on a request.
 pub fn drafts(remote: &WebRemote, iid: u64) -> Result<Vec<Draft>> {
+    if remote.github {
+        return github::drafts(remote, iid);
+    }
     let value = match fixture() {
         Some(dir) => match std::fs::read_to_string(dir.join(format!("drafts-{iid}.json"))) {
             Ok(text) => serde_json::from_str(&text)?,
@@ -830,6 +935,9 @@ pub fn publish_drafts(remote: &WebRemote, iid: u64) -> Result<()> {
 }
 
 pub fn delete_draft(remote: &WebRemote, iid: u64, id: u64) -> Result<()> {
+    if remote.github {
+        return github::delete_draft(remote, iid, id);
+    }
     if record(format!("delete-draft {iid} {id}"))? {
         return Ok(());
     }

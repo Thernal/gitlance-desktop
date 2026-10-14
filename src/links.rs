@@ -1,5 +1,6 @@
-//! GitLab links read as places in the app: a merge request (its discussion, or a line of its diff),
-//! a commit, a branch. Pure parsing; `ui::palette` and comment links act on what this finds.
+//! GitLab and GitHub links read as places in the app: a merge or pull request (its discussion, or a
+//! line of its diff), a commit, a branch. Pure parsing; `ui::palette` and comment links act on what
+//! this finds.
 
 /// What a link points at inside its project.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,6 +30,8 @@ pub struct DiffLine {
 pub struct Link {
     pub base: String,
     pub target: Target,
+    /// A GitHub link: its requests are written `#12`.
+    pub github: bool,
 }
 
 impl Link {
@@ -42,14 +45,15 @@ impl Link {
 
     /// What it is, in a few words: `!12`, `!12, a comment`, `commit 1a2b3c4`, `branch feat/x`.
     pub fn describe(&self) -> String {
+        let sigil = if self.github { '#' } else { '!' };
         match &self.target {
             Target::Request { iid, note, line } => match (note, line) {
-                (Some(_), _) => format!("!{iid}, a comment"),
+                (Some(_), _) => format!("{sigil}{iid}, a comment"),
                 (None, Some(l)) => match l.new.or(l.old) {
-                    Some(n) => format!("!{iid}, line {n}"),
-                    None => format!("!{iid}"),
+                    Some(n) => format!("{sigil}{iid}, line {n}"),
+                    None => format!("{sigil}{iid}"),
                 },
-                (None, None) => format!("!{iid}"),
+                (None, None) => format!("{sigil}{iid}"),
             },
             Target::Commit(sha) => format!("commit {}", &sha[..sha.len().min(7)]),
             Target::Branch(name) => format!("branch {name}"),
@@ -69,7 +73,9 @@ pub fn parse(url: &str) -> Option<Link> {
         None => (url, None),
     };
     let url = url.split('?').next().unwrap_or(url);
-    let (base, rest) = url.split_once("/-/")?;
+    let Some((base, rest)) = url.split_once("/-/") else {
+        return github(url, fragment);
+    };
     let mut parts = rest.trim_end_matches('/').split('/');
     let target = match parts.next()? {
         "merge_requests" => {
@@ -94,6 +100,46 @@ pub fn parse(url: &str) -> Option<Link> {
     Some(Link {
         base: base.trim_end_matches('/').to_owned(),
         target,
+        github: false,
+    })
+}
+
+/// A GitHub link: `https://host/owner/repo/pull/12[/files][#discussion_r<id>|#issuecomment-<id>]`,
+/// `…/commit/<sha>`, `…/tree/<branch>`.
+fn github(url: &str, fragment: Option<&str>) -> Option<Link> {
+    let (scheme, rest) = url.split_once("://")?;
+    let mut parts = rest.trim_end_matches('/').split('/');
+    let (host, owner, repo) = (parts.next()?, parts.next()?, parts.next()?);
+    let target = match parts.next()? {
+        "pull" => {
+            let iid = parts.next()?.parse().ok()?;
+            let note = fragment.and_then(|f| {
+                f.strip_prefix("discussion_r")
+                    .or_else(|| f.strip_prefix("issuecomment-"))
+                    .or_else(|| f.strip_prefix('r'))
+                    .and_then(|n| n.parse().ok())
+            });
+            Target::Request {
+                iid,
+                note,
+                line: None,
+            }
+        }
+        "commit" => {
+            let sha = parts.next()?;
+            (sha.len() >= 7 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
+                .then(|| Target::Commit(sha.to_owned()))?
+        }
+        "tree" | "commits" => {
+            let name: Vec<&str> = parts.collect();
+            (!name.is_empty()).then(|| Target::Branch(name.join("/")))?
+        }
+        _ => return None,
+    };
+    Some(Link {
+        base: format!("{scheme}://{host}/{owner}/{repo}"),
+        target,
+        github: true,
     })
 }
 
@@ -120,6 +166,38 @@ pub fn path_hash(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn github_links() {
+        let link = parse("https://github.com/acme/widgets/pull/12/files#discussion_r501").unwrap();
+        assert_eq!(link.base, "https://github.com/acme/widgets");
+        assert!(link.github);
+        assert_eq!(
+            link.target,
+            Target::Request {
+                iid: 12,
+                note: Some(501),
+                line: None
+            }
+        );
+        assert_eq!(link.describe(), "#12, a comment");
+        let c = parse("https://github.com/acme/widgets/pull/12#issuecomment-9").unwrap();
+        assert!(matches!(c.target, Target::Request { note: Some(9), .. }));
+        assert_eq!(
+            parse("https://github.com/acme/widgets/commit/1a2b3c4d")
+                .unwrap()
+                .target,
+            Target::Commit("1a2b3c4d".into())
+        );
+        assert_eq!(
+            parse("https://github.com/acme/widgets/tree/feat/x")
+                .unwrap()
+                .target,
+            Target::Branch("feat/x".into())
+        );
+        assert!(parse("https://github.com/acme/widgets/issues/3").is_none());
+        assert!(parse("https://github.com/acme").is_none());
+    }
 
     #[test]
     fn a_merge_request_link_with_a_comment() {

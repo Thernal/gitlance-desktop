@@ -525,7 +525,7 @@ impl Workspace {
                                 .truncate()
                                 .text_size(px(12.))
                                 .text_color(theme::accent())
-                                .child(format!("!{} {}", n.iid, n.title)),
+                                .child(format!("{} {}", super::words::number(n.iid), n.title)),
                         )
                         .children((!n.text.trim().is_empty()).then(|| {
                             div()

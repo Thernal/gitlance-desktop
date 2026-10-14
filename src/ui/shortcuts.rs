@@ -133,7 +133,7 @@ impl Workspace {
                                 .flex_1()
                                 .min_w_0()
                                 .text_color(theme::muted())
-                                .child(*what),
+                                .child(super::words::say(what).into_owned()),
                         )
                 }))
         });

@@ -90,7 +90,7 @@ impl Workspace {
                         .flex_1()
                         .min_w_0()
                         .text_color(theme::text())
-                        .child(t.text.clone()),
+                        .child(super::keys::text(&t.text).into_owned()),
                 )
                 .child(
                     div()

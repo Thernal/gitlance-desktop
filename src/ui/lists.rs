@@ -250,7 +250,7 @@ impl Workspace {
                                     .flex_none()
                                     .text_size(px(11.))
                                     .text_color(theme::accent())
-                                    .child(format!("!{}", m.iid))
+                                    .child(super::words::number(m.iid))
                             }))
                             .on_mouse_down(
                                 MouseButton::Right,
