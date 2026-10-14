@@ -24,11 +24,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Also caches, and turns compiler and clippy messages into annotations on the run.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
+          rustflags: ''
 
       - name: Linux libraries
         if: runner.os == 'Linux'
@@ -42,4 +42,12 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test
+        shell: bash
+        run: |
+          # A failing test's name and panic become annotations: the log needs signing in to read.
+          set -o pipefail
+          cargo test 2>&1 | tee test.log || {
+            grep -E "panicked at|^---- |^    [a-z_:]+$|assertion|left:|right:" test.log \
+              | head -40 | sed 's/^/::error title=test::/'
+            exit 1
+          }
