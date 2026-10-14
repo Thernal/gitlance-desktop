@@ -1,0 +1,145 @@
+name: Release
+
+# A `v*` tag (its version must be Cargo.toml's) builds GitLance for macOS, Windows and Linux and
+# attaches the files to a GitHub release. Unsigned: README → Releases says how to open them.
+# Run by hand (Actions → Release → Run workflow) it only builds: the files stay on the run.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$crate" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, Cargo.toml $crate"
+            exit 1
+          fi
+          echo "version=$crate" >> "$GITHUB_OUTPUT"
+
+  macos:
+    name: macOS (universal)
+    needs: version
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          lipo -create -output target/gitlance-universal \
+            target/aarch64-apple-darwin/release/gitlance \
+            target/x86_64-apple-darwin/release/gitlance
+      - name: Bundle
+        run: |
+          GITLANCE_BIN=target/gitlance-universal ./bundle.sh
+          mkdir -p dist dmg
+          ditto -c -k --keepParent target/GitLance.app "dist/GitLance-$VERSION-macos.zip"
+          cp -R target/GitLance.app dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname GitLance -srcfolder dmg -ov -format UDZO "dist/GitLance-$VERSION-macos.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+
+  windows:
+    name: Windows
+    needs: version
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist, pkg/GitLance | Out-Null
+          Copy-Item target/release/gitlance.exe pkg/GitLance/GitLance.exe
+          Copy-Item README.md, LICENSE pkg/GitLance/
+          Compress-Archive -Path pkg/GitLance -DestinationPath "dist/GitLance-$env:VERSION-windows-x64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  linux:
+    name: Linux
+    needs: version
+    # The oldest supported runner: the binary then runs on systems with an older glibc too.
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux libraries
+        run: sh .github/linux-deps.sh
+      - name: Build
+        run: cargo build --release
+      - name: Package
+        run: |
+          mkdir -p dist "pkg/gitlance-$VERSION"
+          cp target/release/gitlance README.md LICENSE assets/linux/gitlance.desktop "pkg/gitlance-$VERSION/"
+          cp assets/icon.png "pkg/gitlance-$VERSION/gitlance.png"
+          tar -C pkg -czf "dist/gitlance-$VERSION-linux-x86_64.tar.gz" "gitlance-$VERSION"
+
+          app=GitLance.AppDir
+          mkdir -p "$app/usr/bin" "$app/usr/share/icons/hicolor/512x512/apps"
+          cp target/release/gitlance "$app/usr/bin/"
+          cp assets/linux/gitlance.desktop "$app/"
+          cp assets/icon.png "$app/gitlance.png"
+          cp assets/icon.png "$app/usr/share/icons/hicolor/512x512/apps/gitlance.png"
+          ln -s usr/bin/gitlance "$app/AppRun"
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool "$app" "dist/GitLance-$VERSION-x86_64.AppImage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+
+  publish:
+    name: GitHub release
+    needs: [version, macos, windows, linux]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          pre=
+          case "$VERSION" in *-*) pre=--prerelease ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "GitLance $VERSION" --generate-notes $pre

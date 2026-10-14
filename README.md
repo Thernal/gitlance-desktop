@@ -70,4 +70,28 @@ Needs a Rust toolchain (`rustup`, stable) and Xcode's command-line tools; full X
 ```
 
 Drag the edges between panes to resize them; a double click restores the default size. Sizes and recent
-repositories are kept in `~/Library/Application Support/GitLance/`.
+repositories are kept in `~/Library/Application Support/GitLance/` (Windows `%APPDATA%\GitLance`, Linux
+`~/.local/share/gitlance`).
+
+`./bundle.sh` wraps the release build in `target/GitLance.app`.
+
+On Linux the build needs the X11, Wayland, Vulkan and font headers: `.github/linux-deps.sh` installs
+them on Debian and Ubuntu.
+
+## Releases
+
+CI (`.github/workflows/ci.yml`) runs fmt, clippy and the tests on macOS, Windows and Linux for every
+push. A `v*` tag whose version is `Cargo.toml`'s runs `release.yml`, which attaches these to a GitHub
+release:
+
+| | |
+|---|---|
+| macOS | `GitLance-<v>-macos.dmg` and `.zip` — a universal `GitLance.app` (Apple silicon and Intel) |
+| Windows | `GitLance-<v>-windows-x64.zip` — `GitLance.exe` |
+| Linux | `GitLance-<v>-x86_64.AppImage`, and `gitlance-<v>-linux-x86_64.tar.gz` with a desktop file |
+
+Run by hand from the Actions tab, `release.yml` only builds; the files stay on the run.
+
+The builds are not signed or notarized. On macOS the first open is refused: right-click the app →
+Open, or System Settings → Privacy & Security → Open Anyway (or `xattr -dr com.apple.quarantine
+/Applications/GitLance.app`). On Windows, SmartScreen asks: More info → Run anyway.
