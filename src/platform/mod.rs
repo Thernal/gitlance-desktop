@@ -81,6 +81,21 @@ pub fn launcher(launcher: &Launcher) -> Option<PathBuf> {
 /// The space the title bar leaves at its start for the window's own buttons.
 pub const TITLEBAR_INSET: f32 = os::TITLEBAR_INSET;
 
+/// The first of `names` found in a folder of the PATH, trying `extensions` after each name.
+#[cfg(not(target_os = "macos"))]
+fn on_path(names: &[&str], extensions: &[String]) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    names.iter().find_map(|name| {
+        dirs.iter().find_map(|dir| {
+            std::iter::once(String::new())
+                .chain(extensions.iter().cloned())
+                .map(|ext| dir.join(format!("{name}{ext}")))
+                .find(|p| p.is_file())
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::pc_keys;
@@ -95,19 +110,4 @@ mod tests {
         assert_eq!(pc_keys("ctrl-2"), "ctrl-2");
         assert_eq!(pc_keys("g g"), "g g");
     }
-}
-
-/// The first of `names` found in a folder of the PATH, trying `extensions` after each name.
-#[cfg(not(target_os = "macos"))]
-fn on_path(names: &[&str], extensions: &[String]) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
-    names.iter().find_map(|name| {
-        dirs.iter().find_map(|dir| {
-            std::iter::once(String::new())
-                .chain(extensions.iter().cloned())
-                .map(|ext| dir.join(format!("{name}{ext}")))
-                .find(|p| p.is_file())
-        })
-    })
 }
