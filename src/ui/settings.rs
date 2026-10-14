@@ -642,7 +642,7 @@ impl Workspace {
                     .pb(px(12.))
                     .text_size(px(12.))
                     .text_color(theme::muted())
-                    .child("Change gives an action one new key in place of its keys; esc cancels, ⌫ leaves it without one. The changes are kept in keymap.txt in GitLance’s Application Support folder; Reset brings the shipped keys back."),
+                    .child("Change gives an action one new key in place of its keys; esc cancels, ⌫ leaves it without one. The changes are kept in keymap.txt in GitLance’s data folder; Reset brings the shipped keys back."),
             )
             .child(
                 div()

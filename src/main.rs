@@ -1,6 +1,8 @@
 //! GitLance — review commits and force-pushed branch versions without an IDE. See README.md.
 
-mod dock;
+// A GUI app on Windows: no console window behind it.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod editor;
 mod generated;
 mod git;
@@ -8,6 +10,7 @@ mod highlight;
 mod links;
 mod markdown;
 mod mr;
+mod platform;
 mod rank;
 mod review;
 mod search;

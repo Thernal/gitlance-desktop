@@ -295,7 +295,7 @@ pub fn run(path: Option<PathBuf>) {
         .run(move |cx: &mut App| {
             keymap::install(default_bindings(), cx);
             if !cfg!(feature = "snapshot") || std::env::var_os("GITLANCE_SNAPSHOT").is_none() {
-                crate::dock::set_icon();
+                crate::platform::set_icon();
             }
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.set_menus(menus(&ViewOptions::load(&Settings::load())));
@@ -311,10 +311,11 @@ pub fn run(path: Option<PathBuf>) {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
                     title: Some("GitLance".into()),
-                    appears_transparent: true,
+                    appears_transparent: crate::platform::TRANSPARENT_TITLEBAR,
                     traffic_light_position: Some(Point::new(px(12.), px(12.))),
                 }),
                 window_min_size: Some(size(px(900.), px(500.))),
+                app_id: Some("gitlance".into()),
                 ..Default::default()
             };
             let window = cx
@@ -2344,7 +2345,7 @@ impl Workspace {
             .flex()
             .items_center()
             .gap_3()
-            .pl(px(78.))
+            .pl(px(crate::platform::TITLEBAR_INSET))
             .pr(px(GAP))
             .child(
                 div()

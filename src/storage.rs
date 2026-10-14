@@ -6,8 +6,7 @@ use std::path::{Path, PathBuf};
 const RECENT_LIMIT: usize = 10;
 
 fn file(name: &str) -> Option<PathBuf> {
-    let home = std::env::home_dir()?;
-    Some(home.join("Library/Application Support/GitLance").join(name))
+    Some(crate::platform::data_dir()?.join(name))
 }
 
 /// Writes `body` to `name`; failures only cost what would have been remembered.

@@ -1,8 +1,10 @@
 //! Opening a file in the reviewer's editor at a line: Android Studio, Zed or VS Code, through the
-//! command each ships inside its app bundle, so nothing has to be installed on the PATH.
+//! command each ships (inside its app bundle on macOS, on the PATH elsewhere — `platform`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use crate::platform::{self, Launcher};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Editor {
@@ -34,49 +36,48 @@ impl Editor {
         Self::ALL.into_iter().find(|e| e.key() == key)
     }
 
-    /// The app bundle, if installed under `/Applications` or `~/Applications`.
-    fn bundle(self) -> Option<PathBuf> {
-        let dirs = [
-            PathBuf::from("/Applications"),
-            std::env::home_dir()?.join("Applications"),
-        ];
-        dirs.iter().find_map(|dir| match self {
-            // "Android Studio.app", "Android Studio Preview.app", "Android Studio Koala.app"…
-            Editor::AndroidStudio => std::fs::read_dir(dir).ok()?.flatten().find_map(|e| {
-                let name = e.file_name().to_string_lossy().into_owned();
-                (name.starts_with("Android Studio") && name.ends_with(".app")).then(|| e.path())
-            }),
-            Editor::Zed => Some(dir.join("Zed.app")).filter(|p| p.exists()),
-            Editor::VsCode => Some(dir.join("Visual Studio Code.app")).filter(|p| p.exists()),
-        })
+    /// Where the editor's command-line launcher lives.
+    fn launcher(self) -> Launcher {
+        match self {
+            Editor::AndroidStudio => Launcher {
+                bundle: "Android Studio",
+                in_bundle: "Contents/MacOS/studio",
+                on_path: &["studio", "studio.sh", "studio64"],
+            },
+            Editor::Zed => Launcher {
+                bundle: "Zed",
+                in_bundle: "Contents/MacOS/cli",
+                on_path: &["zed", "zeditor"],
+            },
+            Editor::VsCode => Launcher {
+                bundle: "Visual Studio Code",
+                in_bundle: "Contents/Resources/app/bin/code",
+                on_path: &["code"],
+            },
+        }
+    }
+
+    fn program(self) -> Option<PathBuf> {
+        platform::launcher(&self.launcher())
     }
 
     pub fn installed(self) -> bool {
-        self.bundle().is_some()
+        self.program().is_some()
     }
 
-    /// The program and arguments that open `file` at `line`, given the app bundle.
-    fn command(self, bundle: &Path, file: &Path, line: u32) -> (PathBuf, Vec<String>) {
+    /// The arguments that open `file` at `line`.
+    fn args(self, file: &Path, line: u32) -> Vec<String> {
         let file_s = file.display().to_string();
         match self {
-            Editor::AndroidStudio => (
-                bundle.join("Contents/MacOS/studio"),
-                vec!["--line".into(), line.to_string(), file_s],
-            ),
-            Editor::Zed => (
-                bundle.join("Contents/MacOS/cli"),
-                vec![format!("{file_s}:{line}")],
-            ),
-            Editor::VsCode => (
-                bundle.join("Contents/Resources/app/bin/code"),
-                vec!["-g".into(), format!("{file_s}:{line}")],
-            ),
+            Editor::AndroidStudio => vec!["--line".into(), line.to_string(), file_s],
+            Editor::Zed => vec![format!("{file_s}:{line}")],
+            Editor::VsCode => vec!["-g".into(), format!("{file_s}:{line}")],
         }
     }
 
     /// Opens `file` at `line`; the error says what to do about it.
     pub fn open(self, file: &Path, line: u32) -> Result<(), String> {
-        let Some(bundle) = self.bundle() else {
+        let Some(program) = self.program() else {
             return Err(format!("{} is not installed.", self.label()));
         };
         if !file.exists() {
@@ -85,9 +86,8 @@ impl Editor {
                 file.display()
             ));
         }
-        let (program, args) = self.command(&bundle, file, line.max(1));
         Command::new(program)
-            .args(args)
+            .args(self.args(file, line.max(1)))
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("Could not start {}: {e}", self.label()))
@@ -107,15 +107,17 @@ mod tests {
 
     #[test]
     fn each_editor_gets_the_file_and_the_line() {
-        let bundle = Path::new("/Applications/X.app");
         let file = Path::new("/work/repo/src/a.rs");
-        let (program, args) = Editor::AndroidStudio.command(bundle, file, 12);
-        assert!(program.ends_with("Contents/MacOS/studio"));
-        assert_eq!(args, ["--line", "12", "/work/repo/src/a.rs"]);
-        let (_, args) = Editor::Zed.command(bundle, file, 12);
-        assert_eq!(args, ["/work/repo/src/a.rs:12"]);
-        let (_, args) = Editor::VsCode.command(bundle, file, 12);
-        assert_eq!(args, ["-g", "/work/repo/src/a.rs:12"]);
+        let path = file.display().to_string();
+        assert_eq!(
+            Editor::AndroidStudio.args(file, 12),
+            ["--line".to_string(), "12".into(), path.clone()]
+        );
+        assert_eq!(Editor::Zed.args(file, 12), [format!("{path}:12")]);
+        assert_eq!(
+            Editor::VsCode.args(file, 12),
+            ["-g".to_string(), format!("{path}:12")]
+        );
     }
 
     #[test]
