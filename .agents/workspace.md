@@ -8,6 +8,7 @@ Local rows (scratch root, task naming) live in `.misc/workspace.md`; on a confli
 |---|---|
 | Commit subject | Conventional Commits — `<type>(<scope>): <subject>`, imperative, lowercase, no trailing period (`AGENTS.md`) |
 | Subject enforcement | none — no hook |
+| Ticket reference | GitHub issue `#<n>` of Thernal/gitlance-desktop: subject ends with `(#<n>)`; the commit that finishes it says `Closes #<n>` in its body |
 | Placeholder branch | `draft/<slug>` — local only, never pushed |
 | Placeholder subject | `chore(draft): <description>` |
 | Integration | rebase |
