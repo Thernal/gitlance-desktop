@@ -81,7 +81,7 @@ them on Debian and Ubuntu.
 ## Releases
 
 CI (`.github/workflows/ci.yml`) runs fmt, clippy and the tests on macOS, Windows and Linux for every
-push. A `v*` tag whose version is `Cargo.toml`'s runs `release.yml`, which attaches these to a GitHub
+push. A `release/v*` tag whose version is `Cargo.toml`'s runs `release.yml`, which attaches these to a GitHub
 release:
 
 | | |

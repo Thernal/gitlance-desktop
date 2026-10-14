@@ -1,11 +1,11 @@
 name: Release
 
-# A `v*` tag (its version must be Cargo.toml's) builds GitLance for macOS, Windows and Linux and
+# A `release/v*` tag (its version must be Cargo.toml's) builds GitLance for macOS, Windows and Linux and
 # attaches the files to a GitHub release. Unsigned: README → Releases says how to open them.
 # Run by hand (Actions → Release → Run workflow) it only builds: the files stay on the run.
 on:
   push:
-    tags: ['v*']
+    tags: ['release/v*']
   workflow_dispatch:
 
 permissions:
@@ -22,7 +22,7 @@ jobs:
       - id: v
         run: |
           crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$crate" ]; then
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#release/v}" != "$crate" ]; then
             echo "::error::tag $GITHUB_REF_NAME, Cargo.toml $crate"
             exit 1
           fi

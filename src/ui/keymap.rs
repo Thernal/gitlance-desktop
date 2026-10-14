@@ -277,9 +277,10 @@ mod tests {
 
     #[test]
     fn a_change_replaces_every_key_of_its_action() {
-        let entries = map("NextFile = cmd-down | j\n").entries();
+        // alt, not cmd: cmd is written super- on Linux and win- on Windows.
+        let entries = map("NextFile = alt-down | j\n").entries();
         let next = entries.iter().find(|e| e.name == "NextFile").unwrap();
-        assert_eq!(next.keys, vec!["cmd-down", "j"]);
+        assert_eq!(next.keys, vec!["alt-down", "j"]);
         assert!(next.changed);
         assert_eq!(next.label, "Next file");
         assert!(next.clash.is_none());
