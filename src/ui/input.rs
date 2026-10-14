@@ -4,6 +4,7 @@
 //! filled from a tag), `sync` starts the edit over with the caret at the end.
 
 use super::{Workspace, px, theme};
+use crate::platform;
 use crate::textedit::TextEdit;
 use gpui::{
     AnyElement, App, Context, Div, Keystroke, Pixels, TextLayout, WeakEntity, div, prelude::*,
@@ -399,9 +400,11 @@ impl Workspace {
     ) -> Div {
         let row = div().flex_1().min_w_0().flex().items_center();
         if text.is_empty() {
-            return row
-                .children(active.then(caret))
-                .child(div().text_color(theme::faint()).child(placeholder));
+            return row.children(active.then(caret)).child(
+                div()
+                    .text_color(theme::faint())
+                    .child(super::keys::text(placeholder).into_owned()),
+            );
         }
         if !active {
             let shown = if look.mask {
@@ -447,7 +450,12 @@ pub fn edit_text(edit: &mut TextEdit, key: &Keystroke, cx: &mut App) -> Edit {
 fn edit_with(edit: &mut TextEdit, key: &Keystroke, cx: &mut App, lines: bool) -> Edit {
     use crate::textedit::Move;
     let m = key.modifiers;
-    let movement = match (key.key.as_str(), m.platform, m.alt) {
+    // macOS: ⌘← ⌘→ line ends, ⌘↑ ⌘↓ text ends, ⌥← ⌥→ words. Windows and Linux: Home End line
+    // ends, Ctrl+Home Ctrl+End text ends, Ctrl+← Ctrl+→ words (`platform::line`, `word`).
+    let (line, word) = (platform::line(&m), platform::word(&m));
+    let movement = match (key.key.as_str(), line, word) {
+        ("home", ..) if m.secondary() => Some(Move::Start),
+        ("end", ..) if m.secondary() => Some(Move::End),
         ("left", true, _) | ("home", ..) => Some(Move::LineStart),
         ("right", true, _) | ("end", ..) => Some(Move::LineEnd),
         ("up", true, _) => Some(Move::Start),
@@ -468,16 +476,16 @@ fn edit_with(edit: &mut TextEdit, key: &Keystroke, cx: &mut App, lines: bool) ->
         "escape" => return Edit::Escape,
         "enter" => return Edit::Enter { shift: m.shift },
         "backspace" => {
-            edit.delete_back(m.alt, m.platform);
+            edit.delete_back(word, line);
             return Edit::Changed;
         }
         "delete" => {
-            edit.delete_forward(m.alt);
+            edit.delete_forward(word);
             return Edit::Changed;
         }
         _ => {}
     }
-    if m.platform {
+    if m.secondary() {
         return match key.key.as_str() {
             "a" => {
                 edit.select_all();
@@ -519,7 +527,8 @@ fn edit_with(edit: &mut TextEdit, key: &Keystroke, cx: &mut App, lines: bool) ->
         };
     }
     match &key.key_char {
-        Some(ch) if !m.control && !ch.chars().any(char::is_control) => {
+        // Ctrl+Alt is AltGr on Windows, which types characters on many layouts.
+        Some(ch) if (!m.control || m.alt) && !ch.chars().any(char::is_control) => {
             edit.insert(ch);
             Edit::Changed
         }

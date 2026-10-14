@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 
 /// The traffic lights sit on the app's own title bar.
+pub const MAC: bool = true;
+
 pub const TRANSPARENT_TITLEBAR: bool = true;
 pub const TITLEBAR_INSET: f32 = 78.;
 

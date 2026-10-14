@@ -144,7 +144,7 @@ impl Workspace {
                             div()
                                 .text_size(px(11.))
                                 .text_color(theme::faint())
-                                .child(entry.key),
+                                .child(super::keys::text(entry.key).into_owned()),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| this.run_act(act.clone(), cx)))
                 }))

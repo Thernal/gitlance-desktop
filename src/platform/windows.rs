@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+pub const MAC: bool = false;
+
 pub const TRANSPARENT_TITLEBAR: bool = false;
 pub const TITLEBAR_INSET: f32 = 12.;
 

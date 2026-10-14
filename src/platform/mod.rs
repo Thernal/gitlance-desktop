@@ -21,6 +21,41 @@ use std::path::PathBuf;
 
 pub use os::{TRANSPARENT_TITLEBAR, owner_only, set_icon};
 
+/// Whether this is macOS, where the primary modifier is ⌘; elsewhere it is Ctrl.
+pub const MAC: bool = os::MAC;
+
+/// A shipped binding, written with macOS keys (`cmd-o`), in this OS's keys.
+pub fn keys(mac: &str) -> String {
+    if MAC { mac.to_owned() } else { pc_keys(mac) }
+}
+
+/// macOS keys in Windows and Linux terms: `cmd-` is `ctrl-`, except ⌘1…⌘9 (the tabs), which are
+/// `alt-1`…`alt-9`, as browsers there have them: `ctrl-1`…`ctrl-4` move between zones.
+pub fn pc_keys(mac: &str) -> String {
+    mac.split(' ')
+        .map(|stroke| {
+            let tab = stroke
+                .strip_prefix("cmd-")
+                .filter(|k| k.len() == 1 && k.as_bytes()[0].is_ascii_digit() && *k != "0");
+            match tab {
+                Some(digit) => format!("alt-{digit}"),
+                None => stroke.replace("cmd-", "ctrl-"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Whether `m` moves the caret by words: ⌥ on macOS, Ctrl elsewhere.
+pub fn word(m: &gpui::Modifiers) -> bool {
+    if MAC { m.alt } else { m.control }
+}
+
+/// Whether `m` moves the caret to a line's ends with ← →: ⌘ on macOS; elsewhere Home and End do.
+pub fn line(m: &gpui::Modifiers) -> bool {
+    MAC && m.platform
+}
+
 /// The folder for what GitLance remembers between runs.
 pub fn data_dir() -> Option<PathBuf> {
     os::data_dir()
@@ -45,6 +80,22 @@ pub fn launcher(launcher: &Launcher) -> Option<PathBuf> {
 
 /// The space the title bar leaves at its start for the window's own buttons.
 pub const TITLEBAR_INSET: f32 = os::TITLEBAR_INSET;
+
+#[cfg(test)]
+mod tests {
+    use super::pc_keys;
+
+    #[test]
+    fn mac_keys_become_ctrl_and_tabs_alt() {
+        assert_eq!(pc_keys("cmd-shift-f"), "ctrl-shift-f");
+        assert_eq!(pc_keys("cmd-alt-1"), "ctrl-alt-1");
+        assert_eq!(pc_keys("cmd-3"), "alt-3");
+        assert_eq!(pc_keys("cmd-0"), "ctrl-0");
+        assert_eq!(pc_keys("cmd--"), "ctrl--");
+        assert_eq!(pc_keys("ctrl-2"), "ctrl-2");
+        assert_eq!(pc_keys("g g"), "g g");
+    }
+}
 
 /// The first of `names` found in a folder of the PATH, trying `extensions` after each name.
 #[cfg(not(target_os = "macos"))]

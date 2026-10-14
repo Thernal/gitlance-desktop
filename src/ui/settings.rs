@@ -489,7 +489,7 @@ fn item(title: &'static str, detail: &'static str, control: impl IntoElement) ->
                     div()
                         .text_size(px(12.))
                         .text_color(theme::muted())
-                        .child(detail),
+                        .child(super::keys::text(detail).into_owned()),
                 ),
         )
         .child(div().flex_none().child(control))
@@ -650,7 +650,11 @@ impl Workspace {
                     .child(self.render_field(
                         "keys-filter",
                         super::lists::Field::Keys,
-                        "Filter by name or key — mark, ⌘B, cmd-b",
+                        if crate::platform::MAC {
+                            "Filter by name or key — mark, ⌘B, cmd-b"
+                        } else {
+                            "Filter by name or key — mark, Ctrl+B, ctrl-b"
+                        },
                         cx,
                     )),
             )
@@ -706,7 +710,10 @@ fn matches_keys(e: &super::keymap::Entry, query: &str) -> bool {
     }
     let label = e.label.to_lowercase();
     query.split_whitespace().all(|w| label.contains(w))
-        || e.keys
-            .iter()
-            .any(|k| k.contains(query) || super::keymap::symbols(k).to_lowercase().contains(query))
+        || e.keys.iter().any(|k| {
+            k.contains(query)
+                || super::keys::text(&super::keymap::symbols(k))
+                    .to_lowercase()
+                    .contains(query)
+        })
 }

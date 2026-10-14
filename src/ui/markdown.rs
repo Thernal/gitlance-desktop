@@ -504,7 +504,7 @@ fn inline(i: &Inline, ctx: &mut Ctx) -> AnyElement {
     let here = ctx.sel.as_ref().map(|s| s.link.clone());
     let linked = InteractiveText::new(id, styled).on_click(ranges, move |ix, window, cx| {
         if let Some(url) = urls.get(ix) {
-            let browser = window.modifiers().platform;
+            let browser = window.modifiers().secondary();
             if browser || !here.as_ref().is_some_and(|open| open(url, cx)) {
                 cx.open_url(url);
             }

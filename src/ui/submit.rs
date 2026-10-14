@@ -84,7 +84,7 @@ impl Workspace {
         if s.posting {
             return;
         }
-        if key.key == "enter" && key.modifiers.platform {
+        if key.key == "enter" && key.modifiers.secondary() {
             return self.run_submit(cx);
         }
         if key.key == "tab" {

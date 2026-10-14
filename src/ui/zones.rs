@@ -30,16 +30,16 @@ impl Workspace {
     }
 
     /// " · ⌃2": the island that has the keyboard says so in its label, and how to get back to it.
-    pub(super) fn zone_tag(&self, zone: Zone) -> &'static str {
+    pub(super) fn zone_tag(&self, zone: Zone) -> std::borrow::Cow<'static, str> {
         if self.zone != zone {
-            return "";
+            return "".into();
         }
-        match zone {
+        super::keys::text(match zone {
             Zone::Branches => " · ⌃1",
             Zone::Commits => " · ⌃2",
             Zone::Files => " · ⌃3",
             Zone::Diff => " · ⌃4",
-        }
+        })
     }
 
     pub(super) fn set_zone(&mut self, zone: Zone, cx: &mut Context<Self>) {

@@ -482,12 +482,9 @@ impl Workspace {
                     .text_color(theme::faint()),
             )
             .child(self.field_text(&text, active, "Search commits", cx))
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(theme::faint())
-                    .child(if text.is_empty() { "⌘⇧F" } else { "esc" }),
-            );
+            .child(div().text_size(px(11.)).text_color(theme::faint()).child(
+                super::keys::text(if text.is_empty() { "⌘⇧F" } else { "esc" }).into_owned(),
+            ));
         let tags = active.then(|| {
             div()
                 .flex_none()

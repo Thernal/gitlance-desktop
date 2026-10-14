@@ -30,10 +30,11 @@ impl Workspace {
             Some(path) => self.request_open(path, Some(link.target), cx),
             None => {
                 self.error = Some(
-                    format!(
+                    super::keys::text(&format!(
                         "{} is not open here — open its repository once (⌘O), then its links work.",
                         link.project()
-                    )
+                    ))
+                    .into_owned()
                     .into(),
                 );
             }

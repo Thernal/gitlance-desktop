@@ -173,10 +173,10 @@ impl Workspace {
         if n.posting {
             return;
         }
-        if key.key == "enter" && key.modifiers.platform {
+        if key.key == "enter" && key.modifiers.secondary() {
             return self.submit_create(cx);
         }
-        if key.key == "d" && key.modifiers.platform {
+        if key.key == "d" && key.modifiers.secondary() {
             n.draft = !n.draft;
             return cx.notify();
         }
@@ -370,7 +370,7 @@ impl Workspace {
                     div()
                         .text_color(theme::faint())
                         .text_size(px(11.))
-                        .child(hint),
+                        .child(super::keys::text(hint).into_owned()),
                 )
         };
         let note = if n.local_only {
@@ -384,10 +384,11 @@ impl Workspace {
         } else {
             n.existing.map(|iid| {
                 (
-                    format!(
+                    super::keys::text(&format!(
                         "!{iid} already exists for {} → {}. Press ↵ or ⌘↵ to open it.",
                         n.source, n.target
-                    ),
+                    ))
+                    .into_owned(),
                     false,
                 )
             })
@@ -396,9 +397,9 @@ impl Workspace {
         let go_label = if n.posting {
             "Creating…".to_owned()
         } else if let Some(iid) = n.existing {
-            format!("Open !{iid}  ⌘↵")
+            super::keys::text(&format!("Open !{iid}  ⌘↵")).into_owned()
         } else {
-            "Create on GitLab  ⌘↵".to_owned()
+            super::keys::text("Create on GitLab  ⌘↵").into_owned()
         };
         Some(
             div()

@@ -813,7 +813,7 @@ impl Workspace {
         if self.compose.as_ref().is_none_or(|c| c.posting) {
             return;
         }
-        if key.key == "enter" && m.platform {
+        if key.key == "enter" && m.secondary() {
             if m.shift
                 && let Some(Target::Request(iid)) = self.compose.as_ref().map(|c| c.target)
             {
@@ -827,7 +827,8 @@ impl Workspace {
         if self.vertical_key(key, cx) {
             return;
         }
-        if m.platform && !m.alt && !m.control {
+        // ⌘B ⌘I ⇧⌘X … (Ctrl on Windows and Linux), no other modifier.
+        if m.secondary() && m.number_of_modifiers() == 1 + u8::from(m.shift) {
             let helper = match (key.key.as_str(), m.shift) {
                 ("b", false) => Some(Helper::Bold),
                 ("i", false) => Some(Helper::Italic),
@@ -864,11 +865,14 @@ impl Workspace {
     pub(super) fn vertical_key(&mut self, key: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
         use input::Drawn;
         let m = key.modifiers;
-        let motion = match (key.key.as_str(), m.platform, m.alt) {
+        let motion = match (key.key.as_str(), crate::platform::line(&m), m.alt) {
             ("up", false, false) => Drawn::Up,
             ("down", false, false) => Drawn::Down,
             ("left", true, false) => Drawn::Start,
             ("right", true, false) => Drawn::End,
+            // Windows and Linux: Home and End by the lines as drawn, as ⌘← ⌘→ on macOS.
+            ("home", false, false) if !crate::platform::MAC && !m.secondary() => Drawn::Start,
+            ("end", false, false) if !crate::platform::MAC && !m.secondary() => Drawn::End,
             _ => {
                 self.field_goal = None;
                 return false;

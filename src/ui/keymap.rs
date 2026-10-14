@@ -333,6 +333,20 @@ mod tests {
     }
 
     #[test]
+    fn the_shipped_keys_do_not_clash_on_windows_and_linux() {
+        let shipped = Keymap {
+            defaults: super::super::bindings(crate::platform::pc_keys),
+            overrides: BTreeMap::new(),
+        };
+        let clashes: Vec<_> = shipped
+            .entries()
+            .into_iter()
+            .filter_map(|e| e.clash.map(|c| (e.label, c)))
+            .collect();
+        assert!(clashes.is_empty(), "{clashes:?}");
+    }
+
+    #[test]
     fn keys_are_written_as_the_app_writes_them() {
         assert_eq!(symbols("cmd-shift-enter"), "⇧⌘↵");
         assert_eq!(symbols("alt-down"), "⌥↓");

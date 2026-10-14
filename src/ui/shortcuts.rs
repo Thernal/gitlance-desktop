@@ -125,7 +125,7 @@ impl Workspace {
                                 .font_family(theme::CODE_FONT)
                                 .text_size(px(12.))
                                 .text_color(theme::accent())
-                                .child(*keys),
+                                .child(super::keys::text(keys).into_owned()),
                         )
                         .child(
                             div()
@@ -233,7 +233,7 @@ impl Workspace {
                             if keys.is_empty() {
                                 format!("{label} (no key)")
                             } else {
-                                format!("{label} {}", keys.join(" "))
+                                format!("{label} {}", super::keys::text(&keys.join(" ")))
                             }
                         })
                         .collect::<Vec<_>>()
@@ -250,6 +250,9 @@ impl Workspace {
             .border_color(theme::island_border())
             .text_size(px(12.))
             .text_color(theme::faint())
-            .child("? or ⌘/ shows this again, and Help → Keyboard Shortcuts")
+            .child(
+                super::keys::text("? or ⌘/ shows this again, and Help → Keyboard Shortcuts")
+                    .into_owned(),
+            )
     }
 }
