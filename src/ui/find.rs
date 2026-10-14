@@ -233,6 +233,9 @@ impl Workspace {
         if self.open_ask.is_some() {
             return self.open_ask_key(event, cx);
         }
+        if self.agent_pick.is_some() {
+            return self.agent_pick_key(event, cx);
+        }
         if self.submit.is_some() {
             return self.submit_key(event, cx);
         }

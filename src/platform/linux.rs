@@ -27,3 +27,33 @@ pub fn owner_only(file: &std::path::Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600))
 }
+
+/// Whether process `pid` still runs.
+pub fn alive(pid: u32) -> bool {
+    // SAFETY: signal 0 only checks that the process exists and may be signalled.
+    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// The desktop's terminal (`x-terminal-emulator`, else GNOME's or KDE's).
+pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io::Result<()> {
+    let command = format!(
+        "cd {} && {program} {}; exec $SHELL",
+        super::shell_quote(&dir.display().to_string()),
+        super::shell_quote(arg)
+    );
+    for (term, flag) in [
+        ("x-terminal-emulator", "-e"),
+        ("gnome-terminal", "--"),
+        ("konsole", "-e"),
+    ] {
+        if std::process::Command::new(term)
+            .args([flag, "sh", "-c", &command])
+            .spawn()
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+    Err(std::io::Error::other("no terminal found"))
+}

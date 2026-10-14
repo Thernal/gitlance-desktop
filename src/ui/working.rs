@@ -34,6 +34,10 @@ impl Workspace {
                 {
                     return;
                 }
+                // The agents' answers ride on the same beat.
+                if this.update(cx, |this, cx| this.poll_agents(cx)).is_err() {
+                    return;
+                }
                 cx.background_executor().timer(POLL).await;
             }
         }));

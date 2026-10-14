@@ -327,6 +327,7 @@ impl Workspace {
                     .child("This repository has no GitLab remote, so there are no merge requests to set up. GitHub pull requests are not supported yet.")
                     .into_any_element()
             }),
+            Section::Agents => self.render_agents_settings(cx).into_any_element(),
             Section::Keyboard => self.render_keyboard_settings(cx).into_any_element(),
         };
         let nav = div()
@@ -424,15 +425,17 @@ pub enum Section {
     General,
     Repository,
     Requests,
+    Agents,
     Keyboard,
 }
 
 impl Section {
-    const ALL: [Section; 5] = [
+    const ALL: [Section; 6] = [
         Section::Diff,
         Section::General,
         Section::Repository,
         Section::Requests,
+        Section::Agents,
         Section::Keyboard,
     ];
 
@@ -442,6 +445,7 @@ impl Section {
             Section::General => "General",
             Section::Repository => "Repository",
             Section::Requests => "Merge requests",
+            Section::Agents => "Agents",
             Section::Keyboard => "Keyboard",
         }
     }
@@ -470,7 +474,11 @@ fn heading(text: impl Into<SharedString>) -> impl IntoElement {
 }
 
 /// A labelled row: the name and what it does on the left, the control on the right.
-fn item(title: &'static str, detail: &'static str, control: impl IntoElement) -> impl IntoElement {
+pub(super) fn item(
+    title: &'static str,
+    detail: &'static str,
+    control: impl IntoElement,
+) -> impl IntoElement {
     div()
         .flex()
         .items_center()

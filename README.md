@@ -59,6 +59,14 @@ Rust end to end.
 Fork, Sublime Merge and Zed's git panel show diffs, but none compares the versions of a force-pushed
 branch, tracks what was reviewed, or sends comments back to an agent.
 
+## Agents
+
+Comments for your coding agent (purple) are drafts until you send them: *Send to agent* (⇧⌘A) lists the
+repository's agent chats — those listening first — and a new chat. The agent changes the code, answers
+each comment, and you resolve or reopen it in GitLance. Connect Claude Code once in Settings → Agents
+(it adds GitLance as an MCP server to every Claude Code profile); a chat then listens by itself. Codex
+gets the same tools (`codex mcp add gitlance -- <GitLance> mcp`); its chats are not listed yet.
+
 ## Building
 
 Needs a Rust toolchain (`rustup`, stable) and Xcode's command-line tools; full Xcode is not required.

@@ -19,7 +19,7 @@ use linux as os;
 
 use std::path::PathBuf;
 
-pub use os::{TRANSPARENT_TITLEBAR, owner_only, set_icon};
+pub use os::{TRANSPARENT_TITLEBAR, alive, owner_only, set_icon};
 
 /// Whether this is macOS, where the primary modifier is ⌘; elsewhere it is Ctrl.
 pub const MAC: bool = os::MAC;
@@ -76,6 +76,18 @@ pub struct Launcher {
 /// The launcher's program, if the editor is installed.
 pub fn launcher(launcher: &Launcher) -> Option<PathBuf> {
     os::launcher(launcher)
+}
+
+/// `text` as one word for a POSIX shell.
+#[cfg(unix)]
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+/// Opens a terminal window in `dir` running `program` with one argument, `arg` (a new agent chat
+/// with its first message).
+pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io::Result<()> {
+    os::open_terminal(dir, program, arg)
 }
 
 /// The space the title bar leaves at its start for the window's own buttons.

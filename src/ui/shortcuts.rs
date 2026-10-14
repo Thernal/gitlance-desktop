@@ -52,6 +52,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("r  x  o", "reply to, resolve, fold a discussion"),
             ("⌘⇧R", "show or hide the comments drawer"),
             ("⌥M", "comments as markdown / raw text"),
+            ("⇧⌘A", "send the comments for your agent to its chat"),
             ("⌘B ⌘I ⌘⇧X ⌘⇧E ⌘⇧K", "bold, italic, strike, code, link"),
             ("⌘⇧P in the box", "preview the markdown"),
         ],

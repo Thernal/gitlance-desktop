@@ -10,7 +10,7 @@ use super::px;
 use super::rows::Row;
 use super::{ROW_RADIUS, Selection, Workspace, format, theme};
 use crate::markdown::Helper;
-use crate::review::{self, Comment, Place};
+use crate::review::{self, Comment, Place, State};
 use crate::textedit::TextEdit;
 use gpui::{ClipboardItem, Context, KeyDownEvent, WeakEntity, div, prelude::*};
 
@@ -376,6 +376,7 @@ impl Workspace {
             code: compose.code,
             body: compose.edit.text().trim().to_owned(),
             at: compose.at,
+            ..Default::default()
         });
         self.save_comments();
         self.copied = false;
@@ -798,7 +799,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn save_comments(&self) {
+    pub(super) fn save_comments(&self) {
         if let Some(root) = &self.root {
             review::save(root, &self.comments);
         }
@@ -997,9 +998,11 @@ impl Workspace {
             .and_then(|r| r.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        // What the agent still has to do: not the comments it did or the reviewer resolved.
         let comments: Vec<(Comment, Place)> = self
             .comments
             .iter()
+            .filter(|c| c.open())
             .map(|c| (c.clone(), self.place_of(c)))
             .collect();
         cx.write_to_clipboard(ClipboardItem::new_string(review::export(&repo, &comments)));
@@ -1024,13 +1027,25 @@ impl Workspace {
         let Some(comment) = self.comments.iter().find(|c| c.id == id) else {
             return div().into_any_element();
         };
-        let open = !self.toggled_agent.contains(&id);
+        // A resolved comment starts folded; a click flips either.
+        let resolved = comment.state == State::Resolved;
+        let open = self.toggled_agent.contains(&id) == resolved;
         let selecting = self.selecting(this.clone());
-        let (fold, delete, raw) = (this.clone(), this.clone(), this);
+        let (fold, delete, raw) = (this.clone(), this.clone(), this.clone());
+        let (resolve, reopen) = (this.clone(), this);
+        let status = match (&comment.state, &comment.sent) {
+            (State::Draft, _) => "draft · stays on this Mac until you send it".to_owned(),
+            (State::Sent, Some(s)) if s.session.is_empty() => "sent to a new chat".to_owned(),
+            (State::Sent, Some(s)) if s.delivered => format!("with “{}”", s.title),
+            (State::Sent, Some(s)) => format!("sent to “{}” · waits for it to listen", s.title),
+            (State::Sent, None) => "sent".to_owned(),
+            (State::Addressed, _) => "the agent says it is done — check it".to_owned(),
+            (State::Resolved, _) => "resolved".to_owned(),
+        };
         let bar = discussion::bar(("agent-bar", id), open)
             .child(discussion::source_pill(Source::Agent))
             .child(div().flex_1().min_w_0().truncate().child(if open {
-                format!("· stays on this Mac · at {}", comment.at)
+                format!("· {status}")
             } else {
                 self.one_line(&comment.body)
             }))
@@ -1042,6 +1057,35 @@ impl Workspace {
                             .ok();
                     })
             }))
+            .children((comment.state == State::Addressed).then(|| {
+                discussion::button(
+                    ("resolve-agent", id),
+                    "Resolve",
+                    None,
+                    Kind::Primary(theme::focus()),
+                )
+                .h(px(24.))
+                .px(px(8.))
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    resolve
+                        .update(cx, |this, cx| this.resolve_agent_comment(id, cx))
+                        .ok();
+                })
+            }))
+            .children(
+                matches!(comment.state, State::Addressed | State::Resolved).then(|| {
+                    discussion::button(("reopen-agent", id), "Reopen", None, Kind::Plain)
+                        .h(px(24.))
+                        .px(px(8.))
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            reopen
+                                .update(cx, |this, cx| this.reopen_agent_comment(id, cx))
+                                .ok();
+                        })
+                }),
+            )
             .child(
                 discussion::button(("delete-comment", id), "Delete", None, Kind::Danger)
                     .h(px(24.))
@@ -1075,8 +1119,25 @@ impl Workspace {
                 None,
                 Some(selecting),
             ),
-            true,
+            comment.replies.is_empty(),
         );
+        let replies = comment.replies.iter().enumerate().map(|(ix, reply)| {
+            discussion::note(
+                "Agent",
+                false,
+                Some("agent"),
+                super::format::ago(reply.at),
+                markdown::body(
+                    &reply.body,
+                    self.settings.rich_comments,
+                    format!("md-agent-{id}-{ix}"),
+                    None,
+                    None,
+                ),
+                ix + 1 == comment.replies.len(),
+            )
+        });
+        let notes = div().flex().flex_col().child(body).children(replies);
         div()
             .w_full()
             .pl(px(indent))
@@ -1085,7 +1146,7 @@ impl Workspace {
             .child(
                 discussion::frame(Source::Agent, false)
                     .child(bar)
-                    .children(open.then_some(body)),
+                    .children(open.then_some(notes)),
             )
             .into_any_element()
     }

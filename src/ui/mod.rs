@@ -1,5 +1,6 @@
 //! The GitLance window: branches, versions and commits on the left, the diff on the right.
 
+mod agent;
 mod annotate;
 mod bookmarks;
 mod comments;
@@ -106,6 +107,7 @@ actions!(
         NextDraft,
         PreviousDraft,
         CreateRequest,
+        SendToAgent,
         ShowShortcuts,
         ToggleThread,
         ToggleComments,
@@ -194,6 +196,7 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
             Some("Workspace && !Typing"),
         ),
         KeyBinding::new(&k("cmd-alt-m"), CreateRequest, Some("Workspace && !Typing")),
+        KeyBinding::new(&k("cmd-shift-a"), SendToAgent, Some("Workspace && !Typing")),
         KeyBinding::new(&k("a"), ApproveRequest, Some("Workspace && !Typing")),
         KeyBinding::new(&k("cmd-b"), SwitchTo, Some("Workspace && !Typing")),
         KeyBinding::new(&k("cmd-shift-n"), ToggleNotifications, Some("Workspace")),
@@ -548,6 +551,7 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                                     body: "Clamp this value — the API rejects anything else."
                                         .into(),
                                     at: "a10f3cf".into(),
+                                    ..Default::default()
                                 });
                                 this.start_comment(false, line + 1, cx);
                                 if let Some(c) = this.compose.as_mut() {
@@ -594,6 +598,15 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             } else {
                                 image_view::Mode::Onion
                             };
+                            continue;
+                        }
+                        "agents" => {
+                            this.open_settings(cx);
+                            this.settings_section = settings::Section::Agents;
+                            continue;
+                        }
+                        "send" => {
+                            this.open_agent_pick(cx);
                             continue;
                         }
                         "keyboard" => {
@@ -874,6 +887,13 @@ pub struct Workspace {
     notices: notifications::Notices,
     /// The "this tab or a new tab?" card (`opening.rs`).
     open_ask: Option<opening::OpenAsk>,
+    /// The "send to which chat?" card (`agent.rs`).
+    agent_pick: Option<agent::AgentPick>,
+    /// When the agents' answers were last read (`agent.rs`).
+    answers_stamp: Option<std::time::SystemTime>,
+    /// Settings → Agents: what connecting said, and whether it runs.
+    agent_setup: Option<String>,
+    agent_setup_busy: bool,
     requests: requests::Requests,
     /// A merge request's diff to show once its branch has loaded: base, head, request.
     pending_compare: Option<PendingCompare>,
@@ -1052,6 +1072,10 @@ impl Workspace {
             spot: None,
             window: window.window_handle(),
             open_ask: None,
+            agent_pick: None,
+            answers_stamp: None,
+            agent_setup: None,
+            agent_setup_busy: false,
             notices: Default::default(),
             title: String::new(),
             branches: Vec::new(),
@@ -1205,6 +1229,7 @@ impl Workspace {
                         }
                         if this.root.as_ref() != Some(&root) {
                             this.comments = crate::review::load(&root);
+                            this.answers_stamp = None;
                             this.compose = None;
                         }
                         this.watch.watch(git_dir, fingerprint);
@@ -4070,6 +4095,7 @@ impl Render for Workspace {
                     || self.newreq.is_some()
                     || self.submit.is_some()
                     || self.open_ask.is_some()
+                    || self.agent_pick.is_some()
                     || self.notices.open
                 {
                     if self.palette.is_some() || self.ffind.is_some() || self.notices.open {
@@ -4128,6 +4154,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &NextDraft, _, cx| this.step_draft(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousDraft, _, cx| this.step_draft(false, cx)))
             .on_action(cx.listener(|this, _: &CreateRequest, _, cx| this.open_create(None, cx)))
+            .on_action(cx.listener(|this, _: &SendToAgent, _, cx| this.open_agent_pick(cx)))
             .on_action(cx.listener(|this, _: &ShowShortcuts, _, cx| this.toggle_shortcuts(cx)))
             .on_action(cx.listener(|this, _: &NextThread, _, cx| this.step_thread(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousThread, _, cx| this.step_thread(false, cx)))
@@ -4320,6 +4347,7 @@ impl Render for Workspace {
             .children(self.render_create(cx))
             .children(self.render_submit(cx))
             .children(self.render_open_ask(cx))
+            .children(self.render_agent_pick(cx))
             .children(self.render_shortcuts(cx))
             .children(self.render_palette(cx))
     }

@@ -51,3 +51,31 @@ pub fn owner_only(file: &std::path::Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600))
 }
+
+/// Whether process `pid` still runs.
+pub fn alive(pid: u32) -> bool {
+    // SAFETY: signal 0 only checks that the process exists and may be signalled.
+    let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Terminal.app, through AppleScript: a new window that runs the command in a login shell.
+pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io::Result<()> {
+    let command = format!(
+        "cd {} && {program} {}",
+        super::shell_quote(&dir.display().to_string()),
+        super::shell_quote(arg)
+    );
+    let script = format!(
+        "tell application \"Terminal\"\n activate\n do script \"{}\"\nend tell",
+        command.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+    let status = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("Terminal did not start it"))
+    }
+}

@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Comment {
     pub id: u64,
     pub path: String,
@@ -18,6 +18,57 @@ pub struct Comment {
     pub body: String,
     /// Where it was written: a commit or a version range, for the reader of the export.
     pub at: String,
+    /// Where it is in its life with an agent.
+    #[serde(default)]
+    pub state: State,
+    /// The chat it was sent to, once sent (`crate::agents`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent: Option<Sent>,
+    /// What the agent said about it since.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replies: Vec<Reply>,
+}
+
+/// A comment's life with an agent: written, sent to a chat, done by the agent, confirmed by the
+/// reviewer. Reopening puts it back to a draft, to be sent again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum State {
+    #[default]
+    Draft,
+    Sent,
+    /// The agent says it is done; the reviewer has not looked yet.
+    Addressed,
+    Resolved,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sent {
+    /// The chat's session id; empty for "whichever chat asks" (a new chat).
+    pub session: String,
+    /// What the reviewer saw the chat as, for the comment's line.
+    pub title: String,
+    /// The batch it went in: answers name it, so an old answer never touches a resent comment.
+    pub batch: String,
+    /// The chat's watcher has handed it over.
+    #[serde(default)]
+    pub delivered: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reply {
+    /// Unique, so an answer applied twice is applied once.
+    pub uid: String,
+    pub body: String,
+    /// Seconds since the epoch.
+    pub at: i64,
+}
+
+impl Comment {
+    /// Still for the agent: not done by it, not confirmed by the reviewer.
+    pub fn open(&self) -> bool {
+        matches!(self.state, State::Draft | State::Sent)
+    }
 }
 
 /// Where a comment sits in the file as it is now.
@@ -42,14 +93,17 @@ pub fn place<'a>(comment: &Comment, count: u32, line: impl Fn(u32) -> &'a str) -
     }
 }
 
-fn store(root: &Path) -> String {
-    let name: String = root
-        .display()
+/// The repository's name in the data folder's file names.
+pub fn key(root: &Path) -> String {
+    root.display()
         .to_string()
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '_' })
-        .collect();
-    format!("comments/{name}.json")
+        .collect()
+}
+
+fn store(root: &Path) -> String {
+    format!("comments/{}.json", key(root))
 }
 
 pub fn load(root: &Path) -> Vec<Comment> {
@@ -97,6 +151,7 @@ mod tests {
             code: code.into(),
             body: "Clamp this.".into(),
             at: "c41d7be".into(),
+            ..Default::default()
         }
     }
 

@@ -32,3 +32,29 @@ pub fn launcher(launcher: &super::Launcher) -> Option<PathBuf> {
 pub fn owner_only(_file: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
+
+/// Whether process `pid` still runs, as `tasklist` sees it.
+pub fn alive(pid: u32) -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+        .unwrap_or(true)
+}
+
+/// A new console window in `dir`.
+pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io::Result<()> {
+    std::process::Command::new("cmd")
+        .args([
+            "/c",
+            "start",
+            "",
+            "cmd",
+            "/k",
+            program,
+            &arg.replace('"', "'"),
+        ])
+        .current_dir(dir)
+        .spawn()
+        .map(|_| ())
+}

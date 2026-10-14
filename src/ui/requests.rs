@@ -1163,6 +1163,25 @@ impl Workspace {
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.jump_to(id, cx)))
         });
+        let drafts = self.agent_drafts().len();
+        let send = (drafts > 0).then(|| {
+            div()
+                .id("send-to-agent")
+                .px_2()
+                .h(px(24.))
+                .flex()
+                .items_center()
+                .gap_2()
+                .rounded(px(super::ROW_RADIUS))
+                .bg(theme::focus())
+                .text_color(theme::base())
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .cursor_pointer()
+                .child(format!("Send to agent · {drafts}"))
+                .child(super::keys::caps("⇧⌘A", super::keys::On::Filled))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_agent_pick(cx)))
+        });
         let copy = (!self.comments.is_empty()).then(|| {
             div()
                 .id("copy-for-agent")
@@ -1181,7 +1200,10 @@ impl Workspace {
                 .child(if self.copied {
                     "Copied ✓".to_owned()
                 } else {
-                    format!("Copy for agent · {}", self.comments.len())
+                    format!(
+                        "Copy for agent · {}",
+                        self.comments.iter().filter(|c| c.open()).count()
+                    )
                 })
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.copy_for_agent(cx)))
         });
@@ -1241,9 +1263,11 @@ impl Workspace {
                 .children((copy.is_some() || submit.is_some()).then(|| {
                     div()
                         .flex()
+                        .flex_wrap()
                         .gap_2()
                         .px(px(12.))
                         .pb(px(8.))
+                        .children(send)
                         .children(copy)
                         .children(submit)
                 }))
