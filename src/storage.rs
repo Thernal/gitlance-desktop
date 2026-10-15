@@ -454,6 +454,8 @@ pub struct ViewOptions {
     pub list_files: bool,
     /// One file at a time instead of every file of the diff in one scroll.
     pub one_file: bool,
+    /// With every file in one scroll, a file marked reviewed folds to its header.
+    pub fold_reviewed: bool,
 }
 
 impl ViewOptions {
@@ -478,6 +480,7 @@ impl ViewOptions {
                 "ignore_whitespace" => options.ignore_whitespace = value,
                 "list_files" => options.list_files = value,
                 "one_file" => options.one_file = value,
+                "fold_reviewed" => options.fold_reviewed = value,
                 _ => {}
             }
         }
@@ -492,7 +495,8 @@ impl std::fmt::Display for ViewOptions {
         writeln!(f, "full_context={}", self.full_context)?;
         writeln!(f, "ignore_whitespace={}", self.ignore_whitespace)?;
         writeln!(f, "list_files={}", self.list_files)?;
-        writeln!(f, "one_file={}", self.one_file)
+        writeln!(f, "one_file={}", self.one_file)?;
+        writeln!(f, "fold_reviewed={}", self.fold_reviewed)
     }
 }
 

@@ -122,7 +122,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
         Cmd::OneFile,
     ),
     (
-        "Expand all files, or fold the reviewed ones",
+        "Expand all files, or collapse them all",
         "⌥⇧A",
         Cmd::ExpandAll,
     ),

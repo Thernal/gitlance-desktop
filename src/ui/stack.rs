@@ -42,7 +42,8 @@ pub(super) struct Stack {
     of_file: Vec<Option<usize>>,
     /// The list index of each block's header; the list's length last.
     starts: Vec<usize>,
-    /// Files folded or opened against the default (a reviewed file starts folded).
+    /// Files folded or opened against the default (open; reviewed ones folded with View → Fold
+    /// reviewed files).
     flipped: HashSet<usize>,
     building: bool,
     task: Option<Task<()>>,
@@ -179,11 +180,15 @@ impl Workspace {
         !file.hunks.is_empty() && !self.generated_folded(file) && !self.shows_image(file)
     }
 
-    /// File `ix` shows its header alone: it is reviewed, unless the reader opened it (or the other
+    /// File `ix` folds by default: it is reviewed and View → Fold reviewed files is on.
+    fn folds_by_default(&self, ix: usize) -> bool {
+        self.options.fold_reviewed && self.review_state(ix) == Some(State::Done)
+    }
+
+    /// File `ix` shows its header alone: by default, unless the reader opened it (or the other
     /// way round).
     pub(super) fn folded(&self, ix: usize) -> bool {
-        let reviewed = self.review_state(ix) == Some(State::Done);
-        reviewed != self.stack.as_ref().is_some_and(|s| s.flipped.contains(&ix))
+        self.folds_by_default(ix) != self.stack.as_ref().is_some_and(|s| s.flipped.contains(&ix))
     }
 
     pub(super) fn body(&self, b: usize) -> Body {
@@ -438,6 +443,15 @@ impl Workspace {
         cx.notify();
     }
 
+    /// View → Fold reviewed files changed: every file goes back to its default.
+    pub(super) fn refold(&mut self, cx: &mut Context<Self>) {
+        if let Some(stack) = self.stack.as_mut() {
+            stack.flipped.clear();
+        }
+        self.sync_stack();
+        self.build_stack(cx);
+    }
+
     /// Files marked or unmarked reviewed fold or open as their mark says again.
     pub(super) fn review_changed(&mut self, ixs: &[usize]) {
         let Some(stack) = self.stack.as_mut() else {
@@ -660,27 +674,28 @@ impl Workspace {
             .is_some_and(|s| s.blocks.iter().any(|b| self.folded(b.file)))
     }
 
-    /// ⌥⇧A: every file open when some are folded, else the reviewed ones folded again.
+    /// ⌥⇧A: every file open when some are folded, else every file folded.
     pub(super) fn toggle_expand_all(&mut self, cx: &mut Context<Self>) {
         let open = self.any_folded();
         self.expand_all(open, cx);
     }
 
-    /// Opens every file (`open`), or folds the reviewed ones again.
+    /// Opens every file (`open`), or folds every file to its header.
     pub(super) fn expand_all(&mut self, open: bool, cx: &mut Context<Self>) {
-        let Some(n) = self.stack.as_ref().map(|s| s.blocks.len()) else {
+        let Some(files) = self
+            .stack
+            .as_ref()
+            .map(|s| s.blocks.iter().map(|b| b.file).collect::<Vec<_>>())
+        else {
             return;
         };
-        let reviewed: HashSet<usize> = if open {
-            (0..n)
-                .filter_map(|b| self.stack.as_ref().map(|s| s.blocks[b].file))
-                .filter(|&ix| self.review_state(ix) == Some(State::Done))
-                .collect()
-        } else {
-            HashSet::new()
-        };
+        // The files whose default is the other way round.
+        let flipped: HashSet<usize> = files
+            .into_iter()
+            .filter(|&ix| self.folds_by_default(ix) == open)
+            .collect();
         if let Some(stack) = self.stack.as_mut() {
-            stack.flipped = reviewed;
+            stack.flipped = flipped;
         }
         self.sync_stack();
         self.build_stack(cx);

@@ -447,6 +447,7 @@ pub(crate) enum Opt {
     FullContext,
     Whitespace,
     OneFile,
+    FoldReviewed,
 }
 
 /// Waits for loading (`GITLANCE_SNAPSHOT_DELAY_MS`, 2500 by default), selects a commit by SHA
@@ -1622,6 +1623,7 @@ impl Workspace {
             Opt::FullContext => self.options.full_context,
             Opt::Whitespace => self.options.ignore_whitespace,
             Opt::OneFile => self.options.one_file,
+            Opt::FoldReviewed => self.options.fold_reviewed,
         }
     }
 
@@ -1642,10 +1644,12 @@ impl Workspace {
             Opt::FullContext => self.options.full_context = value,
             Opt::Whitespace => self.options.ignore_whitespace = value,
             Opt::OneFile => self.options.one_file = value,
+            Opt::FoldReviewed => self.options.fold_reviewed = value,
         }
         cx.set_menus(menus(&self.options));
         match opt {
             Opt::Unified | Opt::FullContext => self.relayout_all(),
+            Opt::FoldReviewed => self.refold(cx),
             Opt::OneFile => {
                 self.restore_scroll = self.scroll_place();
                 self.clear_file();
@@ -1705,17 +1709,22 @@ impl Workspace {
             self.stack
                 .is_some()
                 .then(|| {
-                    Entry::new(
-                        if self.any_folded() {
-                            "Expand all files"
-                        } else {
-                            "Fold reviewed files"
-                        },
-                        Act::ExpandAll,
-                    )
-                    .key("⌥⇧A")
+                    [
+                        Entry::new(
+                            if self.any_folded() {
+                                "Expand all files"
+                            } else {
+                                "Collapse all files"
+                            },
+                            Act::ExpandAll,
+                        )
+                        .key("⌥⇧A"),
+                        Entry::new("Fold reviewed files", Act::Toggle(Opt::FoldReviewed))
+                            .checked(o.fold_reviewed),
+                    ]
                 })
                 .into_iter()
+                .flatten()
                 .collect(),
         ]
     }
@@ -3362,11 +3371,7 @@ impl Workspace {
                 diff_view::group().child(
                     chip(
                         "expand-all",
-                        if folded {
-                            "Expand all"
-                        } else {
-                            "Fold reviewed"
-                        },
+                        if folded { "Expand all" } else { "Collapse all" },
                         false,
                     )
                     .on_click(
