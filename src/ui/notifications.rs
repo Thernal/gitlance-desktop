@@ -6,8 +6,8 @@
 //!
 //! A request seen for the first time sets its comments so far as read, and its resolved discussions
 //! as known: only what comes after is news. Kept per project in `seen-notes.txt` and
-//! `seen-resolved.txt`. A request's discussions are read again only when it changed
-//! (`updated_at`), or when the list is opened.
+//! `seen-resolved.txt`; what was opened or marked read in `seen-read.txt`. A request's discussions
+//! are read again only when it changed (`updated_at`), or when the list is opened.
 
 use super::keys::{self, On};
 use super::px;
@@ -15,7 +15,9 @@ use super::{ISLAND_RADIUS, ROW_RADIUS, TITLE_BAR, Workspace, format, theme};
 use crate::links::{self, Target};
 use crate::mr::{self, Mr, Thread, Todo};
 use crate::storage;
-use gpui::{ClickEvent, Context, FontWeight, KeyDownEvent, MouseButton, Task, div, prelude::*};
+use gpui::{
+    ClickEvent, Context, FontWeight, KeyDownEvent, MouseButton, ScrollHandle, Task, div, prelude::*,
+};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -82,8 +84,9 @@ pub struct Notices {
     pub list: Vec<Notice>,
     pub open: bool,
     pub at: usize,
-    /// Opened or looked at: no longer bold, not counted.
+    /// Opened or looked at: no longer bold, not counted. Kept for the project `read_base`.
     read: HashSet<String>,
+    read_base: Option<String>,
     /// `base|iid` → the newest comment id already known.
     seen: HashMap<String, u64>,
     /// `base|iid|discussion` of resolved discussions already known.
@@ -93,6 +96,7 @@ pub struct Notices {
     cache: HashMap<u64, (i64, Vec<Thread>)>,
     task: Option<Task<()>>,
     poll: Option<Task<()>>,
+    scroll: ScrollHandle,
 }
 
 impl Notices {
@@ -122,6 +126,24 @@ impl Notices {
             .collect();
     }
 
+    /// The read notices of project `base`, once per project.
+    fn load_read(&mut self, base: &str) {
+        if self.read_base.as_deref() != Some(base) {
+            self.read = read_of(&storage::read(READ_FILE), base);
+            self.read_base = Some(base.to_owned());
+        }
+    }
+
+    /// Writes this project's read notices; other projects' lines (other tabs) are kept as on disk.
+    fn save_read(&self) {
+        if let Some(base) = &self.read_base {
+            storage::save(
+                READ_FILE,
+                with_read(&storage::read(READ_FILE), base, &self.read),
+            );
+        }
+    }
+
     fn save_seen(&self) {
         let mut lines: Vec<String> = self.seen.iter().map(|(k, v)| format!("{k}\t{v}")).collect();
         lines.sort_unstable();
@@ -133,17 +155,45 @@ impl Notices {
     }
 }
 
+const READ_FILE: &str = "seen-read.txt";
+
+/// The read notice keys of project `base` in `text`: lines `base<TAB>key`.
+fn read_of(text: &str, base: &str) -> HashSet<String> {
+    text.lines()
+        .filter_map(|l| l.split_once('\t'))
+        .filter(|(b, _)| *b == base)
+        .map(|(_, key)| key.to_owned())
+        .collect()
+}
+
+/// `text` with project `base`'s lines replaced by `read`.
+fn with_read(text: &str, base: &str, read: &HashSet<String>) -> String {
+    let mut keys: Vec<&String> = read.iter().collect();
+    keys.sort_unstable();
+    let mut lines: Vec<String> = text
+        .lines()
+        .filter(|l| l.split_once('\t').is_some_and(|(b, _)| b != base))
+        .map(str::to_owned)
+        .chain(keys.into_iter().map(|k| format!("{base}\t{k}")))
+        .collect();
+    lines.sort_unstable();
+    lines.join("\n") + "\n"
+}
+
 /// The new comments of request `mr` for user `me`: after `floor` (the newest already known), by
-/// someone else, in a discussion `me` wrote in — or anywhere on `me`'s own request.
+/// someone else — in a discussion `me` wrote in only those after `me`'s last note there (what came
+/// before was answered), and in any discussion of `me`'s own request.
 pub fn replies(me: &str, mr: &Mr, threads: &[Thread], floor: u64) -> Vec<Notice> {
     let mine = mr.author_login == me;
     let mut out = Vec::new();
     for t in threads {
-        let took_part = t.notes.iter().any(|n| n.login == me);
+        let last_mine = t.notes.iter().filter(|n| n.login == me).map(|n| n.id).max();
+        let took_part = last_mine.is_some();
         if !(took_part || mine) {
             continue;
         }
-        for n in t.notes.iter().filter(|n| n.id > floor && n.login != me) {
+        let after = floor.max(last_mine.unwrap_or(0));
+        for n in t.notes.iter().filter(|n| n.id > after && n.login != me) {
             out.push(Notice {
                 key: format!("note:{}", n.id),
                 kind: if took_part {
@@ -230,6 +280,7 @@ impl Workspace {
             return;
         }
         self.notices.load_seen();
+        self.notices.load_read(&remote.base);
         let base = remote.base.clone();
         let requests = self.requests.list.clone();
         let seen = self.notices.seen.clone();
@@ -240,8 +291,11 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move {
                     let me = mr::username(&remote)?;
-                    let todos = mr::todos(&remote).unwrap_or_default();
-                    let mut notices: Vec<Notice> = todos.iter().map(from_todo).collect();
+                    let todos = mr::todos(&remote);
+                    // Everything read: only then may read keys no longer listed be forgotten.
+                    let mut complete = todos.is_ok();
+                    let mut notices: Vec<Notice> =
+                        todos.unwrap_or_default().iter().map(from_todo).collect();
                     let mut floors = HashMap::new();
                     let mut first_resolved = Vec::new();
                     let mut reopened = Vec::new();
@@ -252,7 +306,10 @@ impl Workspace {
                             Some((updated, threads)) if *updated == m.updated => threads.clone(),
                             _ => match mr::threads(&remote, m.iid) {
                                 Ok(threads) => threads,
-                                Err(_) => continue,
+                                Err(_) => {
+                                    complete = false;
+                                    continue;
+                                }
                             },
                         };
                         let key = format!("{base}|{}", m.iid);
@@ -288,11 +345,11 @@ impl Workspace {
                         fresh.insert(m.iid, (m.updated, threads));
                     }
                     notices.sort_by_key(|n| std::cmp::Reverse(n.created));
-                    anyhow::Ok((notices, floors, first_resolved, reopened, fresh))
+                    anyhow::Ok((notices, floors, first_resolved, reopened, fresh, complete))
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if let Ok((list, floors, first_resolved, reopened, fresh)) = found {
+                if let Ok((list, floors, first_resolved, reopened, fresh, complete)) = found {
                     let changed =
                         !floors.is_empty() || !first_resolved.is_empty() || !reopened.is_empty();
                     this.notices.seen.extend(floors);
@@ -304,6 +361,15 @@ impl Workspace {
                         this.notices.save_seen();
                     }
                     this.notices.cache = fresh;
+                    if complete {
+                        let before = this.notices.read.len();
+                        this.notices
+                            .read
+                            .retain(|k| list.iter().any(|n| &n.key == k));
+                        if this.notices.read.len() != before {
+                            this.notices.save_read();
+                        }
+                    }
                     this.notices.list = list;
                     this.notices.at = this
                         .notices
@@ -332,6 +398,7 @@ impl Workspace {
         if self.notices.open {
             // Opened: everything read afresh, not only what reports a change.
             self.notices.at = 0;
+            self.notices.scroll.scroll_to_item(0);
             self.notices.cache.clear();
             self.load_notices(cx);
         }
@@ -343,7 +410,9 @@ impl Workspace {
         let Some(n) = self.notices.list.get(ix).cloned() else {
             return;
         };
-        self.notices.read.insert(n.key.clone());
+        if self.notices.read.insert(n.key.clone()) {
+            self.notices.save_read();
+        }
         self.notices.open = false;
         self.go_to(
             Target::Request {
@@ -391,15 +460,15 @@ impl Workspace {
     fn read_all_notices(&mut self, cx: &mut Context<Self>) {
         let keys: Vec<String> = self.notices.list.iter().map(|n| n.key.clone()).collect();
         self.notices.read.extend(keys);
+        self.notices.save_read();
         cx.notify();
     }
 
     pub(super) fn notices_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        let n = self.notices.list.len();
         match event.keystroke.key.as_str() {
             "escape" => self.notices.open = false,
-            "j" | "down" if n > 0 => self.notices.at = (self.notices.at + 1) % n,
-            "k" | "up" if n > 0 => self.notices.at = (self.notices.at + n - 1) % n,
+            "j" | "down" => return self.notices_step(true, cx),
+            "k" | "up" => return self.notices_step(false, cx),
             "enter" => return self.open_notice(self.notices.at, cx),
             "e" => return self.dismiss_notice(self.notices.at, cx),
             _ => return,
@@ -407,7 +476,8 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ↑ ↓ arrive as the palette's actions while the list is open.
+    /// j k, and ↑ ↓ (which arrive as the palette's actions while the list is open): the next or
+    /// previous notice, scrolled into view.
     pub(super) fn notices_step(&mut self, down: bool, cx: &mut Context<Self>) {
         let n = self.notices.list.len();
         if n > 0 {
@@ -416,6 +486,7 @@ impl Workspace {
             } else {
                 (self.notices.at + n - 1) % n
             };
+            self.notices.scroll.scroll_to_item(self.notices.at);
             cx.notify();
         }
     }
@@ -619,6 +690,7 @@ impl Workspace {
                                 .flex_1()
                                 .min_h_0()
                                 .overflow_y_scroll()
+                                .track_scroll(&self.notices.scroll)
                                 .p(px(6.))
                                 .children(rows)
                                 .children(empty.then(|| {
@@ -740,5 +812,37 @@ mod tests {
         let got = replies("you", &request("you"), &threads, 3);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].note, Some(6));
+    }
+
+    #[test]
+    fn a_comment_one_answered_is_not_a_reply() {
+        // #2: boris comments on your line on anna's request; you answer. Boris did not reply to you.
+        let answered = [thread(vec![note(5, "boris"), note(6, "you")])];
+        assert!(replies("you", &request("anna"), &answered, 4).is_empty());
+        // On your own request too: what you answered is not news.
+        let own = [thread(vec![
+            note(5, "boris"),
+            note(6, "you"),
+            note(8, "boris"),
+        ])];
+        let got = replies("you", &request("you"), &own, 4);
+        assert_eq!(
+            got.iter().map(|n| n.note).collect::<Vec<_>>(),
+            vec![Some(8)]
+        );
+        assert_eq!(got[0].kind, Kind::Reply);
+    }
+
+    #[test]
+    fn read_notices_are_kept_per_project() {
+        let disk = "a\tnote:1\nb\tnote:2\nb\ttodo:3\n";
+        let read = read_of(disk, "b");
+        assert_eq!(read, ["note:2".to_owned(), "todo:3".to_owned()].into());
+        // b's lines replaced, a's (another tab) kept.
+        let now: HashSet<String> = ["todo:3".to_owned(), "note:9".to_owned()].into();
+        let saved = with_read(disk, "b", &now);
+        assert_eq!(saved, "a\tnote:1\nb\tnote:9\nb\ttodo:3\n");
+        assert_eq!(read_of(&saved, "b"), now);
+        assert_eq!(read_of(&saved, "a"), ["note:1".to_owned()].into());
     }
 }
