@@ -14,6 +14,23 @@ use crate::review::{self, Comment, Place, State};
 use crate::textedit::TextEdit;
 use gpui::{ClipboardItem, Context, KeyDownEvent, WeakEntity, div, prelude::*};
 
+/// The quiet Edit on one's own note.
+pub(super) fn edit_button(
+    id: impl Into<gpui::ElementId>,
+    key: Option<&'static str>,
+    change: Change,
+    this: WeakEntity<Workspace>,
+) -> gpui::AnyElement {
+    discussion::button(id, "Edit", key, Kind::Quiet)
+        .h(px(22.))
+        .px(px(6.))
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            this.update(cx, |this, cx| this.start_edit(change, cx)).ok();
+        })
+        .into_any_element()
+}
+
 /// Who a comment is for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Target {
@@ -23,6 +40,17 @@ pub enum Target {
     Request(u64),
     /// A reply to discussion number `0` of the open merge request.
     Reply(usize),
+    /// A new text for one's own comment.
+    Edit(Change),
+}
+
+/// The comment an edit changes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Change {
+    /// A comment for the agent, by its id.
+    Agent(u64),
+    /// Note `note` of discussion number `thread` of the open merge request.
+    Note { thread: usize, note: u64 },
 }
 
 /// A comment being written.
@@ -226,7 +254,9 @@ impl Workspace {
                         .map(|(ix, _, _)| Row::Draft(*ix)),
                 );
                 if compose.is_some_and(|c| {
-                    c.old == old && c.line == line && !matches!(c.target, Target::Reply(_))
+                    c.old == old
+                        && c.line == line
+                        && !matches!(c.target, Target::Reply(_) | Target::Edit(_))
                 }) || go == Some((old, line))
                 {
                     out.push(Row::Composer);
@@ -340,6 +370,176 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Edit: the composer in place of one's own comment, its text in it.
+    pub(super) fn start_edit(&mut self, change: Change, cx: &mut Context<Self>) {
+        let (path, old, line, text) = match change {
+            Change::Agent(id) => {
+                let Some(c) = self.comments.iter().find(|c| c.id == id) else {
+                    return;
+                };
+                if !self.toggled_agent.contains(&id) && c.state == State::Resolved {
+                    self.toggled_agent.insert(id);
+                }
+                (c.path.clone(), c.old, c.line, c.body.clone())
+            }
+            Change::Note { thread, note } => {
+                let Some(t) = self.requests.threads.get(thread) else {
+                    return;
+                };
+                let Some(n) = t.notes.iter().find(|n| n.id == note) else {
+                    return;
+                };
+                self.thread_at = Some(thread);
+                if !self.mr_open(thread) {
+                    self.toggled_mr.insert(thread);
+                }
+                let old = t.new_line.is_none();
+                let line = t.new_line.or(t.old_line).unwrap_or(0);
+                (
+                    t.path.clone().unwrap_or_default(),
+                    old,
+                    line,
+                    n.body.clone(),
+                )
+            }
+        };
+        let mut edit = TextEdit::new(text);
+        edit.move_to(crate::textedit::Move::End, false);
+        self.compose = Some(Compose {
+            path,
+            old,
+            first: None,
+            line,
+            code: String::new(),
+            edit,
+            at: String::new(),
+            target: Target::Edit(change),
+            error: None,
+            posting: false,
+            preview: false,
+        });
+        self.reset_field_edit();
+        self.refresh_rows();
+        cx.notify();
+    }
+
+    /// One's own last note in discussion `ix`, when the request can take changes.
+    pub(super) fn my_note_in(&self, ix: usize) -> Option<u64> {
+        let login = self.requests.login.as_deref()?;
+        self.request_target()?;
+        let t = self.requests.threads.get(ix)?;
+        t.notes
+            .iter()
+            .rev()
+            .find(|n| n.login == login)
+            .map(|n| n.id)
+    }
+
+    /// `e`: edit one's own last note in the discussion with the keyboard.
+    pub(super) fn edit_focused(&mut self, cx: &mut Context<Self>) {
+        if self.compose.is_some() {
+            return;
+        }
+        let Some(thread) = self.acting_thread() else {
+            return;
+        };
+        match self.my_note_in(thread) {
+            Some(note) => self.start_edit(Change::Note { thread, note }, cx),
+            None => {
+                self.error = Some("Nothing of yours to edit in this discussion".into());
+                cx.notify();
+            }
+        }
+    }
+
+    /// Saves an edit: an agent's comment here, a note on GitLab or GitHub.
+    fn save_edit(&mut self, change: Change, cx: &mut Context<Self>) {
+        let Some(compose) = self.compose.as_ref() else {
+            return;
+        };
+        let body = compose.edit.text().trim().to_owned();
+        if body.is_empty() || compose.posting {
+            return;
+        }
+        match change {
+            Change::Agent(id) => {
+                if let Some(c) = self.comments.iter_mut().find(|c| c.id == id) {
+                    c.body = body;
+                }
+                self.compose = None;
+                self.save_comments();
+                self.copied = false;
+                self.refresh_rows();
+                cx.notify();
+            }
+            Change::Note { thread, note } => {
+                let (Some(remote), Some(t), Some(iid)) = (
+                    self.web.clone(),
+                    self.requests.threads.get(thread),
+                    self.requests.current,
+                ) else {
+                    return;
+                };
+                let id = t.id.clone();
+                self.submit_compose(cx, move || {
+                    crate::mr::edit_note(&remote, iid, &id, note, &body)
+                });
+            }
+        }
+    }
+
+    /// The editor of an edit, when `change` is being edited.
+    pub(super) fn edit_box(&self, change: Change, this: WeakEntity<Self>) -> Option<gpui::Div> {
+        let compose = self
+            .compose
+            .as_ref()
+            .filter(|c| c.target == Target::Edit(change))?;
+        let tone = match change {
+            Change::Agent(_) => Source::Agent.color(),
+            Change::Note { .. } => Source::GitLab.color(),
+        };
+        let (cancel, save) = (this.clone(), this.clone());
+        let tail = vec![
+            discussion::button("edit-cancel", "Cancel", None, Kind::Quiet)
+                .h(px(28.))
+                .px(px(10.))
+                .tooltip(|_, cx| cx.new(|_| super::Tip("Esc")).into())
+                .on_click(move |_, _, cx| {
+                    cancel.update(cx, |this, cx| this.cancel_comment(cx)).ok();
+                })
+                .into_any_element(),
+            discussion::button(
+                "edit-save",
+                if compose.posting { "Saving…" } else { "Save" },
+                (!compose.posting).then_some("⌘↵"),
+                Kind::Primary(tone),
+            )
+            .h(px(28.))
+            .px(px(10.))
+            .on_click(move |_, _, cx| {
+                save.update(cx, |this, cx| this.add_comment(cx)).ok();
+            })
+            .into_any_element(),
+        ];
+        Some(self.open_input(
+            compose,
+            tone,
+            "The comment…",
+            None,
+            &[
+                Helper::Bold,
+                Helper::Italic,
+                Helper::Code,
+                Helper::Link,
+                Helper::Quote,
+                Helper::Bullet,
+                Helper::CodeBlock,
+            ],
+            tail,
+            this,
+        ))
+    }
+
     /// The merge request whose diff is open, when a comment can be posted to it.
     pub(super) fn request_target(&self) -> Option<u64> {
         match self.diff.as_ref()?.header {
@@ -366,6 +566,7 @@ impl Workspace {
         {
             compose.target = match (compose.target, request) {
                 (Target::Reply(ix), _) => Target::Reply(ix),
+                (Target::Edit(change), _) => Target::Edit(change),
                 (Target::Agent, Some(iid)) => Target::Request(iid),
                 _ => Target::Agent,
             };
@@ -385,6 +586,7 @@ impl Workspace {
         match self.compose.as_ref().map(|c| c.target) {
             Some(Target::Request(iid)) => return self.post_comment(iid, false, cx),
             Some(Target::Reply(ix)) => return self.post_reply(ix, cx),
+            Some(Target::Edit(change)) => return self.save_edit(change, cx),
             _ => {}
         }
         let Some(compose) = self.compose.take() else {
@@ -1094,7 +1296,7 @@ impl Workspace {
         let open = self.toggled_agent.contains(&id) == resolved;
         let selecting = self.selecting(this.clone());
         let (fold, delete, raw) = (this.clone(), this.clone(), this.clone());
-        let (resolve, reopen) = (this.clone(), this);
+        let (resolve, reopen, editing) = (this.clone(), this.clone(), this);
         let status = match (&comment.state, &comment.sent) {
             (State::Draft, _) => "draft · stays on this Mac until you send it".to_owned(),
             (State::Sent, Some(s)) if s.session.is_empty() => "sent to a new chat".to_owned(),
@@ -1169,19 +1371,26 @@ impl Workspace {
                 })
                 .ok();
             });
+        let change = Change::Agent(id);
+        let edit_box = self.edit_box(change, editing.clone());
         let body = discussion::note(
             &self.me,
             true,
             None,
             comment.at.clone(),
-            markdown::body(
-                &comment.body,
-                self.settings.rich_comments,
-                format!("md-agent-{id}"),
-                None,
-                Some(selecting),
-            ),
+            match edit_box {
+                Some(edit_box) => edit_box.into_any_element(),
+                None => markdown::body(
+                    &comment.body,
+                    self.settings.rich_comments,
+                    format!("md-agent-{id}"),
+                    None,
+                    Some(selecting),
+                ),
+            },
             comment.replies.is_empty(),
+            (self.compose.is_none())
+                .then(|| edit_button(("edit-agent", id), None, change, editing)),
         );
         let replies = comment.replies.iter().enumerate().map(|(ix, reply)| {
             discussion::note(
@@ -1197,6 +1406,7 @@ impl Workspace {
                     None,
                 ),
                 ix + 1 == comment.replies.len(),
+                None,
             )
         });
         let notes = div().flex().flex_col().child(body).children(replies);
@@ -1241,8 +1451,10 @@ impl Workspace {
         let compose = self.compose.as_ref()?;
         let request = self.request_target();
         let source = match compose.target {
-            Target::Agent => Source::Agent,
-            Target::Request(_) | Target::Reply(_) => Source::GitLab,
+            Target::Agent | Target::Edit(Change::Agent(_)) => Source::Agent,
+            Target::Request(_) | Target::Reply(_) | Target::Edit(Change::Note { .. }) => {
+                Source::GitLab
+            }
         };
         let tone = source.color();
         let (cancel, add, review, audience) =

@@ -182,6 +182,7 @@ pub fn note(
     time: String,
     body: AnyElement,
     last: bool,
+    action: Option<AnyElement>,
 ) -> Div {
     div()
         .relative()
@@ -239,7 +240,8 @@ pub fn note(
                                 .text_size(px(12.))
                                 .text_color(theme::muted())
                                 .child(format!("· {time}")),
-                        ),
+                        )
+                        .children(action.map(|a| div().ml_auto().flex_none().child(a))),
                 )
                 .child(div().min_w_0().child(body)),
         )

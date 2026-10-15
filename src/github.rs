@@ -749,6 +749,16 @@ pub fn reply(remote: &WebRemote, number: u64, thread: &str, body: &str) -> Resul
     }
 }
 
+/// Changes the text of one's own comment `note`: a conversation comment, or one on a line.
+pub fn edit_note(remote: &WebRemote, thread: &str, note: u64, body: &str) -> Result<()> {
+    let endpoint = match thread_ids(thread) {
+        ("issue", _) => format!("issues/comments/{note}"),
+        _ => format!("pulls/comments/{note}"),
+    };
+    rest(remote, "PATCH", &endpoint, Some(&json!({ "body": body })))?;
+    Ok(())
+}
+
 pub fn resolve(remote: &WebRemote, number: u64, thread: &str, resolved: bool) -> Result<()> {
     if crate::mr::record(format!("resolve {number} {thread} {resolved}"))? {
         return Ok(());

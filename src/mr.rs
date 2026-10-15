@@ -714,6 +714,29 @@ pub fn reply(remote: &WebRemote, iid: u64, discussion: &str, body: &str) -> Resu
     Ok(())
 }
 
+/// Changes the text of one's own note `note` in discussion `discussion` of request `iid`.
+pub fn edit_note(
+    remote: &WebRemote,
+    iid: u64,
+    discussion: &str,
+    note: u64,
+    body: &str,
+) -> Result<()> {
+    if record(format!("edit {iid} {note} {body}"))? {
+        return Ok(());
+    }
+    if remote.github {
+        return github::edit_note(remote, discussion, note, body);
+    }
+    call(
+        remote,
+        &format!("merge_requests/{iid}/discussions/{discussion}/notes/{note}"),
+        "PUT",
+        &[("body", body.to_owned())],
+    )?;
+    Ok(())
+}
+
 /// `group/project` of a remote.
 fn project_path(remote: &WebRemote) -> Option<String> {
     remote

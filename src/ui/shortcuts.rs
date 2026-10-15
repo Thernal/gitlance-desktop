@@ -50,6 +50,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
                 "notifications: mentions, review requests, replies (j k ↵ e)",
             ),
             ("r  x  o", "reply to, resolve, fold a discussion"),
+            ("e", "edit your comment in the discussion"),
             ("⌘⇧R", "show or hide the comments drawer"),
             ("⌥M", "comments as markdown / raw text"),
             ("⇧⌘A", "send the comments for your agent to its chat"),

@@ -127,6 +127,7 @@ actions!(
         PreviousThread,
         ReplyThread,
         ResolveThread,
+        EditComment,
         NextZone,
         PreviousZone,
         Activate,
@@ -209,6 +210,7 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("shift-p"), PreviousThread, Some("Workspace && !Typing")),
         KeyBinding::new(&k("r"), ReplyThread, Some("Workspace && !Typing")),
         KeyBinding::new(&k("x"), ResolveThread, Some("Workspace && !Typing")),
+        KeyBinding::new(&k("e"), EditComment, Some("Workspace && !Typing")),
         KeyBinding::new(&k("o"), ToggleThread, Some("Workspace && !Typing")),
         KeyBinding::new(
             &k("cmd-shift-r"),
@@ -4163,6 +4165,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &PreviousThread, _, cx| this.step_thread(false, cx)))
             .on_action(cx.listener(|this, _: &ReplyThread, _, cx| this.reply_focused(cx)))
             .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))
+            .on_action(cx.listener(|this, _: &EditComment, _, cx| this.edit_focused(cx)))
             .on_action(cx.listener(|this, _: &ToggleThread, _, cx| this.toggle_focused(cx)))
             .on_action(cx.listener(|this, _: &MarkReviewed, _, cx| this.mark_and_advance(cx)))
             .on_action(cx.listener(|this, _: &ToggleBookmark, _, cx| this.toggle_bookmark(cx)))

@@ -39,6 +39,8 @@ pub struct Requests {
     version_task: Option<Task<()>>,
     /// The request left with ✕: its branch shows as a plain branch until a request is picked again.
     pub dismissed: Option<u64>,
+    /// The token's username: one's own notes are the ones it wrote, and can be edited.
+    pub login: Option<String>,
     task: Option<Task<()>>,
     thread_task: Option<Task<()>>,
 }
@@ -131,6 +133,7 @@ impl Workspace {
         let (Some(iid), Some(remote)) = (iid, self.web.clone()) else {
             return;
         };
+        let known = self.requests.login.is_some();
         self.requests.thread_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -139,13 +142,21 @@ impl Workspace {
                     let drafts = mr::drafts(&remote, iid).unwrap_or_default();
                     let pipeline = mr::pipeline(&remote, iid).ok().flatten();
                     let approvals = mr::approvals(&remote, iid).ok();
-                    mr::threads(&remote, iid).map(|t| (t, drafts, pipeline, approvals))
+                    let login = if known {
+                        None
+                    } else {
+                        mr::username(&remote).ok()
+                    };
+                    mr::threads(&remote, iid).map(|t| (t, drafts, pipeline, approvals, login))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if this.requests.current == Some(iid) {
                     match result {
-                        Ok((threads, drafts, pipeline, approvals)) => {
+                        Ok((threads, drafts, pipeline, approvals, login)) => {
+                            if login.is_some() {
+                                this.requests.login = login;
+                            }
                             this.requests.threads = threads;
                             this.requests.drafts = drafts;
                             this.requests.pipeline = pipeline;
@@ -583,7 +594,8 @@ impl Workspace {
         let open = self.mr_open(ix);
         let focused = self.thread_at == Some(ix);
         let can_act = self.request_target().is_some();
-        let (fold, pick, reply, resolve, raw) = (
+        let (fold, pick, reply, resolve, raw, edit) = (
+            this.clone(),
             this.clone(),
             this.clone(),
             this.clone(),
@@ -657,20 +669,41 @@ impl Workspace {
             .as_ref()
             .is_some_and(|c| c.target == super::comments::Target::Reply(ix));
         let last = t.notes.len() - 1;
+        let mine = self.my_note_in(ix);
         let notes = t.notes.iter().enumerate().map(|(n, note)| {
+            let change = super::comments::Change::Note {
+                thread: ix,
+                note: note.id,
+            };
+            let edit_box = self.edit_box(change, edit.clone());
+            let own = self.requests.login.as_deref() == Some(note.login.as_str());
+            let editable = can_act && self.compose.is_none() && own;
             discussion::note(
                 &note.author,
-                false,
+                own,
                 (author.as_deref() == Some(note.author.as_str())).then_some("Author"),
                 format::ago(note.created),
-                super::markdown::body(
-                    &note.body,
-                    self.settings.rich_comments,
-                    format!("md-note-{ix}-{n}"),
-                    self.link_base(),
-                    Some(selecting.clone()),
-                ),
+                match edit_box {
+                    Some(edit_box) => edit_box.into_any_element(),
+                    None => super::markdown::body(
+                        &note.body,
+                        self.settings.rich_comments,
+                        format!("md-note-{ix}-{n}"),
+                        self.link_base(),
+                        Some(selecting.clone()),
+                    ),
+                },
                 n == last && !replying,
+                editable.then(|| {
+                    // `e` edits the last of one's notes in the discussion with the keyboard.
+                    let key = (focused && mine == Some(note.id)).then_some("e");
+                    super::comments::edit_button(
+                        ("edit-note", note.id as usize),
+                        key,
+                        change,
+                        edit.clone(),
+                    )
+                }),
             )
         });
         // Replying: the box opens where "Reply…" was, inside the discussion.
@@ -820,7 +853,7 @@ impl Workspace {
 
     /// The discussion `r` `x` `o` act on: the one with the keyboard (a click or ⇧N gave it), else
     /// the first open one from the top of the view.
-    fn acting_thread(&self) -> Option<usize> {
+    pub(super) fn acting_thread(&self) -> Option<usize> {
         self.thread_at.or_else(|| {
             let top = self.diff_list.logical_scroll_top().item_ix;
             self.rows.iter().skip(top).find_map(|row| match row {
@@ -954,6 +987,7 @@ impl Workspace {
                             Some(selecting),
                         ),
                         true,
+                        None,
                     ))),
             )
             .into_any_element()
