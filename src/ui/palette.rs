@@ -47,6 +47,7 @@ pub enum Cmd {
     FullContext,
     Whitespace,
     OneFile,
+    ExpandAll,
     RichComments,
     LeaveRequest,
     AllReviewed,
@@ -119,6 +120,11 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
         "All files in one scroll, or one file at a time",
         "⌥A",
         Cmd::OneFile,
+    ),
+    (
+        "Expand all files, or fold the reviewed ones",
+        "⌥⇧A",
+        Cmd::ExpandAll,
     ),
     ("Comments as markdown or raw text", "⌥M", Cmd::RichComments),
     (
@@ -858,6 +864,7 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::FullContext => Box::new(ToggleFullContext),
         Cmd::Whitespace => Box::new(ToggleWhitespace),
         Cmd::OneFile => Box::new(ToggleOneFile),
+        Cmd::ExpandAll => Box::new(ToggleExpandAll),
         Cmd::RichComments => Box::new(ToggleRichComments),
         Cmd::LeaveRequest => Box::new(LeaveRequest),
         Cmd::AllReviewed => Box::new(ToggleAllReviewed),

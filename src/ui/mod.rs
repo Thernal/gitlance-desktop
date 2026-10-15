@@ -97,6 +97,7 @@ actions!(
         ToggleFullContext,
         ToggleWhitespace,
         ToggleOneFile,
+        ToggleExpandAll,
         ToggleRichComments,
         LeaveRequest,
         ToggleAllReviewed,
@@ -303,6 +304,7 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("alt-e"), ToggleFullContext, Some("Workspace")),
         KeyBinding::new(&k("alt-w"), ToggleWhitespace, Some("Workspace")),
         KeyBinding::new(&k("alt-a"), ToggleOneFile, Some("Workspace")),
+        KeyBinding::new(&k("alt-shift-a"), ToggleExpandAll, Some("Workspace")),
         KeyBinding::new(
             &k("alt-m"),
             ToggleRichComments,
@@ -1699,6 +1701,22 @@ impl Workspace {
                     .key("⌥A")
                     .checked(o.one_file),
             ],
+            // All files in one scroll: the folded (reviewed) ones open at once.
+            self.stack
+                .is_some()
+                .then(|| {
+                    Entry::new(
+                        if self.any_folded() {
+                            "Expand all files"
+                        } else {
+                            "Fold reviewed files"
+                        },
+                        Act::ExpandAll,
+                    )
+                    .key("⌥⇧A")
+                })
+                .into_iter()
+                .collect(),
         ]
     }
 
@@ -2006,7 +2024,14 @@ impl Workspace {
         };
         let style = self.row_style();
         let sides = if self.view_options().unified { 1. } else { 2. };
-        let visible = (self.body_width.get() - style.chrome(self.view_options().unified)) / sides;
+        // A file's card is inset from the sides, and framed.
+        let card = if self.stack.is_some() {
+            2. * stack::CARD_MARGIN + 2.
+        } else {
+            0.
+        };
+        let visible =
+            (self.body_width.get() - card - style.chrome(self.view_options().unified)) / sides;
         (widest as f32 * self.char_width + 24. - visible).max(0.)
     }
 
@@ -2334,6 +2359,15 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.toggle(Opt::FullContext, cx);
+    }
+
+    fn toggle_expand_all_action(
+        &mut self,
+        _: &ToggleExpandAll,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_expand_all(cx);
     }
 
     fn toggle_one_file(&mut self, _: &ToggleOneFile, _: &mut Window, cx: &mut Context<Self>) {
@@ -3323,6 +3357,23 @@ impl Workspace {
                     .child(chip("split", "Split", !o.unified).on_click(set(Opt::Unified, false)))
                     .child(chip("unified", "Unified", o.unified).on_click(set(Opt::Unified, true))),
             )
+            .children(self.stack.is_some().then(|| {
+                let folded = self.any_folded();
+                diff_view::group().child(
+                    chip(
+                        "expand-all",
+                        if folded {
+                            "Expand all"
+                        } else {
+                            "Fold reviewed"
+                        },
+                        false,
+                    )
+                    .on_click(
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.expand_all(folded, cx)),
+                    ),
+                )
+            }))
             .child(
                 diff_view::group().child(
                     chip(
@@ -3977,9 +4028,10 @@ impl Workspace {
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .px(px(4.))
-                    .pt(px(4.))
-                    .pb(px(6.))
+                    .when(self.stack.is_none(), |s| s.px(px(4.)).pt(px(4.)).pb(px(6.)))
+                    .when(self.stack.is_some(), |s| {
+                        s.bg(theme::base()).rounded_b(px(ISLAND_RADIUS))
+                    })
                     .child(body),
             )
     }
@@ -3989,7 +4041,8 @@ impl Workspace {
     /// The selected file's rows, scrolled vertically by the list and horizontally by `offset`.
     fn render_rows(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let this = cx.entity().downgrade();
-        let rows = list(self.diff_list.clone(), move |ix, _, cx| {
+        let outer = this.clone();
+        let row = move |ix: usize, cx: &mut App| -> gpui::AnyElement {
             let Some(workspace) = this.upgrade() else {
                 return div().into_any_element();
             };
@@ -4031,7 +4084,10 @@ impl Workspace {
                     (data, row, workspace.row_style())
                 }
             };
-            style.strong = active && workspace.matches.get(workspace.match_at) == Some(&ix);
+            style.strong = match (&workspace.stack, file) {
+                (Some(stack), Some((_, f))) => stack.matches.get(stack.match_at) == Some(&(f, ix)),
+                _ => workspace.matches.get(workspace.match_at) == Some(&ix),
+            };
             let indent = style.gutter + 8.;
             match row {
                 Row::Thread(id) => return workspace.render_thread(id, indent, this.clone()),
@@ -4133,6 +4189,21 @@ impl Workspace {
                     .into_any_element();
             }
             element
+        };
+        // With all files in one scroll, a file's rows are framed as its card.
+        let rows = list(self.diff_list.clone(), move |ix, _, cx| {
+            let element = row(ix, cx);
+            let Some(workspace) = outer.upgrade() else {
+                return element;
+            };
+            let workspace = workspace.read(cx);
+            match &workspace.stack {
+                Some(stack) if stack.locate(ix).1 > 0 => {
+                    let file = stack.blocks[stack.locate(ix).0].file;
+                    workspace.card_row(element, file, stack.last_of_block(ix))
+                }
+                _ => element,
+            }
         })
         .flex_1();
 
@@ -4154,6 +4225,8 @@ impl Workspace {
         div()
             .id("diff-body")
             .relative()
+            // The ground between the files' cards.
+            .when(self.stack.is_some(), |s| s.bg(theme::base()))
             .flex_1()
             .min_h_0()
             .flex()
@@ -4410,6 +4483,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_full_context))
             .on_action(cx.listener(Self::toggle_whitespace))
             .on_action(cx.listener(Self::toggle_one_file))
+            .on_action(cx.listener(Self::toggle_expand_all_action))
             .on_action(cx.listener(Self::toggle_rich_comments_action))
             .on_action(cx.listener(|this, _: &LeaveRequest, _, cx| this.leave_request(cx)))
             .on_action(

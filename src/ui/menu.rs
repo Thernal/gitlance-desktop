@@ -11,12 +11,20 @@ use gpui::{ClipboardItem, Context, MouseButton, Pixels, Point, div, prelude::*};
 pub enum Act {
     Copy(String),
     OpenUrl(String),
-    OpenEditor { path: String, line: u32 },
-    Comment { old: bool, line: u32 },
+    OpenEditor {
+        path: String,
+        line: u32,
+    },
+    Comment {
+        old: bool,
+        line: u32,
+    },
     SetMode(DiffMode),
     Toggle(Opt),
     CreateRequest(usize),
     Annotate,
+    /// All files in one scroll: open every file, or fold the reviewed ones again.
+    ExpandAll,
 }
 
 #[derive(Clone)]
@@ -90,6 +98,7 @@ impl Workspace {
             Act::Toggle(opt) => self.toggle(opt, cx),
             Act::CreateRequest(ix) => self.open_create(Some(ix), cx),
             Act::Annotate => self.toggle_annotate(cx),
+            Act::ExpandAll => self.toggle_expand_all(cx),
         }
         cx.notify();
     }

@@ -154,6 +154,7 @@ impl Workspace {
         }
         self.changes = changes;
         self.change_at = self.change_at.filter(|&at| at < self.changes.len());
+        self.recompute_stack_matches();
     }
 
     /// Scrolls the diff so `row` sits a few lines below the top.
@@ -189,6 +190,18 @@ impl Workspace {
 
     /// Steps to the next (or previous) matching line.
     pub(super) fn step_match(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if let Some(stack) = &self.stack {
+            let n = stack.matches.len();
+            if n > 0 {
+                let at = if forward {
+                    (stack.match_at + 1) % n
+                } else {
+                    (stack.match_at + n - 1) % n
+                };
+                self.go_to_stack_match(at, cx);
+            }
+            return;
+        }
         if self.matches.is_empty() {
             return;
         }
@@ -344,7 +357,13 @@ impl Workspace {
         self.dfind = Some(text);
         self.match_at = 0;
         self.recompute_matches();
-        if let Some(&row) = self.matches.first() {
+        if self.stack.is_some() {
+            // The folded files are built to be searched too.
+            self.build_stack(cx);
+            if let Some(at) = self.first_stack_match() {
+                self.go_to_stack_match(at, cx);
+            }
+        } else if let Some(&row) = self.matches.first() {
             self.scroll_to_row(row);
         }
         cx.notify();
@@ -355,6 +374,8 @@ impl Workspace {
         let text = self.dfind.clone()?;
         let count = if self.dterms.is_empty() {
             String::new()
+        } else if let Some(count) = self.stack_match_count() {
+            count
         } else if self.matches.is_empty() {
             "No matches".to_owned()
         } else {
