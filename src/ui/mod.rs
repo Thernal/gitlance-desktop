@@ -31,6 +31,7 @@ mod select;
 mod settings;
 mod shell;
 mod shortcuts;
+mod stack;
 mod submit;
 mod theme;
 mod toast;
@@ -95,6 +96,7 @@ actions!(
         ToggleWrap,
         ToggleFullContext,
         ToggleWhitespace,
+        ToggleOneFile,
         ToggleRichComments,
         LeaveRequest,
         ToggleAllReviewed,
@@ -300,6 +302,7 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("alt-z"), ToggleWrap, Some("Workspace")),
         KeyBinding::new(&k("alt-e"), ToggleFullContext, Some("Workspace")),
         KeyBinding::new(&k("alt-w"), ToggleWhitespace, Some("Workspace")),
+        KeyBinding::new(&k("alt-a"), ToggleOneFile, Some("Workspace")),
         KeyBinding::new(
             &k("alt-m"),
             ToggleRichComments,
@@ -428,6 +431,7 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
             MenuItem::action("Show All Lines", ToggleFullContext).checked(options.full_context),
             MenuItem::action("Hide Whitespace Changes", ToggleWhitespace)
                 .checked(options.ignore_whitespace),
+            MenuItem::action("One File at a Time", ToggleOneFile).checked(options.one_file),
         ]),
         Menu::new("Help").items([MenuItem::action("Keyboard Shortcuts", ShowShortcuts)]),
     ]
@@ -440,6 +444,7 @@ pub(crate) enum Opt {
     Wrap,
     FullContext,
     Whitespace,
+    OneFile,
 }
 
 /// Waits for loading (`GITLANCE_SNAPSHOT_DELAY_MS`, 2500 by default), selects a commit by SHA
@@ -621,6 +626,7 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                         "wrap" => Opt::Wrap,
                         "all-lines" => Opt::FullContext,
                         "whitespace" => Opt::Whitespace,
+                        "one-file" => Opt::OneFile,
                         _ => continue,
                     };
                     // Not saved: a snapshot must not change the user's settings.
@@ -1016,6 +1022,9 @@ pub struct Workspace {
     data: Option<Arc<FileData>>,
     /// `data` laid out for `options`.
     rows: Vec<Row>,
+    /// Every file of the diff in one scroll (`stack.rs`); `None` while files are shown one at a
+    /// time.
+    stack: Option<stack::Stack>,
     /// Unchanged runs of the selected file the user opened.
     expanded: HashSet<usize>,
     diff_list: ListState,
@@ -1167,6 +1176,7 @@ impl Workspace {
             rows: Vec::new(),
             expanded: HashSet::new(),
             diff_list: ListState::new(0, ListAlignment::Top, px(400.)),
+            stack: None,
             offset: 0.,
             body_width: Rc::new(Shared::new(0.)),
             char_width: 0.,
@@ -1280,6 +1290,7 @@ impl Workspace {
     }
 
     fn clear_file(&mut self) {
+        self.stack = None;
         self.annotations.clear();
         self.data = None;
         self.view_task = None;
@@ -1473,6 +1484,8 @@ impl Workspace {
                             keep.and_then(|path| diff.files.iter().position(|f| f.path() == path));
                         let empty = diff.files.is_empty();
                         this.diff = Some(diff);
+                        // The files of the diff it replaces are gone.
+                        this.stack = None;
                         this.index_review();
                         // The first file as the island lists it (a tree sorts folders first), so
                         // → walks on from the top.
@@ -1498,8 +1511,6 @@ impl Workspace {
         let Some(file) = self.diff.as_ref().and_then(|d| d.files.get(ix)).cloned() else {
             return;
         };
-        self.file = ix;
-        self.fcursor = None;
         self.remember_place(
             recents::Key::File(file.path().to_owned()),
             file.path().to_owned(),
@@ -1509,6 +1520,11 @@ impl Workspace {
             self.files_popover = false;
             self.zone = zones::Zone::Diff;
         }
+        if self.wants_stack() {
+            return self.stack_select(ix, cx);
+        }
+        self.file = ix;
+        self.fcursor = None;
         self.clear_file();
         self.scroll_file_into_view(ix);
         let mode = self.options.mode;
@@ -1539,8 +1555,14 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Lays the selected file out again for the current options; the diff scrolls to the top.
+    /// Lays the selected file out again for the current options; the diff scrolls to the top
+    /// (with all files in one scroll, only its rows that changed are replaced).
     fn relayout(&mut self) {
+        let block = self
+            .stack
+            .as_ref()
+            .and_then(|s| s.block_of(self.file))
+            .map(|b| (b, self.shown_rows(b)));
         let rows = self
             .data
             .as_ref()
@@ -1548,9 +1570,21 @@ impl Workspace {
             .unwrap_or_default();
         self.rows = self.with_comments(rows);
         self.notes = self.line_notes();
-        self.diff_list.reset(self.rows.len());
+        match block {
+            Some((b, before)) => self.stack_changed(b, before),
+            None => self.diff_list.reset(self.rows.len()),
+        }
         self.offset = self.offset.min(self.max_offset());
         self.recompute_matches();
+    }
+
+    /// Every file laid out again: the open one, or all of them in one scroll.
+    fn relayout_all(&mut self) {
+        if self.stack.is_some() {
+            self.relayout_stack();
+        } else {
+            self.relayout();
+        }
     }
 
     /// Shows the hidden lines of an unchanged run in place, keeping the scroll position.
@@ -1558,6 +1592,11 @@ impl Workspace {
         let Some(data) = self.data.clone() else {
             return;
         };
+        if self.stack.is_some() {
+            self.expanded.insert(segment);
+            self.relayout();
+            return cx.notify();
+        }
         let Some(at) = self
             .rows
             .iter()
@@ -1580,6 +1619,7 @@ impl Workspace {
             Opt::Wrap => self.options.wrap,
             Opt::FullContext => self.options.full_context,
             Opt::Whitespace => self.options.ignore_whitespace,
+            Opt::OneFile => self.options.one_file,
         }
     }
 
@@ -1599,10 +1639,16 @@ impl Workspace {
             Opt::Wrap => self.options.wrap = value,
             Opt::FullContext => self.options.full_context = value,
             Opt::Whitespace => self.options.ignore_whitespace = value,
+            Opt::OneFile => self.options.one_file = value,
         }
         cx.set_menus(menus(&self.options));
         match opt {
-            Opt::Unified | Opt::FullContext => self.relayout(),
+            Opt::Unified | Opt::FullContext => self.relayout_all(),
+            Opt::OneFile => {
+                self.restore_scroll = self.scroll_place();
+                self.clear_file();
+                self.select_file(self.file, cx);
+            }
             // Same rows, new heights.
             Opt::Wrap => self.diff_list.remeasure(),
             Opt::Whitespace => self.reload_diff(cx),
@@ -1617,7 +1663,11 @@ impl Workspace {
         }
         self.options.mode = mode;
         cx.set_menus(menus(&self.options));
-        self.select_file(self.file, cx);
+        if self.stack.is_some() {
+            self.reopen_stack(cx);
+        } else {
+            self.select_file(self.file, cx);
+        }
         cx.notify();
     }
 
@@ -1645,6 +1695,9 @@ impl Workspace {
                 Entry::new("Hide whitespace changes", Act::Toggle(Opt::Whitespace))
                     .key("⌥W")
                     .checked(o.ignore_whitespace),
+                Entry::new("One file at a time", Act::Toggle(Opt::OneFile))
+                    .key("⌥A")
+                    .checked(o.one_file),
             ],
         ]
     }
@@ -1843,7 +1896,7 @@ impl Workspace {
         self.settings.save();
         apply_ui_zoom(zoom, window);
         self.char_width = 0.;
-        self.relayout();
+        self.relayout_all();
         cx.notify();
     }
 
@@ -1863,7 +1916,7 @@ impl Workspace {
         self.settings.save();
         // The width of a character is measured again at the new size; the rows change height.
         self.char_width = 0.;
-        self.relayout();
+        self.relayout_all();
         cx.notify();
     }
 
@@ -1911,20 +1964,35 @@ impl Workspace {
 
     fn unfold(&mut self, path: &str, cx: &mut Context<Self>) {
         self.unfolded.insert(path.to_owned());
+        self.sync_stack();
+        self.build_stack(cx);
         cx.notify();
     }
 
     fn row_style(&self) -> RowStyle<'_> {
-        let digits = self.data.as_ref().map_or(3, |d| d.gutter_digits);
+        self.row_style_for(self.data.as_deref(), &self.notes, true)
+    }
+
+    /// How a row of a file built as `data` is drawn; the selection and blame only in the `active`
+    /// file.
+    fn row_style_for<'a>(
+        &'a self,
+        data: Option<&FileData>,
+        notes: &'a [diff_view::LineNote],
+        active: bool,
+    ) -> RowStyle<'a> {
+        let digits = data.map_or(3, |d| d.gutter_digits);
         RowStyle {
             wrap: self.options.wrap,
             offset: self.offset,
             marks: self.settings.mark_style,
             terms: &self.dterms,
             strong: false,
-            sel: self.sel,
-            notes: &self.notes,
-            annot: self.annotate.then_some(&self.annotations[..]),
+            sel: self.sel.filter(|_| active),
+            notes,
+            annot: self
+                .annotate
+                .then_some(if active { &self.annotations[..] } else { &[] }),
             row: self.row_height(),
             // Room for the comment mark (16 px) left of the number.
             gutter: digits.max(3) as f32 * self.char_width + 30.,
@@ -1933,13 +2001,13 @@ impl Workspace {
 
     /// How far the longest line can scroll before its end reaches the right edge.
     fn max_offset(&self) -> f32 {
-        let Some(data) = &self.data else {
+        let Some(widest) = self.widest() else {
             return 0.;
         };
         let style = self.row_style();
         let sides = if self.view_options().unified { 1. } else { 2. };
         let visible = (self.body_width.get() - style.chrome(self.view_options().unified)) / sides;
-        (data.widest as f32 * self.char_width + 24. - visible).max(0.)
+        (widest as f32 * self.char_width + 24. - visible).max(0.)
     }
 
     fn scroll_horizontally(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
@@ -2266,6 +2334,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.toggle(Opt::FullContext, cx);
+    }
+
+    fn toggle_one_file(&mut self, _: &ToggleOneFile, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle(Opt::OneFile, cx);
     }
 
     fn toggle_whitespace(&mut self, _: &ToggleWhitespace, _: &mut Window, cx: &mut Context<Self>) {
@@ -3672,6 +3744,7 @@ impl Workspace {
     fn render_file(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
         let file = diff.files.get(self.file);
         let body = match (file, &self.data) {
+            _ if self.stack.is_some() => self.render_rows(cx).into_any_element(),
             (Some(f), _) if self.generated_folded(f) => {
                 let path = f.path().to_owned();
                 div()
@@ -3921,11 +3994,44 @@ impl Workspace {
                 return div().into_any_element();
             };
             let workspace = workspace.read(cx);
-            let (Some(data), Some(&row)) = (workspace.data.clone(), workspace.rows.get(ix)) else {
-                return div().into_any_element();
+            // With all files in one scroll: the file of the row, and its place among the file's
+            // rows (the active file's are the workspace's own).
+            let (file, ix) = match &workspace.stack {
+                Some(stack) => {
+                    let (b, inside) = stack.locate(ix);
+                    let file = stack.blocks[b].file;
+                    if inside == 0 {
+                        return workspace.render_block_header(file, this.clone());
+                    }
+                    if workspace.body(b) != stack::Body::Rows {
+                        return workspace.render_block_note(b, file, this.clone());
+                    }
+                    (Some((b, file)), inside - 1)
+                }
+                None => (None, ix),
             };
-            let mut style = workspace.row_style();
-            style.strong = workspace.matches.get(workspace.match_at) == Some(&ix);
+            let active = file.is_none_or(|(_, f)| f == workspace.file);
+            let (data, row, mut style) = match file {
+                Some((b, _)) if !active => {
+                    let Some(stack) = &workspace.stack else {
+                        return div().into_any_element();
+                    };
+                    let block = &stack.blocks[b];
+                    let (Some(data), Some(&row)) = (block.data.clone(), block.rows.get(ix)) else {
+                        return div().into_any_element();
+                    };
+                    let style = workspace.row_style_for(Some(&data), &block.notes, false);
+                    (data, row, style)
+                }
+                _ => {
+                    let (Some(data), Some(&row)) = (workspace.data.clone(), workspace.rows.get(ix))
+                    else {
+                        return div().into_any_element();
+                    };
+                    (data, row, workspace.row_style())
+                }
+            };
+            style.strong = active && workspace.matches.get(workspace.match_at) == Some(&ix);
             let indent = style.gutter + 8.;
             match row {
                 Row::Thread(id) => return workspace.render_thread(id, indent, this.clone()),
@@ -3933,13 +4039,21 @@ impl Workspace {
                     return workspace.render_request_thread(ix, indent, this.clone());
                 }
                 Row::Draft(ix) => return workspace.render_draft(ix, indent, this.clone()),
-                Row::Composer if workspace.compose.is_none() => {
+                Row::Composer if workspace.compose.is_none() && active => {
                     return workspace.render_goline_row(indent, this.clone());
                 }
+                Row::Composer if workspace.compose.is_none() => return div().into_any_element(),
                 Row::Composer => return workspace.render_composer(indent, this.clone()),
                 _ => {}
             }
-            let marked = workspace.goline.is_some() && workspace.goline_row == Some(ix);
+            let marked = active && workspace.goline.is_some() && workspace.goline_row == Some(ix);
+            // A press in another file makes it the active one first.
+            let file = file.map(|(_, f)| f).filter(|_| !active);
+            let touch = move |this: &mut Self, cx: &mut Context<Self>| {
+                if let Some(file) = file {
+                    this.activate_file(file, cx);
+                }
+            };
             let (expand, comment, press, drag, context) = (
                 this.clone(),
                 this.clone(),
@@ -3952,22 +4066,32 @@ impl Workspace {
             let events = diff_view::Events {
                 annotate: Box::new(move |_, line, cx| {
                     annotate
-                        .update(cx, |this, cx| this.open_annotated_commit(line, cx))
+                        .update(cx, |this, cx| {
+                            touch(this, cx);
+                            this.open_annotated_commit(line, cx)
+                        })
                         .ok();
                 }),
                 toggle: Box::new(move |old, line, cx| {
                     toggle
-                        .update(cx, |this, cx| this.toggle_notes_at(old, line, cx))
+                        .update(cx, |this, cx| {
+                            touch(this, cx);
+                            this.toggle_notes_at(old, line, cx)
+                        })
                         .ok();
                 }),
                 comment: Box::new(move |old, line, cx| {
                     comment
-                        .update(cx, |this, cx| this.start_comment(old, line, cx))
+                        .update(cx, |this, cx| {
+                            touch(this, cx);
+                            this.start_comment(old, line, cx)
+                        })
                         .ok();
                 }),
                 press: Box::new(move |old, line, byte, clicks, shift, cx| {
                     press
                         .update(cx, |this, cx| {
+                            touch(this, cx);
                             this.select_press(old, line, byte, clicks, shift, cx)
                         })
                         .ok();
@@ -3978,7 +4102,10 @@ impl Workspace {
                 }),
                 context: Box::new(move |old, line, at, cx| {
                     context
-                        .update(cx, |this, cx| this.line_context(old, line, at, cx))
+                        .update(cx, |this, cx| {
+                            touch(this, cx);
+                            this.line_context(old, line, at, cx)
+                        })
                         .ok();
                 }),
             };
@@ -3988,7 +4115,10 @@ impl Workspace {
                 style,
                 move |segment, cx| {
                     expand
-                        .update(cx, |this, cx| this.expand_gap(segment, cx))
+                        .update(cx, |this, cx| {
+                            touch(this, cx);
+                            this.expand_gap(segment, cx)
+                        })
                         .ok();
                 },
                 std::rc::Rc::new(events),
@@ -4074,8 +4204,9 @@ impl Render for Workspace {
         let narrow = body > 0. && body < 700.;
         if narrow != self.narrow {
             self.narrow = narrow;
-            self.relayout();
+            self.relayout_all();
         }
+        self.follow_scroll(cx);
         if self.char_width == 0. {
             let text = window.text_system();
             let id = text.resolve_font(&font(theme::CODE_FONT));
@@ -4278,6 +4409,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_wrap))
             .on_action(cx.listener(Self::toggle_full_context))
             .on_action(cx.listener(Self::toggle_whitespace))
+            .on_action(cx.listener(Self::toggle_one_file))
             .on_action(cx.listener(Self::toggle_rich_comments_action))
             .on_action(cx.listener(|this, _: &LeaveRequest, _, cx| this.leave_request(cx)))
             .on_action(

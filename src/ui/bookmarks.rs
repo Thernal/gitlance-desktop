@@ -84,9 +84,9 @@ impl Store {
 }
 
 impl Workspace {
-    /// The marked lines of the open file (new side).
-    pub(super) fn bookmarks_here(&self) -> Vec<u32> {
-        let (Some(scope), Some(path)) = (self.review_scope.as_deref(), self.current_path()) else {
+    /// The marked lines of file `path` (new side).
+    pub(super) fn bookmarks_in(&self, path: &str) -> Vec<u32> {
+        let Some(scope) = self.review_scope.as_deref() else {
             return Vec::new();
         };
         self.bookmarks

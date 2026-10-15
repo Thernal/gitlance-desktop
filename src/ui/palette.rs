@@ -46,6 +46,7 @@ pub enum Cmd {
     Wrap,
     FullContext,
     Whitespace,
+    OneFile,
     RichComments,
     LeaveRequest,
     AllReviewed,
@@ -114,6 +115,11 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Toggle wrap", "⌥Z", Cmd::Wrap),
     ("Toggle full file", "⌥E", Cmd::FullContext),
     ("Toggle ignore whitespace", "⌥W", Cmd::Whitespace),
+    (
+        "All files in one scroll, or one file at a time",
+        "⌥A",
+        Cmd::OneFile,
+    ),
     ("Comments as markdown or raw text", "⌥M", Cmd::RichComments),
     (
         "Leave the merge request — back to your branch",
@@ -851,6 +857,7 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::Wrap => Box::new(ToggleWrap),
         Cmd::FullContext => Box::new(ToggleFullContext),
         Cmd::Whitespace => Box::new(ToggleWhitespace),
+        Cmd::OneFile => Box::new(ToggleOneFile),
         Cmd::RichComments => Box::new(ToggleRichComments),
         Cmd::LeaveRequest => Box::new(LeaveRequest),
         Cmd::AllReviewed => Box::new(ToggleAllReviewed),

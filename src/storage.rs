@@ -319,6 +319,8 @@ pub struct Settings {
     pub auto_refresh: bool,
     /// Lock files and other generated files start folded in a diff.
     pub fold_generated: bool,
+    /// With all files in one scroll, a file scrolled past is marked reviewed.
+    pub auto_reviewed: bool,
     /// The size of the code in a diff, in percent of the normal size (⌘+ ⌘− ⌘0).
     pub zoom: u16,
     /// The size of the whole interface, in percent (⌘+ ⌘− ⌘0).
@@ -344,6 +346,7 @@ impl Default for Settings {
             default_mode: DiffMode::default(),
             auto_refresh: true,
             fold_generated: true,
+            auto_reviewed: false,
             zoom: 100,
             ui_zoom: 100,
             rich_comments: true,
@@ -380,6 +383,7 @@ impl Settings {
                 }
                 "auto_refresh" => settings.auto_refresh = value != "false",
                 "fold_generated" => settings.fold_generated = value != "false",
+                "auto_reviewed" => settings.auto_reviewed = value == "true",
                 "rich_comments" => settings.rich_comments = value != "false",
                 "mr_sort" => settings.mr_by_updated = value == "updated",
                 "keys_seen" => settings.keys_seen = value == "true",
@@ -412,6 +416,7 @@ impl std::fmt::Display for Settings {
         writeln!(f, "default_mode={}", self.default_mode.key())?;
         writeln!(f, "auto_refresh={}", self.auto_refresh)?;
         writeln!(f, "fold_generated={}", self.fold_generated)?;
+        writeln!(f, "auto_reviewed={}", self.auto_reviewed)?;
         writeln!(f, "rich_comments={}", self.rich_comments)?;
         let sort = if self.mr_by_updated {
             "updated"
@@ -447,6 +452,8 @@ pub struct ViewOptions {
     pub ignore_whitespace: bool,
     /// Changed files as a flat list instead of a folder tree.
     pub list_files: bool,
+    /// One file at a time instead of every file of the diff in one scroll.
+    pub one_file: bool,
 }
 
 impl ViewOptions {
@@ -470,6 +477,7 @@ impl ViewOptions {
                 "full_context" => options.full_context = value,
                 "ignore_whitespace" => options.ignore_whitespace = value,
                 "list_files" => options.list_files = value,
+                "one_file" => options.one_file = value,
                 _ => {}
             }
         }
@@ -483,7 +491,8 @@ impl std::fmt::Display for ViewOptions {
         writeln!(f, "wrap={}", self.wrap)?;
         writeln!(f, "full_context={}", self.full_context)?;
         writeln!(f, "ignore_whitespace={}", self.ignore_whitespace)?;
-        writeln!(f, "list_files={}", self.list_files)
+        writeln!(f, "list_files={}", self.list_files)?;
+        writeln!(f, "one_file={}", self.one_file)
     }
 }
 
@@ -511,6 +520,7 @@ mod tests {
             default_mode: DiffMode::Structural,
             auto_refresh: false,
             fold_generated: false,
+            auto_reviewed: true,
             zoom: 130,
             ui_zoom: 120,
             rich_comments: false,

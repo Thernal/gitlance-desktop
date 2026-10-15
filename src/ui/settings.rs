@@ -214,6 +214,15 @@ impl Workspace {
                     cx,
                 );
                 this.refresh_rows();
+                this.build_stack(cx);
+            },
+        ));
+        let scrolled = switch("auto-reviewed", s.auto_reviewed).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.change_settings(
+                    |this| this.settings.auto_reviewed = !this.settings.auto_reviewed,
+                    cx,
+                );
             },
         ));
 
@@ -265,6 +274,11 @@ impl Workspace {
                     "Fold generated files",
                     "Lock files, minified and generated code (Cargo.lock, package-lock.json, *.min.js, *.pb.go …) start folded when they change by more than 40 lines. They stay in the file list, tagged “generated”; one click shows them.",
                     fold,
+                ))
+                .child(item(
+                    "Mark reviewed as I scroll past",
+                    "With all files in one scroll (⌥A switches to one file at a time), a file whose last line scrolls off the top while you scroll down is marked reviewed. Off: only V, ⇧V and the box mark a file — a file that flew by under a fast scroll was not read.",
+                    scrolled,
                 ))
                 .child(item(
                     "Format comments as markdown",

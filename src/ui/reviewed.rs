@@ -293,6 +293,7 @@ impl Workspace {
         } else {
             self.reviewed.clear(&scope, &path);
         }
+        self.review_changed(&[ix]);
         self.sync_complete();
         cx.notify();
     }
@@ -307,6 +308,7 @@ impl Workspace {
             .filter_map(|&ix| Some((diff.files.get(ix)?.path().to_owned(), *self.fps.get(ix)?)))
             .collect();
         self.reviewed.set_many(&scope, &files, done);
+        self.review_changed(ixs);
         self.sync_complete();
         cx.notify();
     }

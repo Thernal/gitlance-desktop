@@ -562,14 +562,18 @@ impl Workspace {
 
     /// The discussions on lines of the open file: (index, old side, line).
     pub(super) fn request_threads_here(&self) -> Vec<(usize, bool, u32)> {
-        let Some(path) = self.current_path() else {
-            return Vec::new();
-        };
+        self.current_path()
+            .map(|path| self.request_threads_in(&path))
+            .unwrap_or_default()
+    }
+
+    /// The discussions on lines of file `path`.
+    pub(super) fn request_threads_in(&self, path: &str) -> Vec<(usize, bool, u32)> {
         self.requests
             .threads
             .iter()
             .enumerate()
-            .filter(|(_, t)| t.path.as_deref() == Some(path.as_str()))
+            .filter(|(_, t)| t.path.as_deref() == Some(path))
             .filter_map(|(ix, t)| match (t.new_line, t.old_line) {
                 (Some(n), _) => Some((ix, false, n)),
                 (None, Some(o)) => Some((ix, true, o)),
@@ -855,7 +859,7 @@ impl Workspace {
     /// the first open one from the top of the view.
     pub(super) fn acting_thread(&self) -> Option<usize> {
         self.thread_at.or_else(|| {
-            let top = self.diff_list.logical_scroll_top().item_ix;
+            let top = self.local_top();
             self.rows.iter().skip(top).find_map(|row| match row {
                 super::rows::Row::Request(ix) if self.mr_open(*ix) => Some(*ix),
                 _ => None,
@@ -907,16 +911,13 @@ impl Workspace {
         }
     }
 
-    /// The pending comments of the open file: (index, old side, line).
-    pub(super) fn drafts_here(&self) -> Vec<(usize, bool, u32)> {
-        let Some(path) = self.current_path() else {
-            return Vec::new();
-        };
+    /// The pending comments of file `path`: (index, old side, line).
+    pub(super) fn drafts_in(&self, path: &str) -> Vec<(usize, bool, u32)> {
         self.requests
             .drafts
             .iter()
             .enumerate()
-            .filter(|(_, d)| d.path.as_deref() == Some(path.as_str()))
+            .filter(|(_, d)| d.path.as_deref() == Some(path))
             .filter_map(|(ix, d)| match (d.new_line, d.old_line) {
                 (Some(n), _) => Some((ix, false, n)),
                 (None, Some(o)) => Some((ix, true, o)),

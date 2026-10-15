@@ -7,7 +7,7 @@ use super::discussion::{self, Kind, Source};
 use super::input::{self, Edit};
 use super::markdown;
 use super::px;
-use super::rows::Row;
+use super::rows::{FileData, Row};
 use super::{ROW_RADIUS, Selection, Workspace, format, theme};
 use crate::markdown::Helper;
 use crate::review::{self, Comment, Place, State};
@@ -84,6 +84,17 @@ impl Workspace {
     /// The comment marks of the open file's gutter: one per line with comments, in the colour of
     /// the most important kind there (the request's, then one's pending, then the agent's).
     pub(super) fn line_notes(&self) -> Vec<super::diff_view::LineNote> {
+        self.current_path()
+            .map(|path| self.line_notes_in(&path, self.data.as_deref()))
+            .unwrap_or_default()
+    }
+
+    /// The comment marks of file `path`'s gutter, `data` its built diff.
+    pub(super) fn line_notes_in(
+        &self,
+        path: &str,
+        data: Option<&FileData>,
+    ) -> Vec<super::diff_view::LineNote> {
         use super::diff_view::{LineNote, NoteTone};
         let mut out: Vec<LineNote> = Vec::new();
         let mut add = |old: bool, line: u32, tone: NoteTone| match out
@@ -110,18 +121,18 @@ impl Workspace {
             }),
         };
         for c in &self.comments {
-            if let Some(Place::Line(n)) = self.place_in_open_file(c) {
+            if let Some(Place::Line(n)) = data.and_then(|data| place_in(c, path, data)) {
                 add(c.old, n, NoteTone::Agent);
             }
         }
-        for line in self.bookmarks_here() {
+        for line in self.bookmarks_in(path) {
             add(false, line, NoteTone::Bookmark);
         }
         if self.showing_request() {
-            for (_, old, line) in self.request_threads_here() {
+            for (_, old, line) in self.request_threads_in(path) {
                 add(old, line, NoteTone::Request);
             }
-            for (_, old, line) in self.drafts_here() {
+            for (_, old, line) in self.drafts_in(path) {
                 add(old, line, NoteTone::Draft);
             }
         }
@@ -179,40 +190,47 @@ impl Workspace {
 
     /// Where `comment` sits in the open file now (`None` when it belongs to another file).
     fn place_in_open_file(&self, comment: &Comment) -> Option<Place> {
-        let data = self.data.as_ref()?;
-        if Some(&comment.path) != self.current_path().as_ref() {
-            return None;
-        }
-        let side = data.side(comment.old);
-        Some(review::place(comment, side.count(), |n| side.line(n).0))
+        place_in(comment, &self.current_path()?, self.data.as_ref()?)
     }
 
     /// The rows with each comment's thread, and the composer, put under their lines.
     pub(super) fn with_comments(&self, rows: Vec<Row>) -> Vec<Row> {
+        match (self.current_path(), &self.data) {
+            (Some(path), Some(data)) => self.with_comments_in(&path, data, rows, true),
+            _ => rows,
+        }
+    }
+
+    /// The rows of file `path` with its comments under their lines; the `c` prompt only in the
+    /// `active` file, the one the keyboard works in.
+    pub(super) fn with_comments_in(
+        &self,
+        path: &str,
+        data: &FileData,
+        rows: Vec<Row>,
+        active: bool,
+    ) -> Vec<Row> {
         let here: Vec<(u64, bool, u32)> = self
             .comments
             .iter()
-            .filter_map(|c| match self.place_in_open_file(c)? {
+            .filter_map(|c| match place_in(c, path, data)? {
                 Place::Line(n) => Some((c.id, c.old, n)),
                 Place::Outdated => None,
             })
             .collect();
-        let compose = self
-            .compose
-            .as_ref()
-            .filter(|c| Some(&c.path) == self.current_path().as_ref());
+        let compose = self.compose.as_ref().filter(|c| c.path == path);
         let theirs = if self.showing_request() {
-            self.request_threads_here()
+            self.request_threads_in(path)
         } else {
             Vec::new()
         };
         let drafts = if self.showing_request() {
-            self.drafts_here()
+            self.drafts_in(path)
         } else {
             Vec::new()
         };
         // The prompt of `c` hangs under the marked line, like the composer that follows it.
-        let go = if compose.is_none() && self.goline.is_some() {
+        let go = if active && compose.is_none() && self.goline.is_some() {
             self.goline_target()
         } else {
             None
@@ -268,6 +286,11 @@ impl Workspace {
 
     /// Lays the rows out again after a comment changed, keeping the scroll position.
     pub(super) fn refresh_rows(&mut self) {
+        // With all files in one scroll the comment may be in any of them; only rows that changed
+        // are replaced, so the view stays where it is.
+        if self.stack.is_some() {
+            return self.relayout_stack();
+        }
         let top = self.diff_list.logical_scroll_top();
         self.relayout();
         self.diff_list.scroll_to(top);
@@ -1885,4 +1908,13 @@ impl Workspace {
             cx.notify();
         }
     }
+}
+
+/// Where `comment` sits in file `path`, built as `data` (`None` when it belongs to another file).
+fn place_in(comment: &Comment, path: &str, data: &FileData) -> Option<Place> {
+    if comment.path != path {
+        return None;
+    }
+    let side = data.side(comment.old);
+    Some(review::place(comment, side.count(), |n| side.line(n).0))
 }

@@ -297,14 +297,8 @@ impl Workspace {
         if seen == 0 || to + 1 != seen || latest <= to {
             return;
         }
-        let file = self
-            .diff
-            .as_ref()
-            .and_then(|d| d.files.get(self.file))
-            .map(|f| f.path().to_owned());
-        if let Some(path) = file.clone() {
-            self.restore_scroll = Some((path, self.diff_list.logical_scroll_top()));
-        }
+        self.restore_scroll = self.scroll_place();
+        let file = self.restore_scroll.as_ref().map(|(path, _)| path.clone());
         let undo = self.selection;
         self.load_versions(from, latest, file, cx);
         // `load_versions` clears the notice of the diff it replaces; this one belongs to the new.
@@ -325,14 +319,8 @@ impl Workspace {
         let Selection::Versions { from, to } = notice.undo else {
             return;
         };
-        let file = self
-            .diff
-            .as_ref()
-            .and_then(|d| d.files.get(self.file))
-            .map(|f| f.path().to_owned());
-        if let Some(path) = file.clone() {
-            self.restore_scroll = Some((path, self.diff_list.logical_scroll_top()));
-        }
+        self.restore_scroll = self.scroll_place();
+        let file = self.restore_scroll.as_ref().map(|(path, _)| path.clone());
         self.load_versions(from, to, file, cx);
     }
 
