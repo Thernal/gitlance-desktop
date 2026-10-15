@@ -15,6 +15,10 @@ pub struct Comment {
     pub line: u32,
     /// The commented line, as it was.
     pub code: String,
+    /// A comment on several lines: the ones above `line`, as they were. The comment follows its
+    /// last line; the range is that many lines above it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub above: Vec<String>,
     pub body: String,
     /// Where it was written: a commit or a version range, for the reader of the export.
     pub at: String,
@@ -68,6 +72,21 @@ impl Comment {
     /// Still for the agent: not done by it, not confirmed by the reviewer.
     pub fn open(&self) -> bool {
         matches!(self.state, State::Draft | State::Sent)
+    }
+
+    /// `path:line`, or `path:first-last` for several lines, its last line now on `line`.
+    pub fn at_line(&self, line: u32) -> String {
+        match self.above.len() as u32 {
+            0 => format!("{}:{line}", self.path),
+            n => format!("{}:{}-{line}", self.path, line.saturating_sub(n)),
+        }
+    }
+
+    /// The commented code as it was: the lines above, then the line.
+    pub fn quoted(&self) -> String {
+        let mut lines: Vec<&str> = self.above.iter().map(String::as_str).collect();
+        lines.push(&self.code);
+        lines.join("\n").trim_end().to_owned()
     }
 }
 
@@ -124,13 +143,13 @@ pub fn export(repo: &str, comments: &[(Comment, Place)]) -> String {
     );
     for (comment, place) in comments {
         let at = match place {
-            Place::Line(n) => format!("{}:{n}", comment.path),
+            Place::Line(n) => comment.at_line(*n),
             Place::Outdated => format!("{} (the line has changed since)", comment.path),
         };
         let side = if comment.old { " (removed line)" } else { "" };
         out.push_str(&format!(
             "\n## {at}{side}\n\n```\n{}\n```\n\n{}\n\n_Written at {}._\n",
-            comment.code.trim_end(),
+            comment.quoted(),
             comment.body.trim(),
             comment.at
         ));
@@ -200,6 +219,16 @@ mod tests {
         assert!(text.contains("```\nlet x = 1;\n```"));
         assert!(text.contains("Clamp this."));
         assert!(text.contains("(the line has changed since)"));
+    }
+
+    #[test]
+    fn a_comment_on_several_lines_names_and_quotes_them_all() {
+        let mut c = comment(12, "    x");
+        c.above = vec!["fn f() {".into(), "    let y = 2;".into()];
+        assert_eq!(c.at_line(14), "src/a.rs:12-14");
+        assert_eq!(c.quoted(), "fn f() {\n    let y = 2;\n    x");
+        let export = export("repo", &[(c, Place::Line(14))]);
+        assert!(export.contains("## src/a.rs:12-14"));
     }
 
     #[test]

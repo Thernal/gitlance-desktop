@@ -166,6 +166,33 @@ impl FileDiff {
             .or(self.old_path.as_deref())
             .unwrap_or_default()
     }
+
+    /// Line `line` of a side (`old`) as GitLab counts it: its kind and both counters — for an
+    /// added line, the old line that comes next; for a removed one, the new line that comes next.
+    /// `None` when the line is in no hunk.
+    pub fn position(&self, old: bool, line: u32) -> Option<DiffLine> {
+        let side = |l: &DiffLine| if old { l.old_line } else { l.new_line };
+        for hunk in &self.hunks {
+            let Some(at) = hunk.lines.iter().position(|l| side(l) == Some(line)) else {
+                continue;
+            };
+            let found = hunk.lines[at];
+            // The counter of the other side: the next line that has it, or one past the last.
+            let next = |get: fn(&DiffLine) -> Option<u32>| {
+                hunk.lines[at..]
+                    .iter()
+                    .find_map(get)
+                    .or_else(|| hunk.lines[..at].iter().rev().find_map(get).map(|n| n + 1))
+                    .unwrap_or(0)
+            };
+            return Some(DiffLine {
+                kind: found.kind,
+                old_line: found.old_line.or_else(|| Some(next(|l| l.old_line))),
+                new_line: found.new_line.or_else(|| Some(next(|l| l.new_line))),
+            });
+        }
+        None
+    }
 }
 
 /// How a diff is computed.
@@ -376,6 +403,43 @@ fn read_file(path: &std::path::Path) -> Content {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_has_both_counters_as_gitlab_counts_them() {
+        let l = |kind, old_line, new_line| DiffLine {
+            kind,
+            old_line,
+            new_line,
+        };
+        use LineKind::*;
+        let file = FileDiff {
+            old_path: Some("a.rs".into()),
+            new_path: Some("a.rs".into()),
+            change: ChangeKind::Modified,
+            added: 1,
+            removed: 2,
+            hunks: vec![Hunk {
+                lines: vec![
+                    l(Context, Some(4), Some(4)),
+                    l(Removed, Some(5), None),
+                    l(Removed, Some(6), None),
+                    l(Added, None, Some(5)),
+                    l(Context, Some(7), Some(6)),
+                ],
+            }],
+            old_text: None,
+            new_text: None,
+            note: None,
+            old_image: None,
+            new_image: None,
+        };
+        let pos = |old, line| file.position(old, line).map(|p| (p.old_line, p.new_line));
+        assert_eq!(pos(false, 5), Some((Some(7), Some(5))));
+        assert_eq!(pos(true, 6), Some((Some(6), Some(5))));
+        assert_eq!(pos(false, 6), Some((Some(7), Some(6))));
+        assert_eq!(file.position(false, 5).map(|p| p.kind), Some(Added));
+        assert_eq!(pos(false, 40), None);
+    }
 
     #[test]
     fn an_svg_is_sized_by_its_attributes_or_its_view_box() {

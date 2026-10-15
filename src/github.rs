@@ -7,7 +7,7 @@
 //! unpublished comments are one pending review, submitted once with a verdict; an approval cannot
 //! be taken back, only replaced by a later review; and only comments on lines resolve.
 
-use crate::git::WebRemote;
+use crate::git::{LineKind, WebRemote};
 use crate::mr::{Approvals, Draft, Mr, Note, Pipeline, Place, Push, Thread, Todo, Verdict};
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -675,22 +675,33 @@ pub fn post_discussion(
         (None, Some(o)) => (o, "LEFT"),
         (None, None) => bail!("a comment needs a line"),
     };
+    // Several lines: the first one's line and side (a removed line is on the left).
+    let start = place.range.map(|(first, _)| match first.kind {
+        LineKind::Removed => (first.old_line.unwrap_or(0), "LEFT"),
+        _ => (first.new_line.unwrap_or(0), "RIGHT"),
+    });
     if crate::mr::record(format!(
-        "{number} {}{} {line} {side} {body}",
+        "{number} {}{} {}{line} {side} {body}",
         if draft { "draft " } else { "" },
-        place.path
+        place.path,
+        start
+            .map(|(l, s)| format!("from {l} {s} "))
+            .unwrap_or_default()
     ))? {
         return Ok(());
     }
     let sha = check_head(remote, number, head)?;
     if !draft {
+        let mut comment = json!({ "body": body, "commit_id": sha, "path": place.path, "line": line, "side": side });
+        if let Some((l, s)) = start {
+            comment["start_line"] = json!(l);
+            comment["start_side"] = json!(s);
+        }
         rest(
             remote,
             "POST",
             &format!("pulls/{number}/comments"),
-            Some(
-                &json!({ "body": body, "commit_id": sha, "path": place.path, "line": line, "side": side }),
-            ),
+            Some(&comment),
         )?;
         return Ok(());
     }
@@ -708,8 +719,9 @@ pub fn post_discussion(
     };
     graphql(
         remote,
-        "mutation($review: ID!, $path: String!, $line: Int!, $side: DiffSide!, $body: String!) { addPullRequestReviewThread(input: { pullRequestReviewId: $review, path: $path, line: $line, side: $side, body: $body }) { thread { id } } }",
-        json!({ "review": review, "path": place.path, "line": line, "side": side, "body": body }),
+        "mutation($review: ID!, $path: String!, $line: Int!, $side: DiffSide!, $startLine: Int, $startSide: DiffSide, $body: String!) { addPullRequestReviewThread(input: { pullRequestReviewId: $review, path: $path, line: $line, side: $side, startLine: $startLine, startSide: $startSide, body: $body }) { thread { id } } }",
+        json!({ "review": review, "path": place.path, "line": line, "side": side,
+                "startLine": start.map(|(l, _)| l), "startSide": start.map(|(_, s)| s), "body": body }),
     )?;
     Ok(())
 }

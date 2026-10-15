@@ -29,6 +29,8 @@ pub enum Target {
 pub struct Compose {
     path: String,
     old: bool,
+    /// The first line of a comment on several lines; it sits under its last, `line`.
+    first: Option<u32>,
     line: u32,
     code: String,
     /// The text, its caret and selection.
@@ -242,6 +244,30 @@ impl Workspace {
     }
 
     pub(super) fn start_comment(&mut self, old: bool, line: u32, cx: &mut Context<Self>) {
+        self.start_comment_on(old, None, line, cx);
+    }
+
+    /// The lines selected in the diff, first and last, on their side; a selection that ends at the
+    /// start of a line does not take that line.
+    fn selected_lines(&self) -> Option<(bool, u32, u32)> {
+        let sel = self.sel.filter(|s| !s.is_empty())?;
+        let (start, end) = sel.ends();
+        let last = if end.byte == 0 && end.line > start.line {
+            end.line - 1
+        } else {
+            end.line
+        };
+        Some((sel.old, start.line, last))
+    }
+
+    /// A comment on line `line`, or on `first`..=`line`.
+    fn start_comment_on(
+        &mut self,
+        old: bool,
+        first: Option<u32>,
+        line: u32,
+        cx: &mut Context<Self>,
+    ) {
         let (Some(data), Some(path)) = (&self.data, self.current_path()) else {
             return;
         };
@@ -269,6 +295,7 @@ impl Workspace {
         self.compose = Some(Compose {
             path,
             old,
+            first: first.filter(|&f| f < line),
             line,
             code,
             edit: TextEdit::default(),
@@ -294,6 +321,7 @@ impl Workspace {
         self.compose = Some(Compose {
             path,
             old,
+            first: None,
             line,
             code: String::new(),
             edit: TextEdit::default(),
@@ -368,12 +396,19 @@ impl Workspace {
         }
         self.last_request_target = None;
         let id = self.comments.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+        let above = match (compose.first, &self.data) {
+            (Some(first), Some(data)) => (first..compose.line)
+                .map(|n| data.side(compose.old).line(n).0.to_owned())
+                .collect(),
+            _ => Vec::new(),
+        };
         self.comments.push(Comment {
             id,
             path: compose.path,
             old: compose.old,
             line: compose.line,
             code: compose.code,
+            above,
             body: compose.edit.text().trim().to_owned(),
             at: compose.at,
             ..Default::default()
@@ -408,6 +443,12 @@ impl Workspace {
         };
         self.last_request_target = Some(iid);
         let (old_line, new_line) = self.line_pair(compose.line, compose.old);
+        let range = compose.first.and_then(|first| {
+            Some((
+                self.diff_line(first, compose.old)?,
+                self.diff_line(compose.line, compose.old)?,
+            ))
+        });
         let path = new_path.clone().or(old_path.clone()).unwrap_or_default();
         let old_path = old_path.or(new_path).unwrap_or_default();
         self.submit_compose(cx, move || {
@@ -420,6 +461,7 @@ impl Workspace {
                     old_path: &old_path,
                     new_line,
                     old_line,
+                    range,
                 },
                 &body,
                 draft,
@@ -480,6 +522,21 @@ impl Workspace {
         .detach();
     }
 
+    /// A line of the open file with both of GitLab's counters: from its hunk, or, outside the
+    /// hunks (all lines shown), an unchanged line.
+    fn diff_line(&self, line: u32, old: bool) -> Option<crate::git::DiffLine> {
+        let file = self.diff.as_ref()?.files.get(self.file)?;
+        file.position(old, line)
+            .or_else(|| match self.line_pair(line, old) {
+                (Some(o), Some(n)) => Some(crate::git::DiffLine {
+                    kind: crate::git::LineKind::Context,
+                    old_line: Some(o),
+                    new_line: Some(n),
+                }),
+                _ => None,
+            })
+    }
+
     /// The old and the new line numbers GitLab wants for a line: both for an unchanged line, one
     /// for an added or removed line.
     fn line_pair(&self, line: u32, old: bool) -> (Option<u32>, Option<u32>) {
@@ -509,10 +566,15 @@ impl Workspace {
 
     // ---- a comment by line number ------------------------------------------------------------
 
-    /// `c`: a marker appears on the diff; typing a line number moves it, ↵ opens the comment there.
+    /// `c`: on the lines selected in the diff, the composer at once; else a marker appears on the
+    /// diff, typing a line number moves it, ↵ opens the comment there.
     pub(super) fn open_goline(&mut self, cx: &mut Context<Self>) {
         if self.data.is_none() || self.settings_open || self.compose.is_some() {
             return;
+        }
+        if let Some((old, first, last)) = self.selected_lines() {
+            self.zone = super::zones::Zone::Diff;
+            return self.start_comment_on(old, Some(first), last, cx);
         }
         self.reset_field_edit();
         self.zone = super::zones::Zone::Diff;
@@ -1265,7 +1327,7 @@ impl Workspace {
             Target::Agent => "A note for your agent — it stays on this Mac",
             _ => "Comment on the merge request — everyone on it sees it",
         };
-        Some(self.open_input(
+        let input = self.open_input(
             compose,
             tone,
             placeholder,
@@ -1273,7 +1335,25 @@ impl Workspace {
             &[Helper::Bold, Helper::Code, Helper::Link, Helper::Bullet],
             tail,
             this,
-        ))
+        );
+        // Several lines: which, above the box.
+        Some(match compose.first {
+            Some(first) => div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .font_family(theme::UI_FONT)
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child(format!("Lines {first}–{}", compose.line)),
+                )
+                .child(input),
+            None => input,
+        })
     }
 
     /// A reply: the discussion's own one-line field, grown inside its outline (variant D).

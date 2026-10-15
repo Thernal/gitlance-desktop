@@ -470,14 +470,14 @@ pub fn brief(root: &Path, comments: &[&Comment]) -> String {
             let text = std::fs::read_to_string(root.join(&c.path)).unwrap_or_default();
             let lines: Vec<&str> = text.lines().collect();
             match review::place(c, lines.len() as u32, |n| lines[n as usize - 1]) {
-                review::Place::Line(n) => format!("{}:{n}", c.path),
+                review::Place::Line(n) => c.at_line(n),
                 review::Place::Outdated => format!("{} (the line has changed since)", c.path),
             }
         };
         out.push_str(&format!(
             "\n## Comment {} — {at}\n\n```\n{}\n```\n\n{}\n",
             c.id,
-            c.code.trim_end(),
+            c.quoted(),
             c.body.trim()
         ));
         for r in &c.replies {

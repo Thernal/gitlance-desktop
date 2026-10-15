@@ -3,7 +3,7 @@
 //! machine apply, and no HTTP client is linked in). A GitHub remote's pull requests come in the same
 //! shapes: every public function hands a GitHub remote to `crate::github`.
 
-use crate::git::WebRemote;
+use crate::git::{DiffLine, LineKind, WebRemote};
 use crate::github;
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
@@ -499,6 +499,51 @@ pub struct Place<'a> {
     pub old_path: &'a str,
     pub new_line: Option<u32>,
     pub old_line: Option<u32>,
+    /// A comment on several lines: the first and the last, each with both counters
+    /// (`FileDiff::position`). The last is the line above.
+    pub range: Option<(DiffLine, DiffLine)>,
+}
+
+impl Place<'_> {
+    /// `<old>_<new>..<old>_<new>` of the range, for the fixture's record.
+    fn range_text(&self) -> String {
+        self.range
+            .map(|(a, b)| {
+                let n = |l: DiffLine| {
+                    format!("{}_{}", l.old_line.unwrap_or(0), l.new_line.unwrap_or(0))
+                };
+                format!(" range {}..{}", n(a), n(b))
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// GitLab's `line_range` fields of a comment on several lines of `path`.
+fn line_range(path: &str, (start, end): (DiffLine, DiffLine)) -> Vec<(String, String)> {
+    let mut form = Vec::new();
+    for (end_name, l) in [("start", start), ("end", end)] {
+        let key = |k: &str| format!("position[line_range][{end_name}][{k}]");
+        let (old, new) = (l.old_line.unwrap_or(0), l.new_line.unwrap_or(0));
+        form.push((
+            key("line_code"),
+            format!("{}_{old}_{new}", crate::links::path_hash(path)),
+        ));
+        match l.kind {
+            LineKind::Added => {
+                form.push((key("type"), "new".to_owned()));
+                form.push((key("new_line"), new.to_string()));
+            }
+            LineKind::Removed => {
+                form.push((key("type"), "old".to_owned()));
+                form.push((key("old_line"), old.to_string()));
+            }
+            LineKind::Context => {
+                form.push((key("old_line"), old.to_string()));
+                form.push((key("new_line"), new.to_string()));
+            }
+        }
+    }
+    form
 }
 
 /// Posts `body` as a new discussion on a line of merge request `iid`, whose head the reviewer sees
@@ -520,11 +565,12 @@ pub fn post_discussion(
         let file = dir.join("posted.txt");
         let mut text = std::fs::read_to_string(&file).unwrap_or_default();
         text.push_str(&format!(
-            "{iid} {}{} {:?} {:?} {body}\n",
+            "{iid} {}{} {:?} {:?}{} {body}\n",
             if draft { "draft " } else { "" },
             place.path,
             place.new_line,
-            place.old_line
+            place.old_line,
+            place.range_text()
         ));
         std::fs::write(file, text)?;
         return Ok(());
@@ -557,6 +603,11 @@ pub fn post_discussion(
     if let Some(n) = place.old_line {
         form.push(("position[old_line]", n.to_string()));
     }
+    let range = place
+        .range
+        .map(|r| line_range(place.path, r))
+        .unwrap_or_default();
+    form.extend(range.iter().map(|(k, v)| (k.as_str(), v.clone())));
     let endpoint = if draft { "draft_notes" } else { "discussions" };
     request(remote, &format!("merge_requests/{iid}/{endpoint}"), &form)?;
     Ok(())
@@ -1327,12 +1378,48 @@ mod tests {
             old_path: "a.rs",
             new_line: Some(3),
             old_line: None,
+            range: None,
         };
         post_discussion(&remote, 412, "abc", &place, "Why?", false).unwrap();
         let posted = std::fs::read_to_string(dir.join("posted.txt")).unwrap();
         assert!(posted.contains("412 a.rs Some(3) None Why?"));
         unsafe { std::env::remove_var("GITLANCE_MR_FIXTURE") };
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_range_names_its_first_and_last_lines_as_gitlab_does() {
+        let l = |kind, old_line, new_line| DiffLine {
+            kind,
+            old_line,
+            new_line,
+        };
+        let form = line_range(
+            "a.rs",
+            (
+                l(LineKind::Context, Some(4), Some(4)),
+                l(LineKind::Added, Some(7), Some(5)),
+            ),
+        );
+        let get = |k: &str| {
+            form.iter()
+                .find(|(key, _)| key == &format!("position[line_range]{k}"))
+                .map(|(_, v)| v.as_str())
+        };
+        let hash = crate::links::path_hash("a.rs");
+        assert_eq!(
+            get("[start][line_code]"),
+            Some(format!("{hash}_4_4").as_str())
+        );
+        assert_eq!(get("[start][type]"), None);
+        assert_eq!(get("[start][old_line]"), Some("4"));
+        assert_eq!(
+            get("[end][line_code]"),
+            Some(format!("{hash}_7_5").as_str())
+        );
+        assert_eq!(get("[end][type]"), Some("new"));
+        assert_eq!(get("[end][new_line]"), Some("5"));
+        assert_eq!(get("[end][old_line]"), None);
     }
 
     #[test]

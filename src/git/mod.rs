@@ -7,9 +7,9 @@ mod versions;
 #[cfg(test)]
 mod tests;
 
-pub use diff::{ChangeKind, DiffSettings, FileDiff, ImageKind, ImageSide, LineKind};
 #[cfg(test)]
-pub use diff::{DiffLine, Hunk};
+pub use diff::Hunk;
+pub use diff::{ChangeKind, DiffLine, DiffSettings, FileDiff, ImageKind, ImageSide, LineKind};
 pub use versions::{PairCommit, PairKind, RangePair, Version, VersionDiff};
 
 use anyhow::{Context as _, Result};
