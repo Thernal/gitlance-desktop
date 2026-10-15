@@ -4336,7 +4336,11 @@ impl Render for Workspace {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .child(self.render_diff(cx))
+                            .child(if self.choosing_request() {
+                                self.render_choose_request().into_any_element()
+                            } else {
+                                self.render_diff(cx).into_any_element()
+                            })
                             .children(self.render_zen_keys()),
                     )
                     .into_any_element(),

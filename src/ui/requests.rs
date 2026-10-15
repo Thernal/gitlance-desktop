@@ -504,6 +504,51 @@ impl Workspace {
         )
     }
 
+    /// The requests list is open and no request is shown (nor loading): the diff of the branch
+    /// behind it would read as the request's, so the right side waits for a choice.
+    pub(super) fn choosing_request(&self) -> bool {
+        self.picker_open
+            && self.requests.side == Side::Requests
+            && self.requests.available
+            && self.open_request.is_none()
+            && !self.showing_request()
+    }
+
+    /// The right side while a request is being chosen.
+    pub(super) fn render_choose_request(&self) -> impl IntoElement + use<> {
+        let key = |k: &'static str, what: &'static str| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(super::keys::caps(k, super::keys::On::Plain))
+                .child(what)
+        };
+        island()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .bg(theme::editor())
+            .text_color(theme::muted())
+            .child(
+                div()
+                    .text_size(px(15.))
+                    .text_color(theme::text())
+                    .child(super::words::say("Choose a merge request").into_owned()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_4()
+                    .text_size(px(12.))
+                    .child(key("↑↓", "move"))
+                    .child(key("↵", "open"))
+                    .child(key("esc", "back to the branch")),
+            )
+    }
+
     /// The discussions on lines of the open file: (index, old side, line).
     pub(super) fn request_threads_here(&self) -> Vec<(usize, bool, u32)> {
         let Some(path) = self.current_path() else {
