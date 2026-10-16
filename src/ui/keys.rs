@@ -172,8 +172,14 @@ pub fn caps(spec: &str, on: On) -> Div {
         On::Plain => (theme::text(), theme::selected(), theme::panel()),
         On::Filled => (
             theme::base(),
-            gpui::rgba(0x17191e4d),
-            gpui::rgba(0x17191e2e),
+            Rgba {
+                a: 0.3,
+                ..theme::base()
+            },
+            Rgba {
+                a: 0.18,
+                ..theme::base()
+            },
         ),
     };
     div()

@@ -449,7 +449,7 @@ fn code_block(lang: &str, text: &str, ctx: &mut Ctx) -> AnyElement {
 
 /// A paragraph's text with its styles; links open in the browser.
 fn inline(i: &Inline, ctx: &mut Ctx) -> AnyElement {
-    let code_bg: gpui::Hsla = gpui::rgba(0xffffff14).into();
+    let code_bg: gpui::Hsla = theme::hover().into();
     let accent: gpui::Hsla = theme::accent().into();
     let highlights: Vec<_> = i
         .spans

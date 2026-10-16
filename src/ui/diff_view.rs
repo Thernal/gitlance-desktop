@@ -282,7 +282,7 @@ fn gutter(
             let tone = match note.tone {
                 NoteTone::Request => theme::warning(),
                 NoteTone::Draft => theme::renamed(),
-                NoteTone::Agent => theme::focus(),
+                NoteTone::Agent => theme::agent(),
                 NoteTone::Bookmark => theme::renamed(),
             };
             Some(

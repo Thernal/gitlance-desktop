@@ -1243,7 +1243,7 @@ impl Workspace {
             let id = c.id;
             item(
                 ("comment-agent", id as usize),
-                theme::focus(),
+                theme::agent(),
                 format!(
                     "{}:{}",
                     c.path.rsplit('/').next().unwrap_or(&c.path),
@@ -1263,7 +1263,7 @@ impl Workspace {
                 .items_center()
                 .gap_2()
                 .rounded(px(super::ROW_RADIUS))
-                .bg(theme::focus())
+                .bg(theme::agent())
                 .text_color(theme::base())
                 .text_size(px(12.))
                 .font_weight(FontWeight::SEMIBOLD)
@@ -1281,8 +1281,8 @@ impl Workspace {
                 .items_center()
                 .rounded(px(super::ROW_RADIUS))
                 .border_1()
-                .border_color(theme::focus())
-                .text_color(theme::focus())
+                .border_color(theme::agent())
+                .text_color(theme::agent())
                 .text_size(px(12.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .cursor_pointer()

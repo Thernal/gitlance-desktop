@@ -19,13 +19,16 @@ pub mod palette {
     pub const BACKGROUND: u32 = 0x282c34;
     pub const FOREGROUND: u32 = 0xabb2bf;
     pub const COMMENT: u32 = 0x9da3ae;
-    pub const RED: u32 = 0xe06c75;
     pub const GREEN: u32 = 0x98c379;
     pub const YELLOW: u32 = 0xe5c07b;
     pub const BLUE: u32 = 0x61afef;
     pub const PURPLE: u32 = 0xc678dd;
     pub const CYAN: u32 = 0x56b6c2;
     pub const ORANGE: u32 = 0xd19a66;
+    /// Keywords and storage (`--code-01`): One Dark's purple raised to 4.5:1 on a hovered row.
+    pub const KEYWORD: u32 = 0xc97edf;
+    /// Members, properties, tags, headings (`--code-07`): One Dark's red raised to 4.5:1.
+    pub const MEMBER: u32 = 0xe8838b;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,7 +138,7 @@ fn theme() -> &'static Theme {
                 ORANGE,
                 false,
             ),
-            ("keyword, storage, storage.type, storage.modifier", PURPLE, false),
+            ("keyword, storage, storage.type, storage.modifier", KEYWORD, false),
             ("keyword.operator", CYAN, false),
             (
                 "entity.name.function, support.function, meta.function-call variable.function, variable.function",
@@ -149,7 +152,7 @@ fn theme() -> &'static Theme {
             ),
             (
                 "variable.other.member, variable.other.property, support.variable.property, meta.property-name, entity.name.tag, variable.language",
-                RED,
+                MEMBER,
                 false,
             ),
             (
@@ -158,15 +161,15 @@ fn theme() -> &'static Theme {
                 false,
             ),
             ("entity.name.namespace, entity.name.module", YELLOW, false),
-            ("markup.heading, entity.name.section", RED, false),
+            ("markup.heading, entity.name.section", MEMBER, false),
             ("markup.bold", ORANGE, false),
-            ("markup.italic", PURPLE, true),
+            ("markup.italic", KEYWORD, true),
             ("markup.inline.raw, markup.raw", GREEN, false),
             ("markup.underline.link, string.other.link", BLUE, false),
             ("meta.diff.header, meta.diff.range", BLUE, false),
             ("markup.inserted", GREEN, false),
-            ("markup.deleted", RED, false),
-            ("invalid", RED, false),
+            ("markup.deleted", MEMBER, false),
+            ("invalid", MEMBER, false),
         ];
         Theme {
             name: Some("One Dark".into()),
@@ -223,7 +226,7 @@ mod tests {
                 .iter()
                 .any(|s| s.color == color && s.range.start <= start && start < s.range.end)
         };
-        assert!(colored("fn", palette::PURPLE));
+        assert!(colored("fn", palette::KEYWORD));
         assert!(colored("main", palette::BLUE));
         assert!(colored("\"x\"", palette::GREEN));
     }

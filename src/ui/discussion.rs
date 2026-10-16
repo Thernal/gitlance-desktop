@@ -23,15 +23,15 @@ impl Source {
     pub fn color(self) -> Rgba {
         match self {
             Source::GitLab | Source::Pending => theme::warning(),
-            Source::Agent => theme::focus(),
+            Source::Agent => theme::agent(),
         }
     }
 
     fn tint(self) -> Rgba {
         match self {
             Source::GitLab => theme::warning_bg(),
-            Source::Agent => theme::focus_bg(),
-            Source::Pending => gpui::rgba(0x00000000),
+            Source::Agent => theme::agent_bg(),
+            Source::Pending => gpui::transparent_black().into(),
         }
     }
 

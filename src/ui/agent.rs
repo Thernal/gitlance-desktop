@@ -296,7 +296,7 @@ impl Workspace {
             .flex()
             .items_center()
             .rounded(px(ROW_RADIUS))
-            .bg(theme::focus())
+            .bg(theme::agent())
             .text_color(theme::base())
             .font_weight(FontWeight::SEMIBOLD)
             .cursor_pointer()

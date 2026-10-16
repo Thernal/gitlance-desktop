@@ -1349,7 +1349,7 @@ impl Workspace {
                     ("resolve-agent", id),
                     "Resolve",
                     None,
-                    Kind::Primary(theme::focus()),
+                    Kind::Primary(theme::agent()),
                 )
                 .h(px(24.))
                 .px(px(8.))
@@ -1493,7 +1493,7 @@ impl Workspace {
             .gap(px(6.))
             .rounded(px(6.))
             .bg(match source {
-                Source::Agent => theme::focus_bg(),
+                Source::Agent => theme::agent_bg(),
                 _ => theme::warning_bg(),
             })
             .text_size(px(12.))
