@@ -5,6 +5,7 @@ mod annotate;
 mod bookmarks;
 mod comments;
 mod create;
+mod details;
 mod diff_view;
 mod discussion;
 mod fetch;
@@ -120,6 +121,7 @@ actions!(
         ShowShortcuts,
         ToggleThread,
         ToggleComments,
+        ToggleDetails,
         MarkReviewed,
         OpenRecent,
         ZoomIn,
@@ -256,6 +258,7 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
             ToggleComments,
             Some("Workspace && !Typing"),
         ),
+        KeyBinding::new(&k("cmd-i"), ToggleDetails, Some("Workspace && !Typing")),
         KeyBinding::new(&k("v"), MarkReviewed, Some("Workspace && !Typing")),
         KeyBinding::new(&k("cmd-e"), OpenRecent, Some("Workspace")),
         KeyBinding::new(&k("cmd-="), ZoomIn, Some("Workspace")),

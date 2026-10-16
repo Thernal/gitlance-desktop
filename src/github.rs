@@ -8,7 +8,9 @@
 //! be taken back, only replaced by a later review; and only comments on lines resolve.
 
 use crate::git::{LineKind, WebRemote};
-use crate::mr::{Approvals, Draft, Mr, Note, Pipeline, Place, Push, Thread, Todo, Verdict};
+use crate::mr::{
+    Approvals, Details, Draft, Label, Mr, Note, Pipeline, Place, Push, Thread, Todo, Verdict,
+};
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::io::Write;
@@ -281,6 +283,49 @@ pub fn list(remote: &WebRemote) -> Result<Vec<Mr>> {
         )?,
     };
     Ok(parse_pulls(&value))
+}
+
+/// Pull request `number`'s body, labels, milestone and assignees.
+pub fn details(remote: &WebRemote, number: u64) -> Result<Details> {
+    let value = match read_fixture(&format!("pull-{number}.json")) {
+        Some(v) => v?,
+        None => get(remote, &format!("pulls/{number}"))?,
+    };
+    Ok(parse_details(&value))
+}
+
+pub fn parse_details(p: &Value) -> Details {
+    Details {
+        description: s(&p["body"]),
+        labels: p["labels"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|l| Label {
+                name: s(&l["name"]),
+                color: crate::mr::hex_color(&s(&l["color"])),
+            })
+            .collect(),
+        milestone: p["milestone"].is_object().then(|| {
+            let due = s(&p["milestone"]["due_on"]);
+            (
+                s(&p["milestone"]["title"]),
+                due.get(..10).map(str::to_owned),
+            )
+        }),
+        assignees: p["assignees"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(who)
+            .collect(),
+        reviewers: p["requested_reviewers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(who)
+            .collect(),
+    }
 }
 
 pub fn parse_pulls(value: &Value) -> Vec<Mr> {
@@ -935,6 +980,23 @@ pub fn mark_todo_done(remote: &WebRemote, id: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pull_requests_details_read_its_body_labels_and_milestone() {
+        let p = json!({
+            "body": "Why",
+            "labels": [{ "name": "bug", "color": "d73a4a" }],
+            "milestone": { "title": "v2", "due_on": "2026-11-01T07:00:00Z" },
+            "assignees": [{ "login": "ada", "name": null }],
+            "requested_reviewers": [{ "login": "bo" }]
+        });
+        let d = parse_details(&p);
+        assert_eq!(d.description, "Why");
+        assert_eq!(d.labels[0].color, Some(0xd73a4a));
+        assert_eq!(d.milestone, Some(("v2".into(), Some("2026-11-01".into()))));
+        assert_eq!(d.assignees, ["ada"]);
+        assert_eq!(d.reviewers, ["bo"]);
+    }
 
     fn remote(base: &str) -> WebRemote {
         WebRemote {

@@ -281,6 +281,109 @@ pub fn threads(remote: &WebRemote, iid: u64) -> Result<Vec<Thread>> {
     Ok(parse_threads(&value))
 }
 
+/// A label of a request, with its colour as 0xRRGGBB when the project gives one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Label {
+    pub name: String,
+    pub color: Option<u32>,
+}
+
+/// What the Details window says about a request beyond its list row (#8).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Details {
+    pub description: String,
+    pub labels: Vec<Label>,
+    /// The milestone's title and its due date (`YYYY-MM-DD`), if any.
+    pub milestone: Option<(String, Option<String>)>,
+    pub assignees: Vec<String>,
+    /// The reviewers by name (GitHub: those still asked; who approved is in the approvals).
+    pub reviewers: Vec<String>,
+}
+
+/// `#rrggbb` (or `rrggbb`) as 0xRRGGBB.
+pub fn hex_color(text: &str) -> Option<u32> {
+    let hex = text.trim().trim_start_matches('#');
+    (hex.len() == 6)
+        .then(|| u32::from_str_radix(hex, 16).ok())
+        .flatten()
+}
+
+/// Request `iid`'s description, labels in their colours, milestone and assignees.
+pub fn details(remote: &WebRemote, iid: u64) -> Result<Details> {
+    if remote.github {
+        return github::details(remote, iid);
+    }
+    let value = match fixture() {
+        Some(dir) => match std::fs::read_to_string(dir.join(format!("mr-{iid}.json"))) {
+            Ok(text) => serde_json::from_str(&text)?,
+            // Without its own file, the request's row in the list.
+            Err(_) => {
+                let list: Value =
+                    serde_json::from_str(&std::fs::read_to_string(dir.join("mrs.json"))?)?;
+                list.as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|m| m.get("iid").and_then(Value::as_u64) == Some(iid))
+                    .cloned()
+                    .unwrap_or(Value::Null)
+            }
+        },
+        None => get(remote, &format!("merge_requests/{iid}"))?,
+    };
+    let colors = match fixture() {
+        Some(dir) => std::fs::read_to_string(dir.join("labels.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or(Value::Null),
+        None => get(remote, "labels?per_page=100").unwrap_or(Value::Null),
+    };
+    Ok(parse_details(&value, &colors))
+}
+
+pub fn parse_details(m: &Value, labels: &Value) -> Details {
+    let color_of = |name: &str| {
+        labels
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|l| l.get("name").and_then(Value::as_str) == Some(name))
+            .and_then(|l| hex_color(&text(l, "color")))
+    };
+    Details {
+        description: text(m, "description"),
+        labels: m
+            .get("labels")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(|name| Label {
+                name: name.to_owned(),
+                color: color_of(name),
+            })
+            .collect(),
+        milestone: m.get("milestone").filter(|v| v.is_object()).map(|ms| {
+            let due = text(ms, "due_date");
+            (text(ms, "title"), (!due.is_empty()).then_some(due))
+        }),
+        assignees: people(m, "assignees"),
+        reviewers: people(m, "reviewers"),
+    }
+}
+
+/// The names (else usernames) in the list `key` of `m`.
+fn people(m: &Value, key: &str) -> Vec<String> {
+    m.get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|a| match text(a, "name") {
+            n if n.is_empty() => text(a, "username"),
+            n => n,
+        })
+        .collect()
+}
+
 /// The merge request's newest pipeline; `None` when it has none.
 pub fn pipeline(remote: &WebRemote, iid: u64) -> Result<Option<Pipeline>> {
     if remote.github {
@@ -1297,6 +1400,29 @@ mod tests {
         assert_eq!(
             pushes.iter().map(|p| p.head.as_str()).collect::<Vec<_>>(),
             ["aaa", "bbb"]
+        );
+    }
+
+    #[test]
+    fn details_carry_labels_in_their_colours_and_the_milestone() {
+        let m = serde_json::json!({
+            "description": "Moves the state.",
+            "labels": ["auth", "odd"],
+            "milestone": { "title": "2.5", "due_date": "2026-10-31" },
+            "assignees": [{ "username": "juniper", "name": "Juniper Hale" }],
+            "reviewers": [{ "username": "ember", "name": "" }]
+        });
+        let labels = serde_json::json!([{ "name": "auth", "color": "#61afef" }]);
+        let d = parse_details(&m, &labels);
+        assert_eq!(d.description, "Moves the state.");
+        assert_eq!(d.labels[0].color, Some(0x61afef));
+        assert_eq!(d.labels[1].color, None);
+        assert_eq!(d.milestone, Some(("2.5".into(), Some("2026-10-31".into()))));
+        assert_eq!(d.assignees, ["Juniper Hale"]);
+        assert_eq!(d.reviewers, ["ember"]);
+        assert_eq!(
+            parse_details(&serde_json::json!({}), &Value::Null),
+            Details::default()
         );
     }
 

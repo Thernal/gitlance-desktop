@@ -47,6 +47,8 @@ pub struct Requests {
     pub pipeline: Option<Pipeline>,
     /// Who approved the request, and where the reviewer stands.
     pub approvals: Option<mr::Approvals>,
+    /// Its description, labels, milestone and assignees, for the Details window (#8).
+    pub details: Option<mr::Details>,
     /// The pushes GitLab kept for a request, as versions of this repository.
     pub versions: Option<(u64, Vec<Version>)>,
     version_task: Option<Task<()>>,
@@ -152,6 +154,7 @@ impl Workspace {
             self.requests.drafts.clear();
             self.requests.pipeline = None;
             self.requests.approvals = None;
+            self.requests.details = None;
             self.draft_at = None;
         }
         self.requests.current = iid;
@@ -167,21 +170,25 @@ impl Workspace {
                     let drafts = mr::drafts(&remote, iid).unwrap_or_default();
                     let pipeline = mr::pipeline(&remote, iid).ok().flatten();
                     let approvals = mr::approvals(&remote, iid).ok();
+                    let details = mr::details(&remote, iid).ok();
                     let login = if known {
                         None
                     } else {
                         mr::username(&remote).ok()
                     };
-                    mr::threads(&remote, iid).map(|t| (t, drafts, pipeline, approvals, login))
+                    mr::threads(&remote, iid)
+                        .map(|t| (t, drafts, pipeline, approvals, login, details))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if this.requests.current == Some(iid) {
                     match result {
-                        Ok((threads, drafts, pipeline, approvals, login)) => {
+                        Ok((threads, drafts, pipeline, approvals, login, details)) => {
                             if login.is_some() {
                                 this.requests.login = login;
                             }
+                            this.requests.details = details;
+                            this.details_first_time(iid, cx);
                             this.requests.threads = threads;
                             this.requests.drafts = drafts;
                             this.requests.pipeline = pipeline;
@@ -1669,15 +1676,12 @@ impl Workspace {
     }
 
     /// "!412 · Payment retry backoff" next to the branch in the title bar.
-    pub(super) fn render_request_title(
+    /// The pipeline's pill: its state, and the job that failed; a click opens it.
+    pub(super) fn render_pipeline_pill(
         &self,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
-        let m = self
-            .requests
-            .current
-            .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))?;
-        let pill = self.requests.pipeline.clone().map(|p| {
+        self.requests.pipeline.clone().map(|p| {
             let (glyph, word, color) = match p.status.as_str() {
                 "success" => ("✓", "passed".to_owned(), theme::added()),
                 "failed" => (
@@ -1721,8 +1725,15 @@ impl Workspace {
                 .child(format!("{glyph} {word}"))
                 .children(ago.map(|a| div().text_color(theme::faint()).child(a)))
                 .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url)))
-        });
-        let approval = self.requests.approvals.clone().map(|a| {
+        })
+    }
+
+    /// Approve, or who approved: `a` toggles one's approval.
+    pub(super) fn render_approval_chip(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        self.requests.approvals.clone().map(|a| {
             let count = if a.required > 0 {
                 format!(" {}/{}", a.required - a.left.min(a.required), a.required)
             } else if !a.by.is_empty() && !a.mine {
@@ -1771,7 +1782,19 @@ impl Workspace {
                 })
                 .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_approval(cx)))
-        });
+        })
+    }
+
+    /// The request in the title bar: its number and ✕ to leave it; its title, pipeline and
+    /// approvals are in its header row (`details.rs`).
+    pub(super) fn render_request_title(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let m = self
+            .requests
+            .current
+            .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))?;
         Some(
             div()
                 .flex_1()
@@ -1793,16 +1816,15 @@ impl Workspace {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(super::words::number(m.iid)),
                         )
-                        .child(
+                        // Its title only while the header row shows something else (a commit of it).
+                        .children((!self.showing_request()).then(|| {
                             div()
                                 .min_w_0()
                                 .truncate()
                                 .text_color(theme::muted())
-                                .child(m.title.clone()),
-                        ),
+                                .child(m.title.clone())
+                        })),
                 )
-                .children(pill)
-                .children(approval)
                 .child(
                     div()
                         .id("leave-request")

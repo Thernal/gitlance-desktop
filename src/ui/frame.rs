@@ -943,6 +943,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToggleAnnotate, _, cx| this.toggle_annotate(cx)))
             .on_action(cx.listener(|this, _: &FindInFiles, _, cx| this.open_find_files(cx)))
             .on_action(cx.listener(|this, _: &ToggleReviewed, _, cx| this.toggle_reviewed(cx)))
+            .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| {
+                if this.showing_request() {
+                    this.toggle_tool(tools::Tool::Details, cx)
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
                 this.toggle_tool(tools::Tool::Discussions, cx)
             }))
@@ -1102,6 +1107,10 @@ impl Render for Workspace {
                                             .flex_col()
                                             .child(if self.zen.is_some() {
                                                 self.render_zen_head(diff).into_any_element()
+                                            } else if let Some(head) =
+                                                self.render_request_header(cx)
+                                            {
+                                                head
                                             } else {
                                                 self.render_header(diff, cx).into_any_element()
                                             })

@@ -9,6 +9,8 @@ use gpui::{AnyElement, ClickEvent, Context, FontWeight, Rgba, SharedString, div,
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
+    /// A merge request's facts and description (#8); only while one is shown.
+    Details,
     Discussions,
     Agents,
     Notifications,
@@ -17,6 +19,7 @@ pub enum Tool {
 impl Tool {
     fn name(self) -> &'static str {
         match self {
+            Tool::Details => "details",
             Tool::Discussions => "discussions",
             Tool::Agents => "agents",
             Tool::Notifications => "notifications",
@@ -24,13 +27,19 @@ impl Tool {
     }
 
     pub fn parse(name: &str) -> Option<Self> {
-        [Tool::Discussions, Tool::Agents, Tool::Notifications]
-            .into_iter()
-            .find(|t| t.name() == name)
+        [
+            Tool::Details,
+            Tool::Discussions,
+            Tool::Agents,
+            Tool::Notifications,
+        ]
+        .into_iter()
+        .find(|t| t.name() == name)
     }
 
     fn icon(self) -> &'static str {
         match self {
+            Tool::Details => "info",
             Tool::Discussions => "message",
             Tool::Agents => "bot",
             Tool::Notifications => "bell",
@@ -39,6 +48,7 @@ impl Tool {
 
     fn tip(self) -> &'static str {
         match self {
+            Tool::Details => "Request details  ⌘I",
             Tool::Discussions => "Discussions  ⌘⇧R",
             Tool::Agents => "Agents",
             Tool::Notifications => "Notifications  ⌘⇧N",
@@ -61,7 +71,11 @@ impl Workspace {
     pub(super) fn tool(&self) -> Option<Tool> {
         self.root.as_ref()?;
         let tool = Tool::parse(&self.layout.tool)?;
-        (tool != Tool::Notifications || self.requests.available).then_some(tool)
+        match tool {
+            Tool::Notifications if !self.requests.available => None,
+            Tool::Details if !self.showing_request() => None,
+            tool => Some(tool),
+        }
     }
 
     /// The window on the right is drawn: a tool, or Submit review.
@@ -180,6 +194,10 @@ impl Workspace {
                 .items_center()
                 .gap(px(4.))
                 .pt(px(2.))
+                .children(
+                    self.showing_request()
+                        .then(|| button(Tool::Details, None, false)),
+                )
                 .child(button(
                     Tool::Discussions,
                     count(self.comments_total(), theme::accent()),
@@ -202,6 +220,7 @@ impl Workspace {
         let view = match self.submit_tool(cx) {
             Some(view) => view,
             None => match self.tool()? {
+                Tool::Details => self.details_tool(cx),
                 Tool::Discussions => self.discussions_tool(cx),
                 Tool::Agents => self.agents_tool(cx),
                 Tool::Notifications => self.notifications_tool(cx),
