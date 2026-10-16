@@ -157,12 +157,12 @@ impl Workspace {
             .items_center()
             .justify_center();
         let gap = if split.vertical() {
-            gap.h(px(GAP))
+            gap.h(px(if flat() { 3. } else { GAP }))
                 .w_full()
                 .cursor(CursorStyle::ResizeUpDown)
                 .child(line.h(px(2.)).w(px(48.)))
         } else {
-            gap.w(px(GAP))
+            gap.w(px(if flat() { 3. } else { GAP }))
                 .h_full()
                 .cursor(CursorStyle::ResizeLeftRight)
                 .child(line.w(px(2.)).h(px(48.)))
@@ -1070,10 +1070,11 @@ impl Render for Workspace {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .pl(px(GAP))
+                    .pl(px(gap()))
                     // The stripe sits on the window's right edge; zen has none.
-                    .pr(px(if self.zen.is_some() { GAP } else { 0. }))
-                    .pb(px(GAP))
+                    .pr(px(if self.zen.is_some() { gap() } else { 0. }))
+                    .pb(px(gap()))
+                    .children(self.render_project_rail(cx))
                     .children(self.render_places(cx))
                     // The header row over the panes, then the panes: side panel, diff, tool window.
                     .child(
@@ -1088,7 +1089,7 @@ impl Render for Workspace {
                                     .flex()
                                     .flex_col()
                                     .child(self.render_inbox_header(cx))
-                                    .child(div().h(px(GAP)))
+                                    .child(div().h(px(gap())))
                             }))
                             .children(
                                 self.diff
@@ -1099,8 +1100,12 @@ impl Render for Workspace {
                                             .flex_none()
                                             .flex()
                                             .flex_col()
-                                            .child(self.render_header(diff, cx))
-                                            .child(div().h(px(GAP)))
+                                            .child(if self.zen.is_some() {
+                                                self.render_zen_head(diff).into_any_element()
+                                            } else {
+                                                self.render_header(diff, cx).into_any_element()
+                                            })
+                                            .child(div().h(px(gap())))
                                     }),
                             )
                             .children(self.inbox.then(|| {

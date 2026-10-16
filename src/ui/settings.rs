@@ -124,6 +124,7 @@ impl Workspace {
     fn change_settings(&mut self, change: impl FnOnce(&mut Self), cx: &mut Context<Self>) {
         change(self);
         self.settings.save();
+        super::share_settings(&self.settings);
         cx.notify();
     }
 
@@ -168,6 +169,28 @@ impl Workspace {
                 },
             ))
         }));
+        let projects = diff_view::group().children(crate::storage::Projects::ALL.map(|p| {
+            chip(p.label(), p.label(), super::projects() == p).on_click(cx.listener(
+                move |this, _: &ClickEvent, _, cx| {
+                    this.change_settings(|this| this.settings.projects = p, cx)
+                },
+            ))
+        }));
+        let panes = diff_view::group()
+            .child(
+                chip("panes-islands", "Islands", !super::flat()).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.change_settings(|this| this.settings.flat = false, cx)
+                    },
+                )),
+            )
+            .child(
+                chip("panes-flat", "Flat", super::flat()).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.change_settings(|this| this.settings.flat = true, cx)
+                    },
+                )),
+            );
         let refresh = switch("refresh", s.auto_refresh).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.change_settings(
@@ -286,12 +309,24 @@ impl Workspace {
                     rich,
                 ))
                 .into_any_element(),
-            Section::General => column()
+            Section::Appearance => column()
                 .child(item(
-                    "Appearance",
-                    "Follow the system, or stay dark. Only the dark theme exists so far, so both look the same until a light one is designed.",
+                    "Several projects",
+                    "How the open repositories are shown: a rail of their marks on the left (⌘1…9 in its order, a right-click moves or closes one, a drag reorders), tabs in the title bar, or listed in the menu of places.",
+                    projects,
+                ))
+                .child(item(
+                    "Panes",
+                    "Islands: rounded panes on the window's ground with gaps between them. Flat: square panes side by side, split by hairlines.",
+                    panes,
+                ))
+                .child(item(
+                    "Light and dark",
+                    "Follow the system, or stay dark. Only the dark theme exists so far, so both look the same until the themes come.",
                     appearance,
                 ))
+                .into_any_element(),
+            Section::General => column()
                 .child(item(
                     "Open files in",
                     "The editor behind “Open in …” on a file or a line. It opens the file in the working tree.",
@@ -427,6 +462,7 @@ impl Workspace {
 pub enum Section {
     #[default]
     Diff,
+    Appearance,
     General,
     Repository,
     Requests,
@@ -435,8 +471,9 @@ pub enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 6] = [
+    const ALL: [Section; 7] = [
         Section::Diff,
+        Section::Appearance,
         Section::General,
         Section::Repository,
         Section::Requests,
@@ -447,6 +484,7 @@ impl Section {
     fn label(self) -> &'static str {
         match self {
             Section::Diff => "Diff",
+            Section::Appearance => "Appearance",
             Section::General => "General",
             Section::Repository => "Repository",
             Section::Requests => "Merge requests",

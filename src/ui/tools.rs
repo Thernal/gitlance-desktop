@@ -4,7 +4,7 @@
 //! `layout.txt`. No stripe until a repository is open, none in zen.
 
 use super::zones::Zone;
-use super::{GAP, ROW_RADIUS, Split, Tip, TipOwned, Workspace, icons, island, keys, px, theme};
+use super::{ROW_RADIUS, Split, Tip, TipOwned, Workspace, icons, island, keys, px, theme};
 use gpui::{AnyElement, ClickEvent, Context, FontWeight, Rgba, SharedString, div, prelude::*};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -286,7 +286,7 @@ impl Workspace {
     /// The gap between the diff and the stripe when no tool window is open.
     pub(super) fn stripe_gap(&self) -> Option<impl IntoElement + use<>> {
         (!self.tool_shown() && self.root.is_some() && self.zen.is_none() && !self.settings_open)
-            .then(|| div().flex_none().w(px(GAP)))
+            .then(|| div().flex_none().w(px(super::gap())))
     }
 }
 

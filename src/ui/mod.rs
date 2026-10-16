@@ -25,6 +25,7 @@ mod notifications;
 mod opening;
 mod palette;
 mod places;
+mod rail;
 mod recents;
 mod requests;
 mod reviewed;
@@ -173,8 +174,39 @@ const COMMIT_LIMIT: usize = 5000;
 const DIFF_ROW: f32 = 20.;
 const CODE_SIZE: f32 = 12.;
 const TITLE_BAR: f32 = 38.;
-/// Space between islands; the resize handles live in it.
+/// Space between islands; the resize handles live in it. Flat panes have none (`gap`).
 const GAP: f32 = 8.;
+
+/// Flat panes (Settings → Appearance): hairlines, no gaps, square corners. With `PROJECTS`, the
+/// window-wide part of the settings: every tab and window reads it, set when settings load or change.
+static FLAT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// How several projects show: `storage::Projects::ALL[n]`.
+static PROJECTS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn flat() -> bool {
+    FLAT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn projects() -> storage::Projects {
+    let n = PROJECTS.load(std::sync::atomic::Ordering::Relaxed) as usize;
+    storage::Projects::ALL[n.min(storage::Projects::ALL.len() - 1)]
+}
+
+/// Makes `settings`' window-wide choices the ones every tab draws.
+fn share_settings(settings: &Settings) {
+    use std::sync::atomic::Ordering::Relaxed;
+    FLAT.store(settings.flat, Relaxed);
+    let n = storage::Projects::ALL
+        .iter()
+        .position(|p| *p == settings.projects)
+        .unwrap_or(0);
+    PROJECTS.store(n as u8, Relaxed);
+}
+
+/// The space between panes: `GAP` for islands, none for flat panes.
+fn gap() -> f32 {
+    if flat() { 0. } else { GAP }
+}
 const ISLAND_RADIUS: f32 = 10.;
 const ROW_RADIUS: f32 = 6.;
 
@@ -336,24 +368,10 @@ pub fn run(path: Option<PathBuf>) {
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.set_menus(menus(&ViewOptions::load(&Settings::load())));
 
-            let (width, height) = window_size();
-            let bounds = gpui::Bounds::centered(None, size(px(width), px(height)), cx);
             // A snapshot renders offscreen: no window shown, no focus taken.
             let offscreen =
                 cfg!(feature = "snapshot") && std::env::var_os("GITLANCE_SNAPSHOT").is_some();
-            let options = WindowOptions {
-                show: !offscreen,
-                focus: !offscreen,
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("GitLance".into()),
-                    appears_transparent: crate::platform::TRANSPARENT_TITLEBAR,
-                    traffic_light_position: Some(Point::new(px(12.), px(12.))),
-                }),
-                window_min_size: Some(size(px(900.), px(500.))),
-                app_id: Some("gitlance".into()),
-                ..Default::default()
-            };
+            let options = window_options(offscreen, cx);
             let window = cx
                 .open_window(options, |window, cx| {
                     cx.new(|cx| shell::Shell::new(path, window, cx))
@@ -367,6 +385,36 @@ pub fn run(path: Option<PathBuf>) {
             #[cfg(not(feature = "snapshot"))]
             let _ = window;
         });
+}
+
+/// A window of GitLance: its size, title bar and smallest size.
+fn window_options(offscreen: bool, cx: &mut App) -> WindowOptions {
+    let (width, height) = window_size();
+    let bounds = gpui::Bounds::centered(None, size(px(width), px(height)), cx);
+    WindowOptions {
+        show: !offscreen,
+        focus: !offscreen,
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions {
+            title: Some("GitLance".into()),
+            appears_transparent: crate::platform::TRANSPARENT_TITLEBAR,
+            traffic_light_position: Some(Point::new(px(12.), px(12.))),
+        }),
+        window_min_size: Some(size(px(900.), px(500.))),
+        app_id: Some("gitlance".into()),
+        ..Default::default()
+    }
+}
+
+/// Opens `path` in a window of its own (the rail's "Open in a new window").
+fn open_new_window(path: PathBuf, cx: &mut App) {
+    let options = window_options(false, cx);
+    let opened = cx.open_window(options, |window, cx| {
+        cx.new(|cx| shell::Shell::secondary(path, window, cx))
+    });
+    if opened.is_ok() {
+        cx.activate(true);
+    }
 }
 
 /// The window's size: 1480 × 920, or `GITLANCE_SNAPSHOT_SIZE=WxH` in a snapshot (to check the
@@ -635,6 +683,26 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                         }
                         "fold-places" => {
                             this.layout.fold_places = true;
+                            continue;
+                        }
+                        "rail-tabs" => {
+                            this.settings.projects = crate::storage::Projects::Tabs;
+                            share_settings(&this.settings);
+                            continue;
+                        }
+                        "rail-menu" => {
+                            this.settings.projects = crate::storage::Projects::Menu;
+                            share_settings(&this.settings);
+                            continue;
+                        }
+                        "flat" => {
+                            this.settings.flat = true;
+                            share_settings(&this.settings);
+                            continue;
+                        }
+                        "appearance" => {
+                            this.open_settings(cx);
+                            this.settings_section = settings::Section::Appearance;
                             continue;
                         }
                         "inbox" => {
@@ -1101,6 +1169,7 @@ impl Workspace {
         window.focus(&focus, cx);
         let recent = storage::recent();
         let mut settings = Settings::load();
+        share_settings(&settings);
         // The keyboard card greets the very first launch, once (never a check's snapshot).
         let greet = !settings.keys_seen
             && std::env::var_os("GITLANCE_SNAPSHOT").is_none()
@@ -2386,6 +2455,62 @@ impl Workspace {
             .into_any_element()
     }
 
+    /// What the screen shows, in a few words: zen's one line on top.
+    fn header_title(&self, diff: &Diff) -> String {
+        if let Some(m) = self
+            .requests
+            .current
+            .filter(|_| self.showing_request())
+            .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))
+        {
+            return format!("{} {}", words::number(m.iid), m.title);
+        }
+        match &diff.header {
+            Header::Commit(c) => c.summary.clone(),
+            Header::WorkingTree { .. } => "Working tree".to_owned(),
+            Header::Compare { base, head, .. } => format!("{} … {}", base.0, head.0),
+            Header::Interdiff { new, .. } => format!("Interdiff · {}", new.summary),
+            Header::Versions { from, to, .. } => format!("v{} → v{}", from.number, to.number),
+        }
+    }
+
+    /// Zen's header: one line — what is shown, the file, how far the review is.
+    fn render_zen_head(&self, diff: &Diff) -> impl IntoElement + use<> {
+        let file = diff.files.get(self.file).map(|f| f.path().to_owned());
+        island()
+            .flex_none()
+            .flex_row()
+            .items_center()
+            .gap_3()
+            .h(px(36.))
+            .px_4()
+            .child(
+                div()
+                    .max_w(px(520.))
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.header_title(diff)),
+            )
+            .children(file.map(|f| {
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(theme::CODE_FONT)
+                    .text_size(px(12.))
+                    .text_color(theme::muted())
+                    .child(f)
+            }))
+            .children(self.review_progress().map(|(done, total)| {
+                div()
+                    .flex_none()
+                    .text_size(px(12.))
+                    .text_color(theme::muted())
+                    .child(format!("{done} / {total} reviewed"))
+            }))
+    }
+
     /// The header row over the panes: the screen's identity.
     fn render_header(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
         island()
@@ -3432,7 +3557,7 @@ fn island() -> gpui::Div {
         .flex()
         .flex_col()
         .overflow_hidden()
-        .rounded(px(ISLAND_RADIUS))
+        .rounded(px(if flat() { 0. } else { ISLAND_RADIUS }))
         .border_1()
         .border_color(theme::island_border())
         .bg(theme::panel())

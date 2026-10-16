@@ -25,6 +25,14 @@ pub enum Act {
     Annotate,
     /// All files in one scroll: open every file, or fold the reviewed ones again.
     ExpandAll,
+    /// The project rail's menu (#49): move a project, show its folder, a window of its own, close.
+    MoveProject {
+        from: usize,
+        to: usize,
+    },
+    Reveal(std::path::PathBuf),
+    NewWindow(std::path::PathBuf),
+    CloseProject(usize),
 }
 
 #[derive(Clone)]
@@ -99,8 +107,34 @@ impl Workspace {
             Act::CreateRequest(ix) => self.open_create(Some(ix), cx),
             Act::Annotate => self.toggle_annotate(cx),
             Act::ExpandAll => self.toggle_expand_all(cx),
+            Act::Reveal(path) => cx.reveal_path(&path),
+            Act::NewWindow(path) => cx.defer(move |cx| super::open_new_window(path, cx)),
+            // Need the window: `run_act_in` runs them.
+            Act::MoveProject { .. } | Act::CloseProject(_) => {}
         }
         cx.notify();
+    }
+
+    /// Runs `act` from a menu click, where the window is at hand for what the shell does.
+    pub(super) fn run_act_in(
+        &mut self,
+        act: Act,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
+        match act {
+            Act::MoveProject { from, to } => {
+                self.ctx_menu = None;
+                self.with_shell(window, cx, move |s, _, cx| s.move_tab(from, to, cx));
+                cx.notify();
+            }
+            Act::CloseProject(ix) => {
+                self.ctx_menu = None;
+                self.with_shell(window, cx, move |s, window, cx| s.close(ix, window, cx));
+                cx.notify();
+            }
+            act => self.run_act(act, cx),
+        }
     }
 
     /// Opens `path` (relative to the repository) at `line` in the chosen editor.
@@ -160,7 +194,9 @@ impl Workspace {
                                 .text_color(theme::faint())
                                 .child(super::keys::text(entry.key).into_owned()),
                         )
-                        .on_click(cx.listener(move |this, _, _, cx| this.run_act(act.clone(), cx)))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.run_act_in(act.clone(), window, cx)
+                        }))
                 }))
         });
         Some(

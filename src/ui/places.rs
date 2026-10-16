@@ -266,6 +266,49 @@ impl Workspace {
                         Some(count(Scope::Mine)),
                     )
                 }))
+                .children((!self.menu_projects().is_empty()).then(|| heading("Projects")))
+                .children(self.menu_projects().into_iter().map(|(ix, tab)| {
+                    let mark = super::rail::initials(&tab.title);
+                    let tint = super::rail::hue(&tab.title);
+                    div()
+                        .id(("menu-project", ix))
+                        .h(px(32.))
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(px(10.))
+                        .when(folded, |s| s.justify_center())
+                        .when(!folded, |s| s.px(px(6.)))
+                        .rounded(px(super::ROW_RADIUS))
+                        .cursor_pointer()
+                        .when(tab.active, |s| s.bg(theme::hover()))
+                        .hover(|s| s.bg(theme::hover()))
+                        .child(super::rail::project_mark(&mark, tint, 22.))
+                        .when(!folded, |s| {
+                            s.child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(tab.title.clone()),
+                            )
+                            .children(
+                                (!tab.active && tab.unread > 0).then(|| {
+                                    div()
+                                        .flex_none()
+                                        .text_size(px(11.))
+                                        .text_color(theme::accent())
+                                        .child(tab.unread.to_string())
+                                }),
+                            )
+                        })
+                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.with_shell(window, cx, move |s, window, cx| {
+                                s.select(ix, window, cx)
+                            })
+                        }))
+                }))
                 .child(heading("Repository"))
                 .child(item(Place::Commits, "commit", "Commits", None))
                 .child(item(Place::Branches, "branch", "Branches", None))
@@ -499,7 +542,7 @@ impl Workspace {
             .flex_1()
             .min_h_0()
             .flex()
-            .gap(px(super::GAP))
+            .gap(px(super::gap()))
             .child(
                 island()
                     .w(px(self.layout.sidebar.max(320.)))

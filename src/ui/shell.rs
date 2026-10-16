@@ -15,6 +15,10 @@ pub struct TabInfo {
     pub title: String,
     pub news: bool,
     pub active: bool,
+    /// The repository, for Reveal in Finder and a new window.
+    pub root: Option<PathBuf>,
+    /// Its unread notifications, counted on the rail.
+    pub unread: usize,
 }
 
 pub type TabModel = Rc<RefCell<Vec<TabInfo>>>;
@@ -26,10 +30,26 @@ pub struct Shell {
     model: TabModel,
     /// The session as last written, so it is written again only when it changes.
     saved: String,
+    /// The first window keeps the session; one opened from the rail does not.
+    primary: bool,
 }
 
 impl Shell {
     pub fn new(path: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::with(path, true, window, cx)
+    }
+
+    /// A window of its own for `path`, opened from the rail: it does not write the session.
+    pub fn secondary(path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::with(Some(path), false, window, cx)
+    }
+
+    fn with(
+        path: Option<PathBuf>,
+        primary: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let model: TabModel = Rc::default();
         let mut shell = Self {
             tabs: Vec::new(),
@@ -37,6 +57,7 @@ impl Shell {
             closed: Vec::new(),
             model,
             saved: String::new(),
+            primary,
         };
         // An explicit path opens just that; otherwise the tabs of the last session come back.
         let (tabs, active) = if path.is_some() {
@@ -143,7 +164,9 @@ impl Shell {
 
     /// Writes the open repositories and the active tab when they differ from what was written.
     fn save_session(&mut self, cx: &mut Context<Self>) {
-        if cfg!(feature = "snapshot") && std::env::var_os("GITLANCE_SNAPSHOT").is_some() {
+        if !self.primary
+            || (cfg!(feature = "snapshot") && std::env::var_os("GITLANCE_SNAPSHOT").is_some())
+        {
             return;
         }
         let mut roots = Vec::new();
@@ -167,6 +190,19 @@ impl Shell {
         }
     }
 
+    /// Moves tab `from` to `to` (the rail's Move up / down and its drag); ⌘1…9 follow.
+    pub(super) fn move_tab(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        let n = self.tabs.len();
+        if from >= n || to >= n || from == to {
+            return;
+        }
+        let active = self.tabs[self.active].clone();
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        self.active = self.tabs.iter().position(|t| *t == active).unwrap_or(0);
+        cx.notify();
+    }
+
     pub(super) fn reopen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(path) = self.closed.pop() {
             let ws = cx.new(|cx| Workspace::new(Some(path), false, window, cx));
@@ -187,6 +223,8 @@ impl Render for Shell {
                     title: w.tab_title(),
                     news: i != self.active && w.has_news(),
                     active: i == self.active,
+                    root: w.root.clone(),
+                    unread: w.notices.unread(),
                 }
             })
             .collect();
@@ -227,7 +265,7 @@ impl Workspace {
     /// The strip of tabs, under the title bar; absent with a single tab.
     pub(super) fn render_tab_strip(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let tabs = self.tabs.borrow().clone();
-        (tabs.len() > 1).then(|| {
+        (tabs.len() > 1 && super::projects() == crate::storage::Projects::Tabs).then(|| {
             div()
                 .flex_none()
                 .h(px(30.))

@@ -284,6 +284,40 @@ impl Appearance {
     }
 }
 
+/// How several open repositories are shown (redesign round 2): a rail of projects on the left,
+/// tabs in the title bar, or the projects inside the menu of places.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Projects {
+    #[default]
+    Rail,
+    Tabs,
+    Menu,
+}
+
+impl Projects {
+    pub const ALL: [Projects; 3] = [Projects::Rail, Projects::Tabs, Projects::Menu];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Projects::Rail => "Rail",
+            Projects::Tabs => "Tabs",
+            Projects::Menu => "Menu",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Projects::Rail => "rail",
+            Projects::Tabs => "tabs",
+            Projects::Menu => "menu",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.key() == key)
+    }
+}
+
 /// Where a repository opened while another is open goes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OpenIn {
@@ -347,6 +381,10 @@ pub struct Settings {
     pub open_in: OpenIn,
     /// What the "this tab / new tab" question offers first: the last answer.
     pub last_new_tab: bool,
+    /// How several open repositories are shown.
+    pub projects: Projects,
+    /// Flat panes (hairlines, no gaps) instead of islands.
+    pub flat: bool,
 }
 
 impl Default for Settings {
@@ -366,6 +404,8 @@ impl Default for Settings {
             keys_seen: false,
             open_in: OpenIn::Ask,
             last_new_tab: false,
+            projects: Projects::Rail,
+            flat: false,
         }
     }
 }
@@ -401,6 +441,8 @@ impl Settings {
                 "keys_seen" => settings.keys_seen = value == "true",
                 "open_in" => settings.open_in = OpenIn::from_key(value).unwrap_or_default(),
                 "last_new_tab" => settings.last_new_tab = value == "true",
+                "projects" => settings.projects = Projects::from_key(value).unwrap_or_default(),
+                "flat" => settings.flat = value == "true",
                 "ui_zoom" => {
                     settings.ui_zoom = value.parse().map_or(100, |z: u16| {
                         z.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX)
@@ -439,6 +481,8 @@ impl std::fmt::Display for Settings {
         writeln!(f, "keys_seen={}", self.keys_seen)?;
         writeln!(f, "open_in={}", self.open_in.key())?;
         writeln!(f, "last_new_tab={}", self.last_new_tab)?;
+        writeln!(f, "projects={}", self.projects.key())?;
+        writeln!(f, "flat={}", self.flat)?;
         writeln!(f, "zoom={}", self.zoom)?;
         writeln!(f, "ui_zoom={}", self.ui_zoom)?;
         writeln!(f, "appearance={}", self.appearance.key())?;
@@ -544,6 +588,8 @@ mod tests {
             keys_seen: true,
             open_in: OpenIn::NewTab,
             last_new_tab: true,
+            projects: Projects::Menu,
+            flat: true,
         };
         assert_eq!(Settings::parse(&settings.to_string()), settings);
     }
