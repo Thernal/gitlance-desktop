@@ -23,8 +23,12 @@ pub enum Act {
     Toggle(Opt),
     CreateRequest(usize),
     Annotate,
-    /// All files in one scroll: open every file, or fold the reviewed ones again.
-    ExpandAll,
+    /// Settings → Diff → Mark reviewed as I scroll past, from the View menu.
+    AutoReviewed,
+    /// The menu of places folds to icons, or opens.
+    FoldPlaces,
+    /// A tool window on the right opens or closes.
+    Tool(super::tools::Tool),
     /// The project rail's menu (#49): move a project, show its folder, a window of its own, close.
     MoveProject {
         from: usize,
@@ -65,13 +69,18 @@ impl Entry {
     }
 }
 
-/// Entries in groups; a rule is drawn between groups.
+/// Entries in groups; a rule is drawn between groups, a group may have a heading.
 pub struct CtxMenu {
     pub at: Point<Pixels>,
     pub groups: Vec<Vec<Entry>>,
+    pub titles: Vec<Option<&'static str>>,
 }
 
 const ROW: f32 = 28.;
+/// A group's heading row.
+const HEAD: f32 = 26.;
+/// The room a menu keeps from the window's edges (#48: menus stay inside the window).
+const EDGE: f32 = 8.;
 pub(super) const WIDTH: f32 = 260.;
 
 impl Workspace {
@@ -81,10 +90,22 @@ impl Workspace {
         groups: Vec<Vec<Entry>>,
         cx: &mut Context<Self>,
     ) {
-        let groups: Vec<_> = groups.into_iter().filter(|g| !g.is_empty()).collect();
+        let titled = groups.into_iter().map(|g| (None, g)).collect();
+        self.open_titled(at, titled, cx);
+    }
+
+    /// A menu whose groups have headings (the View menu: Changes, Show, Files, Panels).
+    pub(super) fn open_titled(
+        &mut self,
+        at: Point<Pixels>,
+        groups: Vec<(Option<&'static str>, Vec<Entry>)>,
+        cx: &mut Context<Self>,
+    ) {
+        let (titles, groups): (Vec<_>, Vec<_>) =
+            groups.into_iter().filter(|(_, g)| !g.is_empty()).unzip();
         if !groups.is_empty() {
             self.repo_menu = false;
-            self.ctx_menu = Some(CtxMenu { at, groups });
+            self.ctx_menu = Some(CtxMenu { at, groups, titles });
             cx.notify();
         }
     }
@@ -106,7 +127,12 @@ impl Workspace {
             Act::Toggle(opt) => self.toggle(opt, cx),
             Act::CreateRequest(ix) => self.open_create(Some(ix), cx),
             Act::Annotate => self.toggle_annotate(cx),
-            Act::ExpandAll => self.toggle_expand_all(cx),
+            Act::AutoReviewed => {
+                self.settings.auto_reviewed = !self.settings.auto_reviewed;
+                self.settings.save();
+            }
+            Act::FoldPlaces => self.toggle_places(cx),
+            Act::Tool(tool) => self.toggle_tool(tool, cx),
             Act::Reveal(path) => cx.reveal_path(&path),
             Act::NewWindow(path) => cx.defer(move |cx| super::open_new_window(path, cx)),
             // Need the window: `run_act_in` runs them.
@@ -156,20 +182,38 @@ impl Workspace {
     ) -> Option<impl IntoElement + use<>> {
         let menu = self.ctx_menu.as_ref()?;
         let rows: usize = menu.groups.iter().map(Vec::len).sum();
-        let height = rows as f32 * ROW + menu.groups.len() as f32 * 9. + 12.;
+        let heads = menu.titles.iter().flatten().count();
+        let height = rows as f32 * ROW + heads as f32 * HEAD + menu.groups.len() as f32 * 9. + 12.;
+        // Inside the window: moved back from an edge it would cross, and scrolling when taller
+        // than the window has room for.
+        let room = f32::from(viewport.height) - 2. * EDGE;
+        let scrolls = height > room;
+        let height = height.min(room);
         let x = f32::from(menu.at.x)
-            .min(f32::from(viewport.width) - WIDTH - 8.)
-            .max(8.);
+            .min(f32::from(viewport.width) - WIDTH - EDGE)
+            .max(EDGE);
         let y = f32::from(menu.at.y)
-            .min(f32::from(viewport.height) - height - 8.)
-            .max(8.);
+            .min(f32::from(viewport.height) - height - EDGE)
+            .max(EDGE);
         let groups = menu.groups.iter().enumerate().map(|(g, entries)| {
+            let title = menu.titles.get(g).copied().flatten();
             div()
                 .flex()
                 .flex_col()
                 .when(g > 0, |s| {
                     s.child(div().h(px(1.)).my(px(4.)).bg(theme::island_border()))
                 })
+                .children(title.map(|t| {
+                    div()
+                        .h(px(HEAD))
+                        .px(px(10.))
+                        .flex()
+                        .items_center()
+                        .text_size(px(11.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(theme::faint())
+                        .child(t.to_uppercase())
+                }))
                 .children(entries.iter().enumerate().map(|(i, entry)| {
                     let act = entry.act.clone();
                     row(("ctx-entry", (g * 100 + i) as u64), false)
@@ -229,7 +273,7 @@ impl Workspace {
                         .left(px(x))
                         .top(px(y))
                         .w(px(WIDTH))
-                        .p(px(6.))
+                        .h(px(height))
                         .flex()
                         .flex_col()
                         .rounded(px(ISLAND_RADIUS))
@@ -238,7 +282,18 @@ impl Workspace {
                         .bg(theme::panel())
                         .shadow_lg()
                         .text_size(px(13.))
-                        .children(groups),
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .id("ctx-scroll")
+                                .flex_1()
+                                .min_h_0()
+                                .p(px(6.))
+                                .flex()
+                                .flex_col()
+                                .when(scrolls, |s| s.overflow_y_scroll())
+                                .children(groups),
+                        ),
                 ),
         )
     }

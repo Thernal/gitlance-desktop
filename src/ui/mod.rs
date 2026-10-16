@@ -635,7 +635,7 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                         }
                         "viewmenu" => {
                             let groups = this.view_menu();
-                            this.open_menu(Point::new(px(1090.), px(78.)), groups, cx);
+                            this.open_titled(Point::new(px(1090.), px(78.)), groups, cx);
                             continue;
                         }
                         "linemenu" => {
@@ -1789,54 +1789,61 @@ impl Workspace {
     }
 
     /// The View menu: the diff mode, then the options that are on or off.
-    fn view_menu(&self) -> Vec<Vec<Entry>> {
+    /// The View ▾ menu (#48 A): one flat list of what the toolbar does not show, in groups.
+    fn view_menu(&self) -> Vec<(Option<&'static str>, Vec<Entry>)> {
         let o = self.options;
+        let tool = self.tool();
         vec![
-            DiffMode::ALL
-                .iter()
-                .map(|&mode| {
-                    Entry::new(format!("{} diff", mode.label()), Act::SetMode(mode))
-                        .checked(o.mode == mode)
-                })
-                .collect(),
-            vec![
-                Entry::new("Annotate — who wrote each line", Act::Annotate)
-                    .key("⌥⌘B")
-                    .checked(self.annotate),
-                Entry::new("Wrap long lines", Act::Toggle(Opt::Wrap))
-                    .key("⌥Z")
-                    .checked(o.wrap),
-                Entry::new("Show all lines", Act::Toggle(Opt::FullContext))
-                    .key("⌥E")
-                    .checked(o.full_context),
-                Entry::new("Hide whitespace changes", Act::Toggle(Opt::Whitespace))
-                    .key("⌥W")
-                    .checked(o.ignore_whitespace),
-                Entry::new("One file at a time", Act::Toggle(Opt::OneFile))
-                    .key("⌥A")
-                    .checked(o.one_file),
-            ],
-            // All files in one scroll: the folded (reviewed) ones open at once.
-            self.stack
-                .is_some()
-                .then(|| {
-                    [
-                        Entry::new(
-                            if self.any_folded() {
-                                "Expand all files"
-                            } else {
-                                "Collapse all files"
-                            },
-                            Act::ExpandAll,
-                        )
-                        .key("⌥⇧A"),
-                        Entry::new("Fold reviewed files", Act::Toggle(Opt::FoldReviewed))
-                            .checked(o.fold_reviewed),
-                    ]
-                })
-                .into_iter()
-                .flatten()
-                .collect(),
+            (
+                Some("Changes"),
+                DiffMode::ALL
+                    .iter()
+                    .map(|&mode| {
+                        Entry::new(mode.label(), Act::SetMode(mode)).checked(o.mode == mode)
+                    })
+                    .collect(),
+            ),
+            (
+                Some("Show"),
+                vec![
+                    Entry::new("Every line of the file", Act::Toggle(Opt::FullContext))
+                        .key("⌥E")
+                        .checked(o.full_context),
+                    Entry::new("Hide whitespace changes", Act::Toggle(Opt::Whitespace))
+                        .key("⌥W")
+                        .checked(o.ignore_whitespace),
+                    Entry::new("Wrap long lines", Act::Toggle(Opt::Wrap))
+                        .key("⌥Z")
+                        .checked(o.wrap),
+                    Entry::new("Annotate (blame)", Act::Annotate)
+                        .key("⌥⌘B")
+                        .checked(self.annotate),
+                ],
+            ),
+            (
+                Some("Files"),
+                vec![
+                    Entry::new("One file at a time", Act::Toggle(Opt::OneFile))
+                        .key("⌥A")
+                        .checked(o.one_file),
+                    Entry::new("Fold reviewed files", Act::Toggle(Opt::FoldReviewed))
+                        .checked(o.fold_reviewed),
+                    Entry::new("Mark reviewed as I scroll past", Act::AutoReviewed)
+                        .checked(self.settings.auto_reviewed),
+                ],
+            ),
+            (
+                Some("Panels"),
+                vec![
+                    Entry::new("Fold the menu to icons", Act::FoldPlaces)
+                        .checked(self.places_folded()),
+                    Entry::new("Discussions", Act::Tool(tools::Tool::Discussions))
+                        .key("⌘⇧R")
+                        .checked(tool == Some(tools::Tool::Discussions)),
+                    Entry::new("Agents", Act::Tool(tools::Tool::Agents))
+                        .checked(tool == Some(tools::Tool::Agents)),
+                ],
+            ),
         ]
     }
 
@@ -2574,7 +2581,7 @@ impl Workspace {
                                 let at =
                                     Point::new(b.right() - px(menu::WIDTH), b.bottom() + px(6.));
                                 let groups = this.view_menu();
-                                this.open_menu(at, groups, cx);
+                                this.open_titled(at, groups, cx);
                             }),
                         ),
                 ),
@@ -2670,13 +2677,16 @@ impl Workspace {
 
     /// The diff's toolbar, read left to right: what is shown, then how it is drawn.
     fn render_diff_toolbar(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
+        // A narrow diff wraps it: how it is drawn goes under what is shown, never out of view.
         div()
             .flex_none()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_2()
-            .h(px(40.))
+            .min_h(px(40.))
             .px(px(12.))
+            .py(px(6.))
             .border_b_1()
             .border_color(theme::island_border())
             .child(self.render_what(diff, cx))

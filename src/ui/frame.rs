@@ -1110,6 +1110,7 @@ impl Render for Workspace {
                             )
                             .children(self.inbox.then(|| {
                                 div()
+                                    .relative()
                                     .flex_1()
                                     .min_h_0()
                                     .flex()
@@ -1118,6 +1119,7 @@ impl Render for Workspace {
                             }))
                             .children((!self.inbox).then(|| {
                                 div()
+                                    .relative()
                                     .flex_1()
                                     .min_h_0()
                                     .flex()

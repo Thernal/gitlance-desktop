@@ -98,6 +98,11 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Under 1 280 px the tool window floats over the diff instead of taking its width.
+    pub(super) fn tool_floats(&self) -> bool {
+        self.win_width < 1280.
+    }
+
     pub(super) fn toggle_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
         let open = self.tool() == Some(tool);
         self.set_tool((!open).then_some(tool), cx);
@@ -228,11 +233,20 @@ impl Workspace {
                     this.set_tool(None, cx)
                 }
             }));
+        // A narrow window has no room beside the diff: the window floats over its right edge.
+        let over = self.tool_floats();
         Some(
             div()
                 .flex_none()
                 .flex()
-                .child(self.handle(Split::Tool, cx))
+                .when(over, |s| {
+                    s.absolute()
+                        .top(px(0.))
+                        .bottom(px(0.))
+                        .right(px(0.))
+                        .shadow_lg()
+                })
+                .when(!over, |s| s.child(self.handle(Split::Tool, cx)))
                 .child(
                     island()
                         .w(px(self.layout.tool_width))
