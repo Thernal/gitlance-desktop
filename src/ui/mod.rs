@@ -4,6 +4,7 @@ mod agent;
 mod annotate;
 mod bookmarks;
 mod comments;
+mod complete;
 mod create;
 mod details;
 mod diff_view;
@@ -28,6 +29,7 @@ mod outdated;
 mod palette;
 mod places;
 mod rail;
+mod reactions;
 mod recents;
 mod requests;
 mod reviewed;
@@ -709,6 +711,8 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.settings_section = settings::Section::Appearance;
                             continue;
                         }
+                        // Applied last, once the request's discussions are in (below).
+                        "hover-note" | "reaction-grid" => continue,
                         "inbox" => {
                             this.go_place(places::Place::Inbox, cx);
                             continue;
@@ -832,6 +836,27 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                 }
                 wait(400).await;
             }
+        }
+        // The first discussion's first note hovered: its reaction bar, or ☺+ open (#9).
+        if let Ok(view) = std::env::var("GITLANCE_SNAPSHOT_VIEW")
+            && (view.contains("hover-note") || view.contains("reaction-grid"))
+        {
+            ws.update(cx, |this, cx| {
+                let note = this
+                    .requests
+                    .threads
+                    .iter()
+                    .find(|t| t.path.is_some())
+                    .and_then(|t| t.notes.first())
+                    .map(|n| n.id);
+                this.hover_note = note;
+                if view.contains("reaction-grid") {
+                    this.reaction_grid = note;
+                }
+                this.refresh_rows();
+                cx.notify();
+            });
+            wait(500).await;
         }
         // A hidden window gets no display-link frames: draw one by hand. Images start decoding
         // in the background at a draw, so a first draw, a pause, then the one that is saved.
@@ -1019,6 +1044,9 @@ pub struct Workspace {
     inbox_filter: places::InboxFilter,
     /// The menu of places opened while a merge request is reviewed (it is folded there).
     places_peek: bool,
+    /// The note under the pointer (its reaction bar shows), and the one whose ☺+ is open (#9).
+    hover_note: Option<u64>,
+    reaction_grid: Option<u64>,
     /// Settings → Agents: what connecting said, and whether it runs.
     agent_setup: Option<String>,
     agent_setup_busy: bool,
@@ -1209,6 +1237,8 @@ impl Workspace {
             inbox: false,
             inbox_filter: Default::default(),
             places_peek: false,
+            hover_note: None,
+            reaction_grid: None,
             agent_setup: None,
             agent_setup_busy: false,
             notices: Default::default(),

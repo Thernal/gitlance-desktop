@@ -31,6 +31,8 @@ pub enum Scope {
 #[derive(Default)]
 pub struct Requests {
     pub scope: Scope,
+    /// The project's members, for `@` completion (#51).
+    pub members: Vec<(String, String)>,
     pub available: bool,
     /// A GitLab project without a token: the rail offers to connect instead of listing.
     pub connectable: bool,
@@ -52,6 +54,9 @@ pub struct Requests {
     /// Discussions written on an earlier version: what became of their line, by thread id (#46).
     pub histories: std::collections::HashMap<String, super::outdated::LineHistory>,
     pub history_task: Option<Task<()>>,
+    /// The reactions on its notes, by note id (#9).
+    pub awards: super::reactions::Awards,
+    pub award_task: Option<Task<()>>,
     /// The pushes GitLab kept for a request, as versions of this repository.
     pub versions: Option<(u64, Vec<Version>)>,
     version_task: Option<Task<()>>,
@@ -97,14 +102,18 @@ impl Workspace {
                     } else {
                         mr::username(&remote).ok()
                     };
-                    mr::list(&remote).map(|list| (list, login))
+                    let members = mr::members(&remote).unwrap_or_default();
+                    mr::list(&remote).map(|list| (list, login, members))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.requests.loading = false;
                 match result {
-                    Ok((list, login)) => {
+                    Ok((list, login, members)) => {
                         this.requests.list = list;
+                        if !members.is_empty() {
+                            this.requests.members = members;
+                        }
                         this.requests.error = None;
                         if login.is_some() {
                             this.requests.login = login;
@@ -159,6 +168,7 @@ impl Workspace {
             self.requests.approvals = None;
             self.requests.details = None;
             self.requests.histories.clear();
+            self.requests.awards.clear();
             self.draft_at = None;
         }
         self.requests.current = iid;
@@ -192,12 +202,14 @@ impl Workspace {
                                 this.requests.login = login;
                             }
                             this.requests.details = details;
-                            this.details_first_time(iid, cx);
-                            this.compute_histories(cx);
                             this.requests.threads = threads;
                             this.requests.drafts = drafts;
                             this.requests.pipeline = pipeline;
                             this.requests.approvals = approvals;
+                            this.details_first_time(iid, cx);
+                            // Both read the discussions just taken in.
+                            this.compute_histories(cx);
+                            this.load_awards(cx);
                             // A link to a comment waits for the discussions; the diff is in by now
                             // or comes later and tries again.
                             let diff_in = this.showing_request();
@@ -728,33 +740,72 @@ impl Workspace {
             let edit_box = self.edit_box(change, edit.clone());
             let own = self.requests.login.as_deref() == Some(note.login.as_str());
             let editable = can_act && self.compose.is_none() && own;
-            discussion::note(
+            let (hover, pills, grid) = (
+                edit.clone(),
+                self.reaction_pills(note.id, edit.clone()),
+                self.reaction_grid(note.id, edit.clone()),
+            );
+            let bar = can_act
+                .then(|| self.hover_bar(ix, note.id, &note.login, edit.clone()))
+                .flatten();
+            let note_id = note.id;
+            let note_el = discussion::note(
                 &note.author,
                 own,
                 (author.as_deref() == Some(note.author.as_str())).then_some("Author"),
                 format::ago(note.created),
-                match edit_box {
-                    Some(edit_box) => edit_box.into_any_element(),
-                    None => super::markdown::body(
-                        &note.body,
-                        self.settings.rich_comments,
-                        format!("md-note-{ix}-{n}"),
-                        self.link_base(),
-                        Some(selecting.clone()),
-                    ),
-                },
+                div()
+                    .child(match edit_box {
+                        Some(edit_box) => edit_box.into_any_element(),
+                        None => super::markdown::body(
+                            &note.body,
+                            self.settings.rich_comments,
+                            format!("md-note-{ix}-{n}"),
+                            self.link_base(),
+                            Some(selecting.clone()),
+                        ),
+                    })
+                    .children(pills)
+                    .children(grid)
+                    .into_any_element(),
                 n == last && !replying,
-                editable.then(|| {
+                (bar.is_some() || editable).then(|| {
                     // `e` edits the last of one's notes in the discussion with the keyboard.
                     let key = (focused && mine == Some(note.id)).then_some("e");
-                    super::comments::edit_button(
-                        ("edit-note", note.id as usize),
-                        key,
-                        change,
-                        edit.clone(),
-                    )
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .children(bar)
+                        .children(editable.then(|| {
+                            super::comments::edit_button(
+                                ("edit-note", note.id as usize),
+                                key,
+                                change,
+                                edit.clone(),
+                            )
+                        }))
+                        .into_any_element()
                 }),
-            )
+            );
+            // Hovering a note shows its reaction bar.
+            div()
+                .id(("note-hover", note_id as usize))
+                .child(note_el)
+                .on_hover(move |hovered: &bool, _, cx| {
+                    let hovered = *hovered;
+                    hover
+                        .update(cx, |this, cx| {
+                            if hovered && this.hover_note != Some(note_id) {
+                                this.hover_note = Some(note_id);
+                                cx.notify();
+                            } else if !hovered && this.hover_note == Some(note_id) {
+                                this.hover_note = None;
+                                cx.notify();
+                            }
+                        })
+                        .ok();
+                })
         });
         // Replying: the box opens where "Reply…" was, inside the discussion.
         // The reply row: my avatar on the timeline's column, then the one input — closed, one line

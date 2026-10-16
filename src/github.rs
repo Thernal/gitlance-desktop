@@ -9,7 +9,7 @@
 
 use crate::git::{LineKind, WebRemote};
 use crate::mr::{
-    Approvals, Details, Draft, Label, Mr, Note, Pipeline, Place, Push, Thread, Todo, Verdict,
+    Approvals, Award, Details, Draft, Label, Mr, Note, Pipeline, Place, Push, Thread, Todo, Verdict,
 };
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -283,6 +283,88 @@ pub fn list(remote: &WebRemote) -> Result<Vec<Mr>> {
         )?,
     };
     Ok(parse_pulls(&value))
+}
+
+/// The reactions on comments (review comments, or the conversation's when `issue`), by id, under
+/// GitLab's emoji names.
+pub fn awards(
+    remote: &WebRemote,
+    number: u64,
+    notes: &[(u64, bool)],
+) -> Result<std::collections::HashMap<u64, Vec<Award>>> {
+    let parse = |list: &Value| -> Vec<Award> {
+        list.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| {
+                Some(Award {
+                    id: r["id"].as_u64().unwrap_or(0),
+                    name: crate::emoji::from_github(r["content"].as_str()?)?.to_owned(),
+                    user: s(&r["user"]["login"]),
+                })
+            })
+            .collect()
+    };
+    if let Some(map) = read_fixture(&format!("reactions-{number}.json")) {
+        let map = map?;
+        return Ok(notes
+            .iter()
+            .filter_map(|(id, _)| Some((*id, parse(map.get(id.to_string())?))))
+            .collect());
+    }
+    Ok(notes
+        .iter()
+        .filter_map(|(id, issue)| {
+            let kind = if *issue { "issues" } else { "pulls" };
+            let list = get(
+                remote,
+                &format!("{kind}/comments/{id}/reactions?per_page=100"),
+            )
+            .ok()?;
+            Some((*id, parse(&list)))
+        })
+        .collect())
+}
+
+/// Reacts to a comment with GitLab's `name` (one of GitHub's eight).
+pub fn react(remote: &WebRemote, comment: u64, issue: bool, name: &str) -> Result<u64> {
+    let content =
+        crate::emoji::github_name(name).ok_or_else(|| anyhow!("GitHub has no {name} reaction"))?;
+    let kind = if issue { "issues" } else { "pulls" };
+    let value = rest(
+        remote,
+        "POST",
+        &format!("{kind}/comments/{comment}/reactions"),
+        Some(&json!({ "content": content })),
+    )?;
+    Ok(value["id"].as_u64().unwrap_or(0))
+}
+
+pub fn unreact(remote: &WebRemote, comment: u64, issue: bool, reaction: u64) -> Result<()> {
+    let kind = if issue { "issues" } else { "pulls" };
+    rest(
+        remote,
+        "DELETE",
+        &format!("{kind}/comments/{comment}/reactions/{reaction}"),
+        None,
+    )?;
+    Ok(())
+}
+
+/// Who can be mentioned: the collaborators (they need push access to list), else the assignable.
+pub fn members(remote: &WebRemote) -> Result<Vec<(String, String)>> {
+    let value = match read_fixture("collaborators.json") {
+        Some(v) => v?,
+        None => get(remote, "collaborators?per_page=100")
+            .or_else(|_| get(remote, "assignees?per_page=100"))?,
+    };
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|u| (s(&u["login"]), who(u)))
+        .filter(|(l, _)| !l.is_empty())
+        .collect())
 }
 
 /// Pull request `number`'s body, labels, milestone and assignees.

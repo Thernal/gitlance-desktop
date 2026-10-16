@@ -285,6 +285,119 @@ pub fn threads(remote: &WebRemote, iid: u64) -> Result<Vec<Thread>> {
     Ok(parse_threads(&value))
 }
 
+/// One reaction on a note (#9): its id (to take one's own back), its GitLab name, who gave it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Award {
+    pub id: u64,
+    pub name: String,
+    pub user: String,
+}
+
+/// The reactions on `notes` of request `iid`, by note id; a note is `(id, on the conversation)`
+/// (GitHub keeps the request's own comments apart from review comments).
+pub fn awards(
+    remote: &WebRemote,
+    iid: u64,
+    notes: &[(u64, bool)],
+) -> Result<std::collections::HashMap<u64, Vec<Award>>> {
+    if remote.github {
+        return github::awards(remote, iid, notes);
+    }
+    let parse = |list: &Value| -> Vec<Award> {
+        list.as_array()
+            .into_iter()
+            .flatten()
+            .map(|a| Award {
+                id: a.get("id").and_then(Value::as_u64).unwrap_or(0),
+                name: text(a, "name"),
+                user: text(a.get("user").unwrap_or(&Value::Null), "username"),
+            })
+            .collect()
+    };
+    if let Some(dir) = fixture() {
+        let map: Value = std::fs::read_to_string(dir.join(format!("awards-{iid}.json")))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or(Value::Null);
+        return Ok(notes
+            .iter()
+            .filter_map(|(id, _)| Some((*id, parse(map.get(id.to_string())?))))
+            .collect());
+    }
+    Ok(notes
+        .iter()
+        .filter_map(|(id, _)| {
+            let list = get(
+                remote,
+                &format!("merge_requests/{iid}/notes/{id}/award_emoji"),
+            )
+            .ok()?;
+            Some((*id, parse(&list)))
+        })
+        .collect())
+}
+
+/// Gives note `note` the reaction `name`; its id comes back.
+pub fn award(remote: &WebRemote, iid: u64, note: u64, issue: bool, name: &str) -> Result<u64> {
+    if record(format!("award {iid} {note} {name}"))? {
+        return Ok(note * 1000 + 1);
+    }
+    if remote.github {
+        return github::react(remote, note, issue, name);
+    }
+    let value = request(
+        remote,
+        &format!("merge_requests/{iid}/notes/{note}/award_emoji"),
+        &[("name", name.to_owned())],
+    )?;
+    Ok(value.get("id").and_then(Value::as_u64).unwrap_or(0))
+}
+
+/// Takes one's reaction `award` (named `name`) back from note `note`.
+pub fn unaward(
+    remote: &WebRemote,
+    iid: u64,
+    note: u64,
+    issue: bool,
+    name: &str,
+    award: u64,
+) -> Result<()> {
+    if record(format!("unaward {iid} {note} {name}"))? {
+        return Ok(());
+    }
+    if remote.github {
+        return github::unreact(remote, note, issue, award);
+    }
+    call(
+        remote,
+        &format!("merge_requests/{iid}/notes/{note}/award_emoji/{award}"),
+        "DELETE",
+        &[],
+    )?;
+    Ok(())
+}
+
+/// The project's members (#51): username and name, for `@` completion.
+pub fn members(remote: &WebRemote) -> Result<Vec<(String, String)>> {
+    if remote.github {
+        return github::members(remote);
+    }
+    let value = match fixture() {
+        Some(dir) => match std::fs::read_to_string(dir.join("members.json")) {
+            Ok(text) => serde_json::from_str(&text)?,
+            Err(_) => Value::Array(Vec::new()),
+        },
+        None => get(remote, "members/all?per_page=100")?,
+    };
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|m| (text(m, "username"), text(m, "name")))
+        .filter(|(u, _)| !u.is_empty())
+        .collect())
+}
+
 /// A label of a request, with its colour as 0xRRGGBB when the project gives one.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Label {
@@ -733,7 +846,6 @@ pub(crate) fn record(line: String) -> Result<bool> {
     Ok(true)
 }
 
-/// Opens a merge request from `source` into `target`. The branch must already be on the remote.
 /// What a new request asks for besides its branches, title and description.
 #[derive(Clone, Debug, Default)]
 pub struct NewOptions {
@@ -744,6 +856,7 @@ pub struct NewOptions {
     pub reviewers: Vec<String>,
 }
 
+/// Opens a merge request from `source` into `target`. The branch must already be on the remote.
 pub fn create(
     remote: &WebRemote,
     source: &str,

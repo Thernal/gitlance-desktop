@@ -447,6 +447,17 @@ fn code_block(lang: &str, text: &str, ctx: &mut Ctx) -> AnyElement {
         .into_any_element()
 }
 
+/// The token's username: a mention of it is drawn on the attention tint (#51). Set each frame.
+static ME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+pub fn set_me(login: Option<&str>) {
+    if let Ok(mut me) = ME.lock()
+        && me.as_str() != login.unwrap_or_default()
+    {
+        *me = login.unwrap_or_default().to_owned();
+    }
+}
+
 /// A paragraph's text with its styles; links open in the browser.
 fn inline(i: &Inline, ctx: &mut Ctx) -> AnyElement {
     let code_bg: gpui::Hsla = theme::hover().into();
@@ -477,6 +488,33 @@ fn inline(i: &Inline, ctx: &mut Ctx) -> AnyElement {
             )
         })
         .collect();
+    // Mentions on their tint, where no other style already covers the text.
+    let me = ME.lock().map(|m| m.clone()).unwrap_or_default();
+    let mut highlights = highlights;
+    for r in crate::markdown::mentions(&i.text) {
+        if i.spans
+            .iter()
+            .any(|s| s.range.start < r.end && r.start < s.range.end)
+        {
+            continue;
+        }
+        let mine = !me.is_empty() && i.text[r.start + 1..r.end].eq_ignore_ascii_case(&me);
+        let (ink, tint) = if mine {
+            (theme::warning(), theme::warning_bg())
+        } else {
+            (theme::accent(), theme::info_bg())
+        };
+        highlights.push((
+            r,
+            HighlightStyle {
+                color: Some(ink.into()),
+                background_color: Some(tint.into()),
+                font_weight: Some(FontWeight::SEMIBOLD),
+                ..Default::default()
+            },
+        ));
+    }
+    highlights.sort_by_key(|(r, _)| r.start);
     let fonts: Vec<_> = i
         .spans
         .iter()

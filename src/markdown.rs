@@ -313,9 +313,39 @@ pub fn parse(source: &str) -> Vec<Block> {
 /// Does `body` use markdown beyond plain paragraphs? Plain text needs no Rich/Raw switch.
 pub fn is_rich(blocks: &[Block]) -> bool {
     blocks.iter().any(|b| match b {
-        Block::Paragraph(inline) => !inline.spans.is_empty(),
+        Block::Paragraph(inline) => !inline.spans.is_empty() || !mentions(&inline.text).is_empty(),
         _ => true,
     })
+}
+
+/// The `@username` mentions in `text` (#51): an `@` at the start or after a space or an opening
+/// bracket, then letters, digits, `_`, `-` or `.` (not ending in `.`).
+pub fn mentions(text: &str) -> Vec<Range<usize>> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let starts = bytes[i] == b'@'
+            && (i == 0 || matches!(bytes[i - 1], b' ' | b'\n' | b'\t' | b'(' | b'['));
+        if !starts {
+            i += 1;
+            continue;
+        }
+        let mut end = i + 1;
+        while end < bytes.len()
+            && (bytes[end].is_ascii_alphanumeric() || matches!(bytes[end], b'_' | b'-' | b'.'))
+        {
+            end += 1;
+        }
+        while end > i + 1 && bytes[end - 1] == b'.' {
+            end -= 1;
+        }
+        if end > i + 1 {
+            out.push(i..end);
+        }
+        i = end.max(i + 1);
+    }
+    out
 }
 
 /// The words of `source` without its markers, on one line: for the one-line previews of a comment.
@@ -537,6 +567,14 @@ pub fn newline(edit: &mut TextEdit) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mentions_are_names_after_an_at_that_starts_a_word() {
+        let text = "@juniper can you check, cc @ember.lind. mail a@b.io (@kestrel)";
+        let found: Vec<&str> = mentions(text).into_iter().map(|r| &text[r]).collect();
+        assert_eq!(found, ["@juniper", "@ember.lind", "@kestrel"]);
+        assert!(mentions("@ alone").is_empty());
+    }
 
     fn para(blocks: &[Block]) -> &Inline {
         match &blocks[0] {

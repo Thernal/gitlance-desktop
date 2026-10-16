@@ -71,6 +71,9 @@ pub struct Compose {
     /// The text is shown formatted instead of as written (⌘⇧P); typing goes on and the preview
     /// follows it.
     preview: bool,
+    /// The completion list's selected row, and where a list was closed with esc (#51, #9).
+    pick: usize,
+    closed: Option<usize>,
 }
 
 impl Workspace {
@@ -357,6 +360,8 @@ impl Workspace {
             error: None,
             posting: false,
             preview: false,
+            pick: 0,
+            closed: None,
         });
         self.refresh_rows();
         cx.notify();
@@ -383,6 +388,8 @@ impl Workspace {
             error: None,
             posting: false,
             preview: false,
+            pick: 0,
+            closed: None,
         });
         self.reset_field_edit();
         self.thread_at = Some(ix);
@@ -440,6 +447,8 @@ impl Workspace {
             error: None,
             posting: false,
             preview: false,
+            pick: 0,
+            closed: None,
         });
         self.reset_field_edit();
         self.refresh_rows();
@@ -1109,6 +1118,9 @@ impl Workspace {
             }
             return self.add_comment(cx);
         }
+        if self.completion_key(key, cx) {
+            return;
+        }
         if key.key == "tab" {
             return self.toggle_target(cx);
         }
@@ -1145,6 +1157,48 @@ impl Workspace {
         // The box grows with its text.
         self.diff_list.remeasure();
         cx.notify();
+    }
+
+    /// Puts `text` at the composer's caret (a reply that mentions the author).
+    pub(super) fn insert_into_compose(&mut self, text: &str) {
+        if let Some(c) = self.compose.as_mut() {
+            c.edit.insert(text);
+        }
+    }
+
+    /// The list for the token being typed in the composer, if one is open.
+    pub(super) fn compose_completion(&self) -> Option<(usize, Vec<super::complete::Choice>)> {
+        let c = self.compose.as_ref().filter(|c| !c.preview)?;
+        self.completion(c.edit.text(), c.edit.caret(), c.closed)
+    }
+
+    /// ↑ ↓ ↵ ⇥ esc while a completion list is open; whether it took the key.
+    fn completion_key(&mut self, key: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
+        let Some((at, choices)) = self.compose_completion() else {
+            return false;
+        };
+        if key.modifiers.number_of_modifiers() > 0 {
+            return false;
+        }
+        let Some(c) = self.compose.as_mut() else {
+            return false;
+        };
+        match key.key.as_str() {
+            "down" => c.pick = (c.pick + 1).min(choices.len() - 1),
+            "up" => c.pick = c.pick.saturating_sub(1),
+            "enter" | "tab" => {
+                let choice = &choices[c.pick.min(choices.len() - 1)];
+                let caret = c.edit.caret();
+                let end = at + choice.insert.len();
+                c.edit.replace(at..caret, &choice.insert, end..end);
+                c.pick = 0;
+                self.diff_list.remeasure();
+            }
+            "escape" => c.closed = Some(at),
+            _ => return false,
+        }
+        cx.notify();
+        true
     }
 
     /// ↑ ↓ and ⌘← ⌘→ (⇧ selecting) in a wrapped field — the composer, a review's summary, a
@@ -1767,6 +1821,15 @@ impl Workspace {
             .line_height(px(20.))
             .text_color(theme::text())
             .child(text)
+            .children(
+                self.compose_completion()
+                    .filter(|_| {
+                        self.compose
+                            .as_ref()
+                            .is_some_and(|c| std::ptr::eq(c, compose))
+                    })
+                    .map(|(_, choices)| self.render_completion(&choices, compose.pick)),
+            )
             .children(compose.error.clone().map(|e| {
                 div()
                     .px(px(10.))

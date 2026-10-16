@@ -778,6 +778,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The host's words (pull requests on GitHub) for everything drawn from here.
         words::set(self.web.as_ref().is_some_and(|w| w.github));
+        markdown::set_me(self.requests.login.as_deref());
         self.take_error(cx);
         let title = match &self.root {
             Some(root) => format!("GitLance — {}", root.display()),

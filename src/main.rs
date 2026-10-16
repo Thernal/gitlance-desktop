@@ -6,6 +6,7 @@
 mod agents;
 mod codeowners;
 mod editor;
+mod emoji;
 mod generated;
 mod git;
 mod github;
