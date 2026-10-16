@@ -82,7 +82,6 @@ impl Workspace {
     pub(super) fn size(&mut self, split: Split) -> &mut f32 {
         match split {
             Split::Sidebar => &mut self.layout.sidebar,
-            Split::Files => &mut self.layout.files,
             Split::Tool => &mut self.layout.tool_width,
         }
     }
@@ -97,7 +96,6 @@ impl Workspace {
         if event.click_count == 2 {
             *self.size(split) = match split {
                 Split::Sidebar => Layout::default().sidebar,
-                Split::Files => Layout::default().files,
                 Split::Tool => Layout::default().tool_width,
             };
             self.layout.save();
@@ -146,7 +144,6 @@ impl Workspace {
         let active = self.drag.is_some_and(|d| d.split == split);
         let group = match split {
             Split::Sidebar => "split-sidebar",
-            Split::Files => "split-files",
             Split::Tool => "split-tool",
         };
         let line = div()
@@ -425,14 +422,20 @@ impl Workspace {
                     "rail-sidebar",
                     "sidebar",
                     self.layout.show_sidebar,
-                    "Branches and commits  ⌥⌘1",
+                    "Side panel  ⌥⌘1",
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_sidebar(&ToggleSidebar, window, cx)
                 })),
             )
             .child(
-                button("rail-files", "files", self.layout.show_files, "Files  ⌥⌘2").on_click(
+                button(
+                    "rail-files",
+                    "files",
+                    self.layout.show_files,
+                    "Changes  ⌥⌘2",
+                )
+                .on_click(
                     cx.listener(|this, _, window, cx| this.toggle_files(&ToggleFiles, window, cx)),
                 ),
             )
@@ -522,97 +525,6 @@ impl Workspace {
             }))
     }
 
-    pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .w(px(self.layout.sidebar))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .children((self.versions.len() > 1).then(|| {
-                div()
-                    .flex_none()
-                    .flex()
-                    .flex_col()
-                    .child(self.render_versions(cx))
-                    .child(div().h(px(GAP)))
-            }))
-            .child(
-                island()
-                    .flex_1()
-                    .min_h(px(300.))
-                    .border_2()
-                    .border_color(self.zone_border(zones::Zone::Commits))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| this.set_zone(zones::Zone::Commits, cx)),
-                    )
-                    .child({
-                        // A narrow sidebar has no room for the label and the chips on one line.
-                        let stacked = self.layout.sidebar < 300.
-                            && (self.open_request.is_some()
-                                || self.wt.count > 0
-                                || self.selection == Selection::WorkingTree);
-                        let chips = div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .when(stacked, |s| s.px(px(8.)).pb(px(4.)))
-                            .when(!stacked, |s| s.pr(px(8.)))
-                            .children(self.render_request_chip(cx))
-                            .children(self.render_working_chip(cx))
-                            .child(
-                                commit_chip("commit-search", self.find.text.is_some())
-                                    .px(px(5.))
-                                    .child(icons::icon("search").size(px(15.)).text_color(
-                                        if self.find.text.is_some() {
-                                            theme::text()
-                                        } else {
-                                            theme::muted()
-                                        },
-                                    ))
-                                    .tooltip(|_, cx| cx.new(|_| Tip("Search commits  ⌘⇧F")).into())
-                                    .on_click(cx.listener(|this, _, _, cx| this.start_find(cx))),
-                            );
-                        let label = island_label(format!(
-                            "Commits · {}{}",
-                            self.commits.len(),
-                            self.zone_tag(zones::Zone::Commits)
-                        ))
-                        .flex_none();
-                        if stacked {
-                            div().flex().flex_col().child(label).child(chips)
-                        } else {
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(label)
-                                .child(div().flex_1())
-                                .child(chips)
-                        }
-                    })
-                    .children(self.find.text.is_some().then(|| self.render_find(cx)))
-                    .children(self.render_pill(cx))
-                    .child(if self.find.shown.as_ref().is_some_and(Vec::is_empty) {
-                        self.render_no_match().into_any_element()
-                    } else {
-                        uniform_list(
-                            "commits",
-                            self.commit_rows(),
-                            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                                range
-                                    .map(|row| this.render_commit_row(this.commit_at(row), cx))
-                                    .collect::<Vec<_>>()
-                            }),
-                        )
-                        .track_scroll(&self.commit_scroll)
-                        .flex_1()
-                        .pb(px(6.))
-                        .into_any_element()
-                    }),
-            )
-    }
-
     /// The height of the picker: what its rows need, up to 560 px.
     pub(super) fn picker_height(&self) -> f32 {
         let content = if self.requests.connectable && self.requests.side == requests::Side::Requests
@@ -627,7 +539,8 @@ impl Workspace {
         content.clamp(150., 560.)
     }
 
-    pub(super) fn render_versions(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The versions, newest first, for the side panel's Versions section.
+    pub(super) fn version_rows(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let latest = self.versions.len() - 1;
         let (from, to) = match self.selection {
             Selection::Versions { from, to } => (Some(from), Some(to)),
@@ -638,157 +551,136 @@ impl Workspace {
             .versions
             .iter()
             .any(|v| v.author != self.versions[0].author);
-        let folded = self.layout.fold_versions;
-        island()
-            .pb(px(6.))
-            .child(
-                island_label(format!(
-                    "{} Versions · {}",
-                    if folded { "▸" } else { "▾" },
-                    self.versions.len()
-                ))
-                .id("fold-versions")
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.layout.fold_versions = !this.layout.fold_versions;
-                    this.layout.save();
-                    cx.notify();
-                })),
-            )
-            .children(
-                self.versions
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .filter(|_| !folded)
-                    .map(|(ix, v)| {
-                        let role = if Some(ix) == from {
-                            Some("from")
-                        } else if Some(ix) == to {
-                            Some("to")
-                        } else {
-                            None
-                        };
-                        let chosen = role.is_some();
-                        let kind = match format::reason(&v.reason) {
-                            "fetch" => "fetched",
-                            "unknown" => "version",
-                            k => k,
-                        };
-                        let mut detail: Vec<String> = Vec::new();
-                        if several {
-                            detail.push(v.author.clone());
+        div()
+            .flex()
+            .flex_col()
+            .children(self.versions.iter().enumerate().rev().map(|(ix, v)| {
+                let role = if Some(ix) == from {
+                    Some("from")
+                } else if Some(ix) == to {
+                    Some("to")
+                } else {
+                    None
+                };
+                let chosen = role.is_some();
+                let kind = match format::reason(&v.reason) {
+                    "fetch" => "fetched",
+                    "unknown" => "version",
+                    k => k,
+                };
+                let mut detail: Vec<String> = Vec::new();
+                if several {
+                    detail.push(v.author.clone());
+                }
+                detail.push(format::ago(v.time));
+                match ix.checked_sub(1).and_then(|p| self.versions.get(p)) {
+                    None => detail.push(plural(v.commits, "commit")),
+                    Some(prev) => {
+                        if prev.base != v.base {
+                            detail.push(format!(
+                                "onto {}",
+                                v.base.map(format::short).unwrap_or_default()
+                            ));
                         }
-                        detail.push(format::ago(v.time));
-                        match ix.checked_sub(1).and_then(|p| self.versions.get(p)) {
-                            None => detail.push(plural(v.commits, "commit")),
-                            Some(prev) => {
-                                if prev.base != v.base {
-                                    detail.push(format!(
-                                        "onto {}",
-                                        v.base.map(format::short).unwrap_or_default()
-                                    ));
-                                }
-                                detail.push(match v.commits.cmp(&prev.commits) {
-                                    std::cmp::Ordering::Greater => {
-                                        format!("+{}", plural(v.commits - prev.commits, "commit"))
-                                    }
-                                    std::cmp::Ordering::Less => {
-                                        format!("−{}", plural(prev.commits - v.commits, "commit"))
-                                    }
-                                    std::cmp::Ordering::Equal => {
-                                        format!("same {}", plural(v.commits, "commit"))
-                                    }
-                                });
+                        detail.push(match v.commits.cmp(&prev.commits) {
+                            std::cmp::Ordering::Greater => {
+                                format!("+{}", plural(v.commits - prev.commits, "commit"))
                             }
-                        }
-                        // The rail: a dot per version and a line to the older one.
-                        let rail = div()
-                            .flex_none()
-                            .relative()
-                            .w(px(14.))
-                            .h(px(44.))
-                            .when(ix > 0, |s| {
-                                s.child(
-                                    div()
-                                        .absolute()
-                                        .left(px(6.5))
-                                        .top(px(18.))
-                                        .w(px(1.))
-                                        .h(px(30.))
-                                        .bg(theme::selected()),
-                                )
-                            })
+                            std::cmp::Ordering::Less => {
+                                format!("−{}", plural(prev.commits - v.commits, "commit"))
+                            }
+                            std::cmp::Ordering::Equal => {
+                                format!("same {}", plural(v.commits, "commit"))
+                            }
+                        });
+                    }
+                }
+                // The rail: a dot per version and a line to the older one.
+                let rail = div()
+                    .flex_none()
+                    .relative()
+                    .w(px(14.))
+                    .h(px(44.))
+                    .when(ix > 0, |s| {
+                        s.child(
+                            div()
+                                .absolute()
+                                .left(px(6.5))
+                                .top(px(18.))
+                                .w(px(1.))
+                                .h(px(30.))
+                                .bg(theme::selected()),
+                        )
+                    })
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(3.))
+                            .top(px(13.))
+                            .size(px(8.))
+                            .rounded_full()
+                            .bg(if chosen {
+                                theme::accent()
+                            } else {
+                                theme::faint()
+                            }),
+                    );
+                let item = row(("version", ix), chosen)
+                    .h(px(44.))
+                    .items_start()
+                    .gap_2()
+                    .child(rail)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .h_full()
                             .child(
                                 div()
-                                    .absolute()
-                                    .left(px(3.))
-                                    .top(px(13.))
-                                    .size(px(8.))
-                                    .rounded_full()
-                                    .bg(if chosen {
-                                        theme::accent()
-                                    } else {
-                                        theme::faint()
-                                    }),
-                            );
-                        let item = row(("version", ix), chosen)
-                            .h(px(44.))
-                            .items_start()
-                            .gap_2()
-                            .child(rail)
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
                                     .flex()
-                                    .flex_col()
-                                    .justify_center()
-                                    .h_full()
+                                    .items_center()
+                                    .gap_2()
                                     .child(
                                         div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(
-                                                div()
-                                                    .font_weight(FontWeight::SEMIBOLD)
-                                                    .text_color(theme::accent())
-                                                    .child(format!("v{}", v.number)),
-                                            )
-                                            .child(kind.to_owned())
-                                            .child(
-                                                div()
-                                                    .font_family(theme::CODE_FONT)
-                                                    .text_size(px(11.))
-                                                    .text_color(theme::muted())
-                                                    .child(format::short(v.tip)),
-                                            )
-                                            .child(div().flex_1())
-                                            .children(role.map(|r| tag(r, theme::accent())))
-                                            .when(ix == latest && role.is_none(), |s| {
-                                                s.child(tag("latest", theme::faint()))
-                                            })
-                                            .when(
-                                                self.watch.new_from.is_some_and(|from| ix >= from),
-                                                |s| s.child(tag("new", theme::accent())),
-                                            ),
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(theme::accent())
+                                            .child(format!("v{}", v.number)),
                                     )
+                                    .child(kind.to_owned())
                                     .child(
                                         div()
-                                            .w_full()
-                                            .truncate()
+                                            .font_family(theme::CODE_FONT)
                                             .text_size(px(11.))
                                             .text_color(theme::muted())
-                                            .child(detail.join(" · ")),
+                                            .child(format::short(v.tip)),
+                                    )
+                                    .child(div().flex_1())
+                                    .children(role.map(|r| tag(r, theme::accent())))
+                                    .when(ix == latest && role.is_none(), |s| {
+                                        s.child(tag("latest", theme::faint()))
+                                    })
+                                    .when(
+                                        self.watch.new_from.is_some_and(|from| ix >= from),
+                                        |s| s.child(tag("new", theme::accent())),
                                     ),
                             )
-                            .on_click(cx.listener(move |this, event, _, cx| {
-                                this.click_version(ix, event, cx)
-                            }));
-                        div().px(px(6.)).py(px(1.)).child(item)
-                    }),
-            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .truncate()
+                                    .text_size(px(11.))
+                                    .text_color(theme::muted())
+                                    .child(detail.join(" · ")),
+                            ),
+                    )
+                    .on_click(
+                        cx.listener(move |this, event, _, cx| this.click_version(ix, event, cx)),
+                    );
+                div().px(px(6.)).py(px(1.)).child(item)
+            }))
     }
 
     /// The commits of two versions, paired; a modified pair opens its interdiff.
@@ -984,9 +876,15 @@ impl Render for Workspace {
         let win: f32 = window.viewport_size().width.into();
         if (win - self.win_width).abs() > 0.5 {
             self.win_width = win;
-            if !self.compact() {
-                self.files_popover = false;
-            }
+        }
+        // A folded section has no keyboard: it goes to the diff.
+        let folded_zone = match self.zone {
+            zones::Zone::Commits => self.layout.fold_commits || !self.layout.show_sidebar,
+            zones::Zone::Files => !self.files_zone(),
+            _ => false,
+        };
+        if folded_zone && self.diff.is_some() {
+            self.zone = zones::Zone::Diff;
         }
         let body = self.body_width.get();
         let narrow = body > 0. && body < 700.;
@@ -1256,11 +1154,11 @@ impl Render for Workspace {
                     .pr(px(if self.zen.is_some() { GAP } else { 0. }))
                     .pb(px(GAP))
                     .children(self.zen.is_none().then(|| self.render_rail(cx)))
-                    .children(self.layout.show_sidebar.then(|| {
+                    .children(self.render_side(cx).map(|side| {
                         div()
                             .flex()
                             .flex_none()
-                            .child(self.render_sidebar(cx))
+                            .child(side)
                             .child(self.handle(Split::Sidebar, cx))
                     }))
                     .child(

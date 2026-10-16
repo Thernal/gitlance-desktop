@@ -95,15 +95,14 @@ pub fn set_fetch_enabled(root: &Path, on: bool) {
 pub struct Layout {
     /// Width of the branches/versions/commits column.
     pub sidebar: f32,
-    /// Width of the changed-files column.
-    pub files: f32,
     /// Height of the branch list.
     pub branches: f32,
-    /// The branches/versions/commits column and the files column are shown (⌘1, ⌘2).
+    /// The side panel is shown (⌥⌘1); its Changes section is open (⌥⌘2).
     pub show_sidebar: bool,
     pub show_files: bool,
-    /// The Versions island is folded to its label.
+    /// The side panel's Versions and Commits sections are folded to their headers.
     pub fold_versions: bool,
+    pub fold_commits: bool,
     /// The tool window open on the right (`discussions`, `agents`, `notifications`), empty for none.
     pub tool: String,
     /// Its width.
@@ -113,12 +112,12 @@ pub struct Layout {
 impl Default for Layout {
     fn default() -> Self {
         Self {
-            sidebar: 360.,
-            files: 320.,
+            sidebar: 300.,
             branches: 180.,
             show_sidebar: true,
             show_files: true,
             fold_versions: false,
+            fold_commits: false,
             tool: String::new(),
             tool_width: 320.,
         }
@@ -141,6 +140,7 @@ impl Layout {
                 "show_sidebar" => layout.show_sidebar = value != "false",
                 "show_files" => layout.show_files = value != "false",
                 "fold_versions" => layout.fold_versions = value == "true",
+                "fold_commits" => layout.fold_commits = value == "true",
                 "tool" => layout.tool = value.to_owned(),
                 // Before the tool windows: the comments drawer, now Discussions.
                 "comments_open" if value == "true" => layout.tool = "discussions".to_owned(),
@@ -151,7 +151,6 @@ impl Layout {
             };
             match key {
                 "sidebar" => layout.sidebar = value,
-                "files" => layout.files = value,
                 "branches" => layout.branches = value,
                 "tool_width" => layout.tool_width = value,
                 _ => {}
@@ -164,11 +163,11 @@ impl Layout {
 impl std::fmt::Display for Layout {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "sidebar={}", self.sidebar)?;
-        writeln!(f, "files={}", self.files)?;
         writeln!(f, "branches={}", self.branches)?;
         writeln!(f, "show_sidebar={}", self.show_sidebar)?;
         writeln!(f, "show_files={}", self.show_files)?;
         writeln!(f, "fold_versions={}", self.fold_versions)?;
+        writeln!(f, "fold_commits={}", self.fold_commits)?;
         writeln!(f, "tool={}", self.tool)?;
         writeln!(f, "tool_width={}", self.tool_width)
     }
@@ -548,11 +547,11 @@ mod tests {
     fn layout_round_trips_and_ignores_junk() {
         let layout = Layout {
             sidebar: 400.,
-            files: 250.5,
             branches: 120.,
             show_sidebar: false,
             show_files: true,
             fold_versions: true,
+            fold_commits: true,
             tool: "agents".into(),
             tool_width: 300.,
         };

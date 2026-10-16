@@ -32,6 +32,7 @@ mod select;
 mod settings;
 mod shell;
 mod shortcuts;
+mod side;
 mod stack;
 mod submit;
 mod theme;
@@ -53,7 +54,7 @@ use gpui::{
     ListAlignment, ListState, Menu, MenuItem, MouseButton, MouseDownEvent, MouseMoveEvent,
     PathPromptOptions, Point, Rgba, ScrollStrategy, ScrollWheelEvent, SharedString, Task,
     TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas,
-    div, font, list, prelude::*, size, uniform_list,
+    div, font, list, prelude::*, size,
 };
 use lists::{Field, History};
 use menu::{Act, CtxMenu, Entry};
@@ -622,6 +623,19 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.open_agent_pick(cx);
                             continue;
                         }
+                        // A side panel section folded (a snapshot run never saves it).
+                        "fold-versions" => {
+                            this.layout.fold_versions = true;
+                            continue;
+                        }
+                        "fold-commits" => {
+                            this.layout.fold_commits = true;
+                            continue;
+                        }
+                        "fold-changes" => {
+                            this.layout.show_files = false;
+                            continue;
+                        }
                         // A tool window on the right, without saving it as the open one.
                         tool if tool.starts_with("tool-") => {
                             if let Some(t) = tools::Tool::parse(&tool[5..]) {
@@ -835,7 +849,6 @@ struct Diff {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Split {
     Sidebar,
-    Files,
     /// The tool window's left edge: dragging left widens it.
     Tool,
 }
@@ -848,7 +861,6 @@ impl Split {
     fn bounds(self) -> (f32, f32) {
         match self {
             Split::Sidebar => (220., 720.),
-            Split::Files => (160., 640.),
             Split::Tool => (260., 640.),
         }
     }
@@ -956,7 +968,6 @@ pub struct Workspace {
     /// The diff is narrower than 700 px: it is drawn unified whatever the option says.
     narrow: bool,
     /// The files list is open over the diff (a window too narrow for its column).
-    files_popover: bool,
     /// The comment marks of the open file's gutter.
     notes: Vec<diff_view::LineNote>,
     /// Discussions whose open or folded state differs from the default (a resolved one is folded).
@@ -1141,7 +1152,6 @@ impl Workspace {
             picker_open: false,
             win_width: 1480.,
             narrow: false,
-            files_popover: false,
             notes: Vec::new(),
             toggled_mr: HashSet::new(),
             toggled_agent: HashSet::new(),
@@ -1534,10 +1544,6 @@ impl Workspace {
             file.path().to_owned(),
             "file".to_owned(),
         );
-        if self.files_popover {
-            self.files_popover = false;
-            self.zone = zones::Zone::Diff;
-        }
         if self.wants_stack() {
             return self.stack_select(ix, cx);
         }
@@ -1969,37 +1975,11 @@ impl Workspace {
         options
     }
 
-    /// A window under 1 100 px has no room for the files column: it opens over the diff instead.
-    fn compact(&self) -> bool {
-        // An open tool window takes its width from the diff's side of the window.
-        let tool = if self.tool_shown() {
-            self.layout.tool_width + GAP
-        } else {
-            0.
-        };
-        self.win_width - tool < 1100.
-    }
-
-    /// The files column is drawn: there is more than one file to list and room for the column.
-    fn files_shown(&self) -> bool {
-        self.layout.show_files
-            && !self.compact()
-            && self.diff.as_ref().is_some_and(|d| d.files.len() > 1)
-    }
-
-    /// The files exist as a zone (a column, or the popover of a narrow window).
+    /// The side panel's Changes is open and has the files as a zone.
     pub(super) fn files_zone(&self) -> bool {
-        self.layout.show_files && self.diff.as_ref().is_some_and(|d| d.files.len() > 1)
-    }
-
-    /// As wide as the longest path needs, within 200 px and the width the column was dragged to.
-    pub(super) fn files_width(&self) -> f32 {
-        let longest = self
-            .diff
-            .as_ref()
-            .and_then(|d| d.files.iter().map(|f| f.path().chars().count()).max())
-            .unwrap_or(0);
-        (longest as f32 * 7.4 + 96.).clamp(200., self.layout.files.max(200.))
+        self.layout.show_sidebar
+            && self.layout.show_files
+            && self.diff.as_ref().is_some_and(|d| d.files.len() > 1)
     }
 
     /// A generated file with a long change starts folded; the reader can open it.
@@ -2150,10 +2130,9 @@ impl Workspace {
         cx.notify();
     }
 
+    /// ⌥⌘2: folds or opens the side panel's Changes.
     fn toggle_files(&mut self, _: &ToggleFiles, _: &mut Window, cx: &mut Context<Self>) {
-        self.layout.show_files = !self.layout.show_files;
-        self.layout.save();
-        cx.notify();
+        self.fold_section(2, cx);
     }
 
     /// ⌥⌘3 or the rail's third button: the sidebar's top island shows the merge requests; again,
@@ -2380,30 +2359,7 @@ impl Workspace {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .when(!commits_tab, |s| {
-                        s.children(self.files_shown().then(|| {
-                            div()
-                                .flex()
-                                .flex_none()
-                                .child(self.render_files(diff, cx))
-                                .child(self.handle(Split::Files, cx))
-                        }))
-                        .child(self.render_file(diff, cx))
-                        .children(
-                            (self.compact() && self.files_popover && self.files_zone()).then(
-                                || {
-                                    div()
-                                        .absolute()
-                                        .left(px(0.))
-                                        .top(px(0.))
-                                        .bottom(px(0.))
-                                        .flex()
-                                        .shadow_lg()
-                                        .child(self.render_files(diff, cx))
-                                },
-                            ),
-                        )
-                    })
+                    .when(!commits_tab, |s| s.child(self.render_file(diff, cx)))
                     .when(commits_tab, |s| s.child(self.render_pairs(diff, cx))),
             )
             .into_any_element()
@@ -2943,23 +2899,6 @@ impl Workspace {
                     .px_4()
                     .border_b_1()
                     .border_color(theme::island_border())
-                    .children((self.compact() && self.files_zone()).then(|| {
-                        chip(
-                            "files-popover",
-                            format!("▾ {}", plural(diff.files.len(), "file")),
-                            self.files_popover,
-                        )
-                        .on_click(cx.listener(
-                            |this, _: &ClickEvent, _, cx| {
-                                let open = !this.files_popover;
-                                this.files_popover = open;
-                                if open {
-                                    this.zone = zones::Zone::Files;
-                                }
-                                cx.notify();
-                            },
-                        ))
-                    }))
                     .child(change_badge(f.change))
                     .child(div().flex_1().min_w_0().truncate().child(path))
                     // An SVG read as its source can go back to the picture.

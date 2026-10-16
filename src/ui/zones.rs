@@ -47,11 +47,8 @@ impl Workspace {
     }
 
     pub(super) fn set_zone(&mut self, zone: Zone, cx: &mut Context<Self>) {
-        // In a narrow window the files list is a popover: it opens with the zone and closes with it.
-        let popover = zone == Zone::Files && self.compact();
-        if self.zone != zone || self.files_popover != popover {
+        if self.zone != zone {
             self.zone = zone;
-            self.files_popover = popover;
             cx.notify();
         }
     }
@@ -59,7 +56,7 @@ impl Workspace {
     /// The zones that exist right now, in Tab order.
     fn zones(&self) -> Vec<Zone> {
         let mut out = Vec::new();
-        if self.layout.show_sidebar {
+        if self.layout.show_sidebar && !self.layout.fold_commits {
             out.push(Zone::Commits);
         }
         if self.diff.is_some() && !self.settings_open {

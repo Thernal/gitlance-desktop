@@ -2,7 +2,6 @@
 //! changed files as a folder tree or a flat list with a path filter, the labels on commits, and
 //! back / forward through what was looked at. Designed in review round 1 (A9, A10, A11, A13).
 
-use super::diff_view::chip;
 use super::input::{self, Edit};
 use super::px;
 use super::{Workspace, change_badge, row, theme};
@@ -572,51 +571,14 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn render_files(
-        &self,
-        diff: &super::Diff,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    /// The Changes section's body: how far the review is, the path filter, the files.
+    pub(super) fn render_changes(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let count = self.items().len();
-        let list = self.options.list_files;
-        super::island()
-            .w(px(self.files_width()))
-            .flex_none()
-            .border_2()
-            // Every file reviewed: the island says so in green.
-            .border_color(if self.all_reviewed() {
-                theme::added()
-            } else {
-                self.zone_border(super::zones::Zone::Files)
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| this.set_zone(super::zones::Zone::Files, cx)),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .pr(px(8.))
-                    .child(
-                        super::island_label(format!(
-                            "{}{}",
-                            super::plural(diff.files.len(), "file"),
-                            self.zone_tag(super::zones::Zone::Files)
-                        ))
-                        .flex_1(),
-                    )
-                    .child(
-                        super::diff_view::group()
-                            .child(chip("files-tree", "Tree", !list).on_click(cx.listener(
-                                |this, _: &ClickEvent, _, cx| this.set_file_view(false, cx),
-                            )))
-                            .child(chip("files-list", "List", list).on_click(cx.listener(
-                                |this, _: &ClickEvent, _, cx| this.set_file_view(true, cx),
-                            ))),
-                    ),
-            )
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
             .children(self.render_review_progress(cx))
             .child(self.render_field("file-filter", Field::Files, "Filter by path  ⌘P", cx))
             .child(if count == 0 {
