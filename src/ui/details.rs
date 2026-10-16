@@ -3,7 +3,7 @@
 //! itself the first time a request is opened (kept in `details-seen.txt`), and the request's own
 //! header row over the panes: its title, who and where, the pipeline, approvals and Submit review.
 
-use super::tools::{Tool, ToolView, tool_button};
+use super::tools::{ToolView, tool_button};
 use super::{ROW_RADIUS, Workspace, format, markdown, px, theme};
 use crate::storage;
 use gpui::{AnyElement, ClickEvent, Context, FontWeight, Rgba, div, prelude::*};
@@ -23,8 +23,11 @@ impl Workspace {
             return;
         }
         storage::save(SEEN, format!("{seen}{key}\n"));
+        // Opened beside the diff: the keyboard stays where the reviewer is.
         if self.tool().is_none() && self.submit.is_none() {
-            self.set_tool(Some(Tool::Details), cx);
+            self.layout.tool = "details".to_owned();
+            self.layout.save();
+            cx.notify();
         }
     }
 

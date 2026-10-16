@@ -57,6 +57,10 @@ pub struct Thread {
     /// Who resolved it (name, username) and when, while it is resolved.
     pub resolved_by: Option<(String, String)>,
     pub resolved_at: i64,
+    /// The commit (a version's head) the discussion was written on, when the host says (#46).
+    pub commit: Option<String>,
+    /// The host already knows its line is gone from the latest version (GitHub's `isOutdated`).
+    pub outdated: bool,
 }
 
 /// The latest pipeline of a merge request, and when it failed, the job that did.
@@ -1333,6 +1337,10 @@ pub fn parse_threads(value: &Value) -> Vec<Thread> {
                     .map(|n| epoch(&text(n, "resolved_at")))
                     .max()
                     .unwrap_or(0),
+                commit: position
+                    .map(|p| text(p, "head_sha"))
+                    .filter(|s| !s.is_empty()),
+                outdated: false,
             })
         })
         .collect()

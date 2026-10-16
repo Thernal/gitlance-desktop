@@ -579,3 +579,16 @@ fn a_file_is_read_from_a_commit_without_a_checkout() {
     names.sort();
     assert_eq!(names, ["CODEOWNERS", "a.txt"]);
 }
+
+#[test]
+fn a_line_is_followed_through_later_versions() {
+    let before = "a\nb\nc\nd\n";
+    assert_eq!(follow(before, "x\na\nb\nc\nd\n", 3), Fate::Same(4));
+    assert_eq!(
+        follow(before, "a\nB!\nc\nd\n", 2),
+        Fate::Changed(2, "B!".into())
+    );
+    assert_eq!(follow(before, "a\nc\nd\n", 2), Fate::Gone);
+    assert_eq!(follow(before, "a\nc\nd\n", 4), Fate::Same(3));
+    assert_eq!(follow(before, before, 2), Fate::Same(2));
+}

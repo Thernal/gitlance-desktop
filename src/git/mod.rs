@@ -199,6 +199,26 @@ impl Repo {
         std::str::from_utf8(blob.content()).ok().map(str::to_owned)
     }
 
+    /// What became of line `line` (1-based) of `path` from commit `old` to commit `new` (#46).
+    pub fn follow_line(&self, old: Oid, new: Oid, path: &str, line: u32) -> Fate {
+        let (Some(before), Some(after)) = (self.file_at(old, path), self.file_at(new, path)) else {
+            return Fate::Gone;
+        };
+        follow(&before, &after, line)
+    }
+
+    /// The newest commit between `from` (left out) and `to` that changed `path`.
+    pub fn last_change(&self, from: Oid, to: Oid, path: &str) -> Option<CommitInfo> {
+        let commits = self.range_log(from, to, false).ok()?;
+        let ids: Vec<Oid> = commits.iter().map(|c| c.id).collect();
+        let touched = self.changed_paths(&ids);
+        let id = touched
+            .iter()
+            .find(|(_, paths)| paths.iter().any(|p| p == path))
+            .map(|(id, _)| *id)?;
+        commits.into_iter().find(|c| c.id == id)
+    }
+
     /// The names of the files directly in folder `dir` of commit `rev`.
     pub fn files_at(&self, rev: Oid, dir: &str) -> Vec<String> {
         let names = || -> Option<Vec<String>> {
@@ -682,6 +702,69 @@ fn lossy(bytes: &[u8]) -> String {
 
 /// A value that changes whenever a ref, `HEAD` or a reflog under `git_dir` does: file sizes and
 /// modification times, hashed. Reads metadata only.
+/// What became of a line from one text to the next.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Fate {
+    /// The same text, at this line now.
+    Same(u32),
+    /// Rewritten: its line now and what it says.
+    Changed(u32, String),
+    /// Removed, or its file is gone.
+    Gone,
+}
+
+/// Follows `line` of `before` into `after` through their line diff.
+pub fn follow(before: &str, after: &str, line: u32) -> Fate {
+    let mut opts = git2::DiffOptions::new();
+    opts.context_lines(0);
+    let Ok(patch) = git2::Patch::from_buffers(
+        before.as_bytes(),
+        None,
+        after.as_bytes(),
+        None,
+        Some(&mut opts),
+    ) else {
+        return Fate::Same(line);
+    };
+    let mut delta: i64 = 0;
+    for h in 0..patch.num_hunks() {
+        let Ok((hunk, count)) = patch.hunk(h) else {
+            continue;
+        };
+        let (old_start, old_lines) = (hunk.old_start(), hunk.old_lines());
+        let new_lines = hunk.new_lines() as i64;
+        if old_lines == 0 {
+            // Only added lines, after `old_start`.
+            if line <= old_start {
+                break;
+            }
+            delta += new_lines;
+            continue;
+        }
+        if line < old_start {
+            break;
+        }
+        if line < old_start + old_lines {
+            // Removed here: the added line in the same place, if any, is what it became.
+            let k = (line - old_start) as usize;
+            let added: Vec<(u32, String)> = (0..count)
+                .filter_map(|l| patch.line_in_hunk(h, l).ok())
+                .filter(|l| l.origin() == '+')
+                .filter_map(|l| {
+                    let text = String::from_utf8_lossy(l.content()).trim_end().to_owned();
+                    l.new_lineno().map(|n| (n, text))
+                })
+                .collect();
+            return match added.get(k).or_else(|| added.last()) {
+                Some((n, text)) => Fate::Changed(*n, text.clone()),
+                None => Fate::Gone,
+            };
+        }
+        delta += new_lines - old_lines as i64;
+    }
+    Fate::Same((line as i64 + delta).max(1) as u32)
+}
+
 pub fn fingerprint(git_dir: &Path) -> u64 {
     use std::hash::{Hash, Hasher};
     fn visit(path: &Path, hasher: &mut impl Hasher) {

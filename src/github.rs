@@ -365,10 +365,10 @@ fn parse_pull(p: &Value) -> Option<Mr> {
 const THREADS: &str = "query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { pullRequest(number: $number) {
     reviewThreads(first: 100) { nodes {
-      id isResolved path line originalLine diffSide
+      id isResolved isOutdated path line originalLine diffSide
       resolvedBy { login ... on User { name } }
       comments(first: 100) { nodes {
-        databaseId body createdAt
+        databaseId body createdAt originalCommit { oid }
         author { login ... on User { name } }
         pullRequestReview { state }
       } }
@@ -446,6 +446,10 @@ pub fn parse_threads(data: &Value, issue_comments: &Value) -> Vec<Thread> {
                     .filter(|b| !b.is_null())
                     .map(|b| (who(b), s(&b["login"]))),
                 resolved_at: 0,
+                commit: t["comments"]["nodes"][0]["originalCommit"]["oid"]
+                    .as_str()
+                    .map(str::to_owned),
+                outdated: t["isOutdated"].as_bool().unwrap_or(false),
             })
         })
         .collect();
@@ -472,6 +476,8 @@ pub fn parse_threads(data: &Value, issue_comments: &Value) -> Vec<Thread> {
                     resolvable: false,
                     resolved_by: None,
                     resolved_at: 0,
+                    commit: None,
+                    outdated: false,
                 })
             }),
     );

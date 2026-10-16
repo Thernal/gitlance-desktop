@@ -24,6 +24,7 @@ mod markdown;
 mod menu;
 mod notifications;
 mod opening;
+mod outdated;
 mod palette;
 mod places;
 mod rail;

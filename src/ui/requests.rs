@@ -49,6 +49,9 @@ pub struct Requests {
     pub approvals: Option<mr::Approvals>,
     /// Its description, labels, milestone and assignees, for the Details window (#8).
     pub details: Option<mr::Details>,
+    /// Discussions written on an earlier version: what became of their line, by thread id (#46).
+    pub histories: std::collections::HashMap<String, super::outdated::LineHistory>,
+    pub history_task: Option<Task<()>>,
     /// The pushes GitLab kept for a request, as versions of this repository.
     pub versions: Option<(u64, Vec<Version>)>,
     version_task: Option<Task<()>>,
@@ -155,6 +158,7 @@ impl Workspace {
             self.requests.pipeline = None;
             self.requests.approvals = None;
             self.requests.details = None;
+            self.requests.histories.clear();
             self.draft_at = None;
         }
         self.requests.current = iid;
@@ -189,6 +193,7 @@ impl Workspace {
                             }
                             this.requests.details = details;
                             this.details_first_time(iid, cx);
+                            this.compute_histories(cx);
                             this.requests.threads = threads;
                             this.requests.drafts = drafts;
                             this.requests.pipeline = pipeline;
@@ -508,6 +513,7 @@ impl Workspace {
                 if let Ok(list) = built {
                     this.requests.versions = Some((iid, list));
                     this.apply_mr_versions();
+                    this.compute_histories(cx);
                     cx.notify();
                 }
             })
@@ -606,10 +612,17 @@ impl Workspace {
             .iter()
             .enumerate()
             .filter(|(_, t)| t.path.as_deref() == Some(path))
-            .filter_map(|(ix, t)| match (t.new_line, t.old_line) {
-                (Some(n), _) => Some((ix, false, n)),
-                (None, Some(o)) => Some((ix, true, o)),
-                _ => None,
+            .filter_map(|(ix, t)| {
+                // Written on an earlier version: drawn at its line now, or not at all (#46).
+                if self.thread_is_old(t) {
+                    let h = self.requests.histories.get(&t.id)?;
+                    return h.line_now.map(|n| (ix, false, n));
+                }
+                match (t.new_line, t.old_line) {
+                    (Some(n), _) => Some((ix, false, n)),
+                    (None, Some(o)) => Some((ix, true, o)),
+                    _ => None,
+                }
             })
             .collect()
     }
@@ -638,6 +651,7 @@ impl Workspace {
             this.clone(),
             this.clone(),
         );
+        let history = self.render_history(ix, this.clone());
         let selecting = self.selecting(this);
         let first = &t.notes[0];
         let author = self
@@ -827,7 +841,8 @@ impl Workspace {
                     })
                     .child(bar)
                     .when(open, |s| {
-                        s.child(div().flex().flex_col().children(notes))
+                        s.children(history)
+                            .child(div().flex().flex_col().children(notes))
                             .children(reply_row)
                     }),
             )
@@ -1175,6 +1190,36 @@ impl Workspace {
             .filter(|&&n| n > 0)
             .count()
             > 1;
+        // Written on an earlier version: listed apart, grouped by that version (#46).
+        let outdated = if self.showing_request() {
+            self.outdated_by_version()
+        } else {
+            Vec::new()
+        };
+        let old: Vec<usize> = outdated.iter().flat_map(|(_, l)| l.clone()).collect();
+        let theirs: Vec<(usize, &Thread)> = theirs
+            .into_iter()
+            .filter(|(ix, _)| !old.contains(ix))
+            .collect();
+        let discussions = theirs.len();
+        let mut outdated_items = Vec::new();
+        for (version, list) in outdated {
+            let items: Vec<gpui::AnyElement> =
+                list.iter().map(|&ix| self.outdated_item(ix, cx)).collect();
+            outdated_items.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(group_heading(
+                        match version {
+                            Some(v) => format!("Written on v{v} · {}", list.len()),
+                            None => format!("An earlier version · {}", list.len()),
+                        },
+                        None,
+                    ))
+                    .children(items),
+            );
+        }
         let request_items = theirs.into_iter().map(|(ix, t)| {
             let target = t.path.clone().zip(t.new_line.or(t.old_line));
             let old = t.new_line.is_none();
@@ -1288,6 +1333,24 @@ impl Workspace {
                         .then(|| group_heading(format!("Discussions · {discussions}"), None)),
                 )
                 .children(request_items)
+                .children((!old.is_empty()).then(|| {
+                    div()
+                        .px(px(14.))
+                        .pt(px(14.))
+                        .pb(px(2.))
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme::text())
+                        .child("Outdated")
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::NORMAL)
+                                .text_color(theme::faint())
+                                .child("by the version they were written on"),
+                        )
+                }))
+                .children(outdated_items)
                 .children(
                     (grouped && agents > 0)
                         .then(|| group_heading(format!("For your agent · {agents}"), None)),
@@ -1312,6 +1375,68 @@ impl Workspace {
                     .into_any_element()
             }),
         }
+    }
+
+    /// An outdated discussion in the Discussions window: where, its first words, whether its line
+    /// changed, Show and Resolve (decided 2026-10-16: resolve from the list).
+    fn outdated_item(&self, ix: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let t = &self.requests.threads[ix];
+        let line_now = self.requests.histories.get(&t.id).and_then(|h| h.line_now);
+        let path = t.path.clone().unwrap_or_default();
+        let place = format!(
+            "{}:{}",
+            path.rsplit('/').next().unwrap_or(&path),
+            t.new_line.or(t.old_line).unwrap_or(0)
+        );
+        let first = &t.notes[0];
+        let written = self.requests.histories.get(&t.id).map(|h| h.written);
+        div()
+            .flex()
+            .flex_col()
+            .child(comment_item(
+                ("comment-old", ix),
+                theme::faint(),
+                place,
+                format!("{}: {}", first.author, self.one_line(&first.body)),
+            ))
+            .child(
+                div()
+                    .pl(px(28.))
+                    .pr(px(14.))
+                    .pb(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(11.))
+                    .child(
+                        div().flex_1().text_color(theme::warning()).child(
+                            self.since_comment(ix)
+                                .unwrap_or("Written on an earlier version"),
+                        ),
+                    )
+                    .child(
+                        super::tools::tool_button(("old-show", ix), "Show").on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| match line_now {
+                                Some(line) => this.jump_to_line(&path, line, false, cx),
+                                None => {
+                                    if let Some(w) = written {
+                                        this.compare_since_written(w, cx)
+                                    }
+                                }
+                            },
+                        )),
+                    )
+                    .children(t.resolvable.then(|| {
+                        super::tools::tool_button(
+                            ("old-resolve", ix),
+                            if t.resolved { "Reopen" } else { "Resolve" },
+                        )
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| this.toggle_resolved(ix, cx),
+                        ))
+                    })),
+            )
+            .into_any_element()
     }
 
     /// Every comment of the open diff: the request's discussions and pending ones, and the agent's.

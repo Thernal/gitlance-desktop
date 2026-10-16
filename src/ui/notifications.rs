@@ -653,6 +653,8 @@ mod tests {
             resolvable: true,
             resolved_by: None,
             resolved_at: 0,
+            commit: None,
+            outdated: false,
         }
     }
 

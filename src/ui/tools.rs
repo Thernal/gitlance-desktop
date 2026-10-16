@@ -324,7 +324,10 @@ impl Workspace {
 }
 
 /// A small button in a tool window's header or foot.
-pub fn tool_button(id: &'static str, label: impl Into<SharedString>) -> gpui::Stateful<gpui::Div> {
+pub fn tool_button(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .px_2()
