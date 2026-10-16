@@ -1247,7 +1247,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A comment on one line, for a folded thread or the drawer: without its markdown when Rich.
+    /// A comment on one line, for a folded thread or a tool window: without its markdown when Rich.
     pub(super) fn one_line(&self, body: &str) -> String {
         if self.settings.rich_comments {
             crate::markdown::plain(body)
@@ -1698,8 +1698,10 @@ impl Workspace {
         };
         let preview = compose.preview;
         let toggle = this.clone();
+        // In a narrow diff the buttons wrap under the helpers instead of running out of the box.
         let edge = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(2.))
             .px(px(6.))
@@ -1742,7 +1744,14 @@ impl Workspace {
                     }),
             )
             .child(div().flex_1())
-            .child(div().flex().items_center().gap(px(6.)).children(tail));
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(6.))
+                    .children(tail),
+            );
         div()
             .flex_1()
             .min_w_0()

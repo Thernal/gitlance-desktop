@@ -5,6 +5,8 @@
 
 use super::keys::{self, On};
 use super::px;
+use super::requests::{comment_item, group_heading};
+use super::tools::ToolView;
 use super::{ISLAND_RADIUS, ROW_RADIUS, Workspace, theme};
 use crate::agents::{self, Bus};
 use crate::review::State;
@@ -139,6 +141,9 @@ impl Workspace {
 
     /// Takes in what the agents answered since the last look (from the 2-second poll).
     pub(super) fn poll_agents(&mut self, cx: &mut Context<Self>) {
+        if self.tool() == Some(super::tools::Tool::Agents) && self.refresh_chats() {
+            cx.notify();
+        }
         let (Some(root), Some(bus)) = (self.root.clone(), Self::bus()) else {
             return;
         };
@@ -151,6 +156,151 @@ impl Workspace {
             self.save_comments();
             self.refresh_rows();
             cx.notify();
+        }
+    }
+
+    /// Reads this repository's chats again for the Agents window; whether they changed.
+    pub(super) fn refresh_chats(&mut self) -> bool {
+        let chats = match (self.root.as_ref(), Self::bus()) {
+            (Some(root), Some(bus)) => bus.chats(root),
+            _ => Vec::new(),
+        };
+        let changed = chats != self.agent_chats;
+        self.agent_chats = chats;
+        changed
+    }
+
+    /// The Agents tool window: the chats that listen here, then the purple comments by state.
+    pub(super) fn agents_tool(&self, cx: &mut Context<Self>) -> ToolView {
+        let drafts = self.agent_drafts().len();
+        let chats =
+            self.agent_chats.iter().map(|c| {
+                div()
+                    .mx(px(6.))
+                    .px(px(8.))
+                    .py(px(6.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().flex_none().size(px(8.)).rounded_full().bg(
+                                if c.listening() {
+                                    theme::added()
+                                } else {
+                                    theme::faint()
+                                },
+                            ))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(c.agent.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_size(px(11.))
+                                    .text_color(theme::faint())
+                                    .child(if c.listening() { "listening" } else { "quiet" }),
+                            ),
+                    )
+                    .children((!c.title.is_empty()).then(|| {
+                        div()
+                            .pl(px(16.))
+                            .truncate()
+                            .text_size(px(12.))
+                            .text_color(theme::muted())
+                            .child(c.title.clone())
+                    }))
+            });
+        let group = |state: State, label: &'static str| {
+            let items: Vec<_> = self
+                .comments
+                .iter()
+                .filter(|c| c.state == state)
+                .map(|c| {
+                    let id = c.id;
+                    comment_item(
+                        ("agent-comment", id as usize),
+                        theme::agent(),
+                        format!(
+                            "{}:{}",
+                            c.path.rsplit('/').next().unwrap_or(&c.path),
+                            c.line
+                        ),
+                        self.one_line(&c.body),
+                    )
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.jump_to(id, cx)))
+                })
+                .collect();
+            (!items.is_empty()).then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(group_heading(format!("{label} · {}", items.len()), None))
+                    .children(items)
+            })
+        };
+        let send = (drafts > 0).then(|| {
+            let send = div()
+                .id("send-to-agent")
+                .px_2()
+                .h(px(24.))
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap_2()
+                .rounded(px(ROW_RADIUS))
+                .bg(theme::agent())
+                .text_color(theme::base())
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .cursor_pointer()
+                .child(format!("Send to agent · {drafts}"))
+                .child(keys::caps("⇧⌘A", On::Filled))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_agent_pick(cx)));
+            div().flex().child(send).into_any_element()
+        });
+        ToolView {
+            title: "Agents".into(),
+            count: (drafts > 0).then(|| super::plural(drafts, "draft")),
+            actions: Vec::new(),
+            body: div()
+                .id("agents-list")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .py(px(6.))
+                .child(group_heading("Chats here".to_owned(), None))
+                .children(chats)
+                .children(self.agent_chats.is_empty().then(|| {
+                    div()
+                        .px(px(14.))
+                        .py(px(4.))
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child("No chat listens in this repository. An agent starts listening with GitLance agent-watch (Settings → Agents).")
+                }))
+                .children(group(State::Draft, "Drafts"))
+                .children(group(State::Sent, "Sent"))
+                .children(group(State::Addressed, "Addressed"))
+                .children(group(State::Resolved, "Resolved"))
+                .children(self.comments.is_empty().then(|| {
+                    div()
+                        .px(px(14.))
+                        .py(px(10.))
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child("No comments for your agent. Write one on a line with c and pick Your agent.")
+                }))
+                .into_any_element(),
+            foot: send,
         }
     }
 

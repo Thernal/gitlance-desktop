@@ -1,8 +1,9 @@
 //! Notifications for the open repository's GitLab project: the user's to-dos (mentions, review
 //! requests, being addressed), new comments where they take part — in discussions they wrote in,
 //! on any open merge request, and on their own merge requests — and their discussions resolved by
-//! someone else. A bell in the title bar counts the unread; ⌘⇧N opens the
-//! list, newest first: j k move, ↵ opens the comment, e is done with it, esc closes.
+//! someone else. The bell on the right stripe has a dot while some are unread; ⌘⇧N opens the
+//! Notifications tool window (`super::tools`), newest first: j k move, ↵ opens the comment, e is done
+//! with it, esc closes.
 //!
 //! A request seen for the first time sets its comments so far as read, and its resolved discussions
 //! as known: only what comes after is news. Kept per project in `seen-notes.txt` and
@@ -11,13 +12,12 @@
 
 use super::keys::{self, On};
 use super::px;
-use super::{ISLAND_RADIUS, ROW_RADIUS, TITLE_BAR, Workspace, format, theme};
+use super::tools::{Tool, ToolView, tool_button};
+use super::{ROW_RADIUS, Workspace, format, theme};
 use crate::links::{self, Target};
 use crate::mr::{self, Mr, Thread, Todo};
 use crate::storage;
-use gpui::{
-    ClickEvent, Context, FontWeight, KeyDownEvent, MouseButton, ScrollHandle, Task, div, prelude::*,
-};
+use gpui::{ClickEvent, Context, FontWeight, ScrollHandle, Task, div, prelude::*};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -82,7 +82,6 @@ pub struct Notice {
 #[derive(Default)]
 pub struct Notices {
     pub list: Vec<Notice>,
-    pub open: bool,
     pub at: usize,
     /// Opened or looked at: no longer bold, not counted. Kept for the project `read_base`.
     read: HashSet<String>,
@@ -394,26 +393,27 @@ impl Workspace {
 
     /// ⌘⇧N: the list, read again as it opens.
     pub(super) fn toggle_notices(&mut self, cx: &mut Context<Self>) {
-        self.notices.open = !self.notices.open;
-        if self.notices.open {
-            // Opened: everything read afresh, not only what reports a change.
-            self.notices.at = 0;
-            self.notices.scroll.scroll_to_item(0);
-            self.notices.cache.clear();
-            self.load_notices(cx);
-        }
-        cx.notify();
+        self.toggle_tool(Tool::Notifications, cx);
+    }
+
+    /// The window opened: everything read afresh, not only what reports a change.
+    pub(super) fn refresh_notices(&mut self, cx: &mut Context<Self>) {
+        self.notices.at = 0;
+        self.notices.scroll.scroll_to_item(0);
+        self.notices.cache.clear();
+        self.load_notices(cx);
     }
 
     /// Opens notice `ix`: its request, at its comment.
-    fn open_notice(&mut self, ix: usize, cx: &mut Context<Self>) {
+    pub(super) fn open_notice(&mut self, ix: usize, cx: &mut Context<Self>) {
         let Some(n) = self.notices.list.get(ix).cloned() else {
             return;
         };
         if self.notices.read.insert(n.key.clone()) {
             self.notices.save_read();
         }
-        self.notices.open = false;
+        // The window stays; the keyboard goes to what was opened.
+        self.set_zone(super::zones::Zone::Diff, cx);
         self.go_to(
             Target::Request {
                 iid: n.iid,
@@ -426,7 +426,7 @@ impl Workspace {
 
     /// `e`: done with notice `ix` — a to-do is marked done on GitLab, a comment counts as read
     /// from now on.
-    fn dismiss_notice(&mut self, ix: usize, cx: &mut Context<Self>) {
+    pub(super) fn dismiss_notice(&mut self, ix: usize, cx: &mut Context<Self>) {
         if ix >= self.notices.list.len() {
             return;
         }
@@ -464,20 +464,7 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn notices_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
-        match event.keystroke.key.as_str() {
-            "escape" => self.notices.open = false,
-            "j" | "down" => return self.notices_step(true, cx),
-            "k" | "up" => return self.notices_step(false, cx),
-            "enter" => return self.open_notice(self.notices.at, cx),
-            "e" => return self.dismiss_notice(self.notices.at, cx),
-            _ => return,
-        }
-        cx.notify();
-    }
-
-    /// j k, and ↑ ↓ (which arrive as the palette's actions while the list is open): the next or
-    /// previous notice, scrolled into view.
+    /// j k, ↑ ↓ while the window has the keyboard: the next or previous notice, scrolled into view.
     pub(super) fn notices_step(&mut self, down: bool, cx: &mut Context<Self>) {
         let n = self.notices.list.len();
         if n > 0 {
@@ -491,50 +478,8 @@ impl Workspace {
         }
     }
 
-    /// The bell in the title bar, with the unread count.
-    pub(super) fn render_bell(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        if !self.requests.available {
-            return None;
-        }
-        let unread = self.notices.unread();
-        Some(
-            super::icon_button("notices-open", "bell", "Notifications  ⌘⇧N")
-                .relative()
-                .when(self.notices.open, |s| s.bg(theme::selected()))
-                .children((unread > 0).then(|| {
-                    div()
-                        .absolute()
-                        .top(px(-2.))
-                        .right(px(-4.))
-                        .min_w(px(16.))
-                        .h(px(16.))
-                        .px(px(4.))
-                        .rounded_full()
-                        .bg(theme::removed())
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(10.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme::base())
-                        .child(if unread > 99 {
-                            "99+".to_owned()
-                        } else {
-                            unread.to_string()
-                        })
-                }))
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_notices(cx))),
-        )
-    }
-
-    /// The list, hanging from the bell.
-    pub(super) fn render_notices(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement + use<>> {
-        if !self.notices.open {
-            return None;
-        }
+    /// The Notifications tool window.
+    pub(super) fn notifications_tool(&self, cx: &mut Context<Self>) -> ToolView {
         let unread = self.notices.unread();
         let rows = self.notices.list.iter().enumerate().map(|(ix, n)| {
             let fresh = !self.notices.read.contains(&n.key);
@@ -617,112 +562,53 @@ impl Workspace {
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_notice(ix, cx)))
         });
         let empty = self.notices.list.is_empty();
-        Some(
-            div()
-                .absolute()
-                .size_full()
-                .child(
-                    div()
-                        .id("notices-backdrop")
-                        .absolute()
-                        .size_full()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
-                                this.notices.open = false;
-                                cx.notify();
-                            }),
-                        ),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .occlude()
-                        .top(px(TITLE_BAR - 4.))
-                        .right(px(48.))
-                        .w(px(440.))
-                        .max_h(px(560.))
-                        .flex()
-                        .flex_col()
-                        .rounded(px(ISLAND_RADIUS))
-                        .border_1()
-                        .border_color(theme::island_border())
-                        .bg(theme::panel())
-                        .shadow_lg()
-                        .text_size(px(13.))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .px_3()
-                                .py(px(10.))
-                                .border_b_1()
-                                .border_color(theme::island_border())
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(if unread > 0 {
-                                            format!("Notifications · {unread} new")
-                                        } else {
-                                            "Notifications".to_owned()
-                                        }),
-                                )
-                                .children((unread > 0).then(|| {
-                                    div()
-                                        .id("notices-read-all")
-                                        .px_2()
-                                        .rounded(px(ROW_RADIUS))
-                                        .text_size(px(12.))
-                                        .text_color(theme::muted())
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
-                                        .child("Mark all read")
-                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                            this.read_all_notices(cx)
-                                        }))
-                                })),
+        ToolView {
+            title: "Notifications".into(),
+            count: (unread > 0).then(|| format!("{unread} new")),
+            actions: (unread > 0)
+                .then(|| {
+                    tool_button("notices-read-all", "Mark all read")
+                        .on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.read_all_notices(cx)),
                         )
-                        .child(
-                            div()
-                                .id("notices-list")
-                                .flex_1()
-                                .min_h_0()
-                                .overflow_y_scroll()
-                                .track_scroll(&self.notices.scroll)
-                                .p(px(6.))
-                                .children(rows)
-                                .children(empty.then(|| {
-                                    div()
-                                        .px_3()
-                                        .py(px(14.))
-                                        .text_size(px(12.))
-                                        .text_color(theme::muted())
-                                        .child("Nothing new. Mentions, review requests and replies in your discussions show up here.")
-                                })),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(6.))
-                                .px_3()
-                                .py(px(8.))
-                                .border_t_1()
-                                .border_color(theme::island_border())
-                                .text_size(px(11.))
-                                .text_color(theme::faint())
-                                .child(keys::caps("J", On::Plain))
-                                .child(keys::caps("K", On::Plain))
-                                .child("move")
-                                .child(keys::caps("↵", On::Plain))
-                                .child("open")
-                                .child(keys::caps("E", On::Plain))
-                                .child("done"),
-                        ),
-                ),
-        )
+                        .into_any_element()
+                })
+                .into_iter()
+                .collect(),
+            body: div()
+                .id("notices-list")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&self.notices.scroll)
+                .p(px(6.))
+                .children(rows)
+                .children(empty.then(|| {
+                    div()
+                        .px_3()
+                        .py(px(14.))
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child("Nothing new. Mentions, review requests and replies in your discussions show up here.")
+                }))
+                .into_any_element(),
+            foot: Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .text_size(px(11.))
+                    .text_color(theme::faint())
+                    .child(keys::caps("J", On::Plain))
+                    .child(keys::caps("K", On::Plain))
+                    .child("move")
+                    .child(keys::caps("↵", On::Plain))
+                    .child("open")
+                    .child(keys::caps("E", On::Plain))
+                    .child("done")
+                    .into_any_element(),
+            ),
+        }
     }
 }
 

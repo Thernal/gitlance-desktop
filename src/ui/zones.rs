@@ -1,4 +1,5 @@
-//! Keyboard focus zones: the branches, the commits, the files and the diff. One of them has the
+//! Keyboard focus zones: the branches, the commits, the files, the diff and the tool window on the
+//! right. One of them has the
 //! keyboard at a time (its island has an outline), Tab and ⇧Tab move between them, ↑ ↓ ← → work in
 //! the one that has it, and ↵ goes one step in.
 
@@ -13,6 +14,8 @@ pub enum Zone {
     Commits,
     Files,
     Diff,
+    /// The tool window (`super::tools`).
+    Tool,
 }
 
 /// How far a key scrolls the diff.
@@ -39,6 +42,7 @@ impl Workspace {
             Zone::Commits => " · ⌃2",
             Zone::Files => " · ⌃3",
             Zone::Diff => " · ⌃4",
+            Zone::Tool => "",
         })
     }
 
@@ -63,6 +67,9 @@ impl Workspace {
                 out.push(Zone::Files);
             }
             out.push(Zone::Diff);
+        }
+        if self.tool_shown() && !self.settings_open {
+            out.push(Zone::Tool);
         }
         out
     }
@@ -90,6 +97,11 @@ impl Workspace {
             Zone::Diff => self
                 .diff_list
                 .scroll_by(px(if down { LINE } else { -LINE })),
+            Zone::Tool => match self.tool() {
+                Some(super::tools::Tool::Notifications) => return self.notices_step(down, cx),
+                Some(super::tools::Tool::Discussions) => return self.step_thread(down, cx),
+                _ => {}
+            },
         }
         cx.notify();
     }
@@ -101,6 +113,8 @@ impl Workspace {
                 self.tree_horizontal(forward, cx)
             }
             Zone::Branches if forward => self.set_zone(Zone::Commits, cx),
+            Zone::Tool if !forward => self.set_zone(Zone::Diff, cx),
+            Zone::Tool => {}
             Zone::Diff if !forward => self.set_zone(
                 if self.files_zone() {
                     Zone::Files
@@ -131,6 +145,11 @@ impl Workspace {
     /// ↵: one step in.
     pub(super) fn activate(&mut self, cx: &mut Context<Self>) {
         match self.zone {
+            Zone::Tool => {
+                if self.tool() == Some(super::tools::Tool::Notifications) {
+                    self.open_notice(self.notices.at, cx);
+                }
+            }
             Zone::Branches => self.close_picker(cx),
             Zone::Commits => {
                 if self.diff.is_some() {

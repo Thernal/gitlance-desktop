@@ -83,6 +83,7 @@ impl Workspace {
         match split {
             Split::Sidebar => &mut self.layout.sidebar,
             Split::Files => &mut self.layout.files,
+            Split::Tool => &mut self.layout.tool_width,
         }
     }
 
@@ -97,6 +98,7 @@ impl Workspace {
             *self.size(split) = match split {
                 Split::Sidebar => Layout::default().sidebar,
                 Split::Files => Layout::default().files,
+                Split::Tool => Layout::default().tool_width,
             };
             self.layout.save();
             cx.notify();
@@ -121,7 +123,13 @@ impl Workspace {
             return;
         }
         let (min, max) = drag.split.bounds();
-        let size = (drag.size + axis(drag.split, event.position) - drag.origin).clamp(min, max);
+        let moved = axis(drag.split, event.position) - drag.origin;
+        let moved = if drag.split == Split::Tool {
+            -moved
+        } else {
+            moved
+        };
+        let size = (drag.size + moved).clamp(min, max);
         *self.size(drag.split) = size;
         cx.notify();
     }
@@ -139,6 +147,7 @@ impl Workspace {
         let group = match split {
             Split::Sidebar => "split-sidebar",
             Split::Files => "split-files",
+            Split::Tool => "split-tool",
         };
         let line = div()
             .rounded_full()
@@ -282,7 +291,6 @@ impl Workspace {
                     .gap_3()
                     .children(self.render_fetch(cx))
                     .children(self.render_status(cx))
-                    .children(self.render_bell(cx))
                     .child(
                         icon_button("settings-open", "settings", "Settings  ⌘,")
                             .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
@@ -1012,9 +1020,8 @@ impl Render for Workspace {
                     || self.submit.is_some()
                     || self.open_ask.is_some()
                     || self.agent_pick.is_some()
-                    || self.notices.open
                 {
-                    if self.palette.is_some() || self.ffind.is_some() || self.notices.open {
+                    if self.palette.is_some() || self.ffind.is_some() {
                         "Workspace Typing Palette"
                     } else if self.compose.is_some()
                         || self.goline.is_some()
@@ -1076,7 +1083,15 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &PreviousThread, _, cx| this.step_thread(false, cx)))
             .on_action(cx.listener(|this, _: &ReplyThread, _, cx| this.reply_focused(cx)))
             .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))
-            .on_action(cx.listener(|this, _: &EditComment, _, cx| this.edit_focused(cx)))
+            .on_action(cx.listener(|this, _: &EditComment, _, cx| {
+                // In the Notifications window, e is done with the selected one.
+                if this.zone == zones::Zone::Tool && this.tool() == Some(tools::Tool::Notifications)
+                {
+                    this.dismiss_notice(this.notices.at, cx)
+                } else {
+                    this.edit_focused(cx)
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleThread, _, cx| this.toggle_focused(cx)))
             .on_action(cx.listener(|this, _: &MarkReviewed, _, cx| this.mark_and_advance(cx)))
             .on_action(cx.listener(|this, _: &ToggleBookmark, _, cx| this.toggle_bookmark(cx)))
@@ -1110,7 +1125,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FindInFiles, _, cx| this.open_find_files(cx)))
             .on_action(cx.listener(|this, _: &ToggleReviewed, _, cx| this.toggle_reviewed(cx)))
             .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
-                this.set_comments_open(!this.layout.comments_open, cx)
+                this.toggle_tool(tools::Tool::Discussions, cx)
             }))
             .on_action(cx.listener(|this, _: &NextZone, _, cx| this.step_zone(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousZone, _, cx| this.step_zone(false, cx)))
@@ -1236,7 +1251,9 @@ impl Render for Workspace {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .px(px(GAP))
+                    .pl(px(GAP))
+                    // The stripe sits on the window's right edge; zen has none.
+                    .pr(px(if self.zen.is_some() { GAP } else { 0. }))
                     .pb(px(GAP))
                     .children(self.zen.is_none().then(|| self.render_rail(cx)))
                     .children(self.layout.show_sidebar.then(|| {
@@ -1259,16 +1276,17 @@ impl Render for Workspace {
                             })
                             .children(self.render_zen_keys()),
                     )
+                    .children(self.render_tool(cx))
+                    .children(self.stripe_gap())
+                    .children(self.render_stripe(cx))
                     .into_any_element(),
             })
             // Last, so it paints over everything.
             .children(self.repo_menu.then(|| self.render_repo_menu(cx)))
-            .children(self.render_notices(cx))
             .children(self.render_ctx_menu(window.viewport_size(), cx))
             .children(self.render_picker(cx))
             .children(self.render_find_files(cx))
             .children(self.render_create(cx))
-            .children(self.render_submit(cx))
             .children(self.render_open_ask(cx))
             .children(self.render_agent_pick(cx))
             .children(self.render_shortcuts(cx))

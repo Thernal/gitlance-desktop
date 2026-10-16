@@ -1,13 +1,15 @@
 //! Submitting a review of a merge request, as GitLab offers it: Comment, Approve or Request changes,
-//! with an optional summary, publishing one's pending comments with it. A card over the diff that
-//! lists those pending comments, each a jump to its line.
+//! with an optional summary, publishing one's pending comments with it. It opens in the tool window
+//! on the right (Design flow 05 step 9), which stays while the diff scrolls: what goes out (the
+//! pending comments, each a jump to its line), the verdict with what it does, the summary.
 
 use super::input::{self, Edit};
 use super::keys::{self, On};
 use super::px;
-use super::{ISLAND_RADIUS, ROW_RADIUS, Workspace, plural, theme};
+use super::tools::ToolView;
+use super::{ROW_RADIUS, Workspace, icons, plural, theme};
 use crate::mr;
-use gpui::{ClickEvent, Context, FontWeight, KeyDownEvent, MouseButton, div, prelude::*};
+use gpui::{ClickEvent, Context, FontWeight, KeyDownEvent, div, prelude::*};
 
 /// What the review says besides its comments.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -30,9 +32,9 @@ impl Verdict {
 
     fn hint(self) -> &'static str {
         match self {
-            Verdict::Comment => "Publish your comments, no verdict",
-            Verdict::Approve => "Publish your comments and approve",
-            Verdict::RequestChanges => "Publish your comments and ask for changes before it merges",
+            Verdict::Comment => "no verdict",
+            Verdict::Approve => "approves",
+            Verdict::RequestChanges => "blocks merging",
         }
     }
 }
@@ -184,7 +186,8 @@ impl Workspace {
         .detach();
     }
 
-    pub(super) fn render_submit(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+    /// Submit review, in the tool window while it is open.
+    pub(super) fn submit_tool(&self, cx: &mut Context<Self>) -> Option<ToolView> {
         let s = self.submit.as_ref()?;
         let iid = self.requests.current?;
         let title = self
@@ -194,28 +197,40 @@ impl Workspace {
             .find(|m| m.iid == iid)
             .map(|m| m.title.clone())
             .unwrap_or_default();
-        let approved = self.approved_already();
+        // What Approve does to the approvals: "1 / 2 → 2 / 2" where rules count them.
+        let approve = match &self.requests.approvals {
+            Some(a) if a.mine => "approved already".to_owned(),
+            Some(a) if a.required > 0 => {
+                let have = a.required.saturating_sub(a.left);
+                format!(
+                    "{have} / {} → {} / {}",
+                    a.required,
+                    (have + 1).min(a.required),
+                    a.required
+                )
+            }
+            _ => Verdict::Approve.hint().to_owned(),
+        };
         let option = |v: Verdict| {
             let on = s.verdict == v;
-            let hint = if v == Verdict::Approve && approved {
-                "You approved it already — the comments go out alone"
+            let hint = if v == Verdict::Approve {
+                approve.clone()
             } else {
-                v.hint()
+                v.hint().to_owned()
             };
             div()
                 .id(("verdict", v as usize))
                 .flex()
-                .items_start()
-                .gap(px(10.))
-                .px(px(10.))
-                .py(px(7.))
+                .items_center()
+                .gap(px(8.))
+                .px(px(8.))
+                .py(px(6.))
                 .rounded(px(ROW_RADIUS))
                 .cursor_pointer()
                 .when(on, |s| s.bg(theme::selected()))
                 .hover(|s| s.bg(theme::hover()))
                 .child(
                     div()
-                        .mt(px(3.))
                         .size(px(14.))
                         .flex_none()
                         .rounded_full()
@@ -228,17 +243,13 @@ impl Workspace {
                             on.then(|| div().size(px(6.)).rounded_full().bg(theme::accent())),
                         ),
                 )
+                .child(div().flex_1().child(v.label()))
                 .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child(v.label()))
-                        .child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(theme::muted())
-                                .child(hint),
-                        ),
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(theme::faint())
+                        .child(hint),
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     if let Some(s) = this.submit.as_mut() {
@@ -260,8 +271,8 @@ impl Workspace {
                 .flex()
                 .items_baseline()
                 .gap_2()
-                .px(px(10.))
-                .py(px(3.))
+                .px(px(6.))
+                .py(px(2.))
                 .rounded(px(ROW_RADIUS))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme::hover()))
@@ -282,14 +293,15 @@ impl Workspace {
                         .text_color(theme::muted())
                         .child(self.one_line(&d.body)),
                 )
+                // The window stays: the comment is checked in the diff beside it.
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     if let Some((path, line)) = target.clone() {
-                        this.submit = None;
                         this.jump_to_line(&path, line, old, cx);
                     }
                 }))
         });
         let drafts = self.requests.drafts.len();
+        let agent_drafts = self.agent_drafts().len();
         let go = match (s.posting, s.verdict) {
             (true, _) => "Submitting…",
             (false, Verdict::Comment) => "Submit review",
@@ -299,179 +311,169 @@ impl Workspace {
         let field = self.field_look(
             &s.summary,
             true,
-            "Summary (optional) — posted as a comment on the merge request",
+            "A summary, if you want one…",
             input::Look {
                 wrap: true,
                 ..Default::default()
             },
             cx.entity().downgrade(),
         );
-        Some(
-            div()
-                .id("submit-backdrop")
-                .absolute()
-                .size_full()
-                .flex()
-                .justify_center()
-                .items_start()
-                .pt(px(72.))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| this.close_submit(cx)),
-                )
-                .child(
-                    div()
-                        .occlude()
-                        .w(px(520.))
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .p_4()
-                        .rounded(px(ISLAND_RADIUS))
-                        .border_1()
-                        .border_color(theme::island_border())
-                        .bg(theme::panel())
-                        .shadow_lg()
-                        .text_size(px(13.))
-                        .child(
-                            div()
-                                .flex()
-                                .items_baseline()
-                                .gap_2()
-                                .min_w_0()
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .text_size(px(15.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child("Submit review"),
+        let body = div()
+            .id("submit-body")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(14.))
+            .py(px(12.))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .text_size(px(13.))
+            .child(
+                div()
+                    .truncate()
+                    .text_size(px(12.))
+                    .text_color(theme::faint())
+                    .child(format!("{} {title}", super::words::number(iid))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px(px(4.))
+                    .py(px(8.))
+                    .rounded(px(ROW_RADIUS))
+                    .bg(theme::base())
+                    .child(
+                        div()
+                            .px(px(6.))
+                            .text_size(px(12.))
+                            .text_color(theme::muted())
+                            .child(if drafts == 0 {
+                                "No pending comments — the verdict and the summary go out alone."
+                                    .to_owned()
+                            } else {
+                                format!(
+                                    "{} — pending, only you see them until now",
+                                    plural(drafts, "comment")
                                 )
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_color(theme::faint())
-                                        .child(format!("{} {title}", super::words::number(iid))),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .px_2()
-                                .py(px(5.))
-                                .min_h(px(64.))
-                                .flex()
-                                .items_start()
-                                .rounded(px(ROW_RADIUS))
-                                .border_2()
-                                .border_color(theme::focus())
-                                .bg(theme::base())
-                                .cursor_text()
-                                .child(field),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .children(VERDICTS.map(option)),
-                        )
-                        .children((drafts > 0).then(|| {
-                            div()
-                                .flex()
-                                .flex_col()
-                                .child(
-                                    div()
-                                        .px(px(10.))
-                                        .pb(px(2.))
-                                        .text_size(px(11.))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(theme::muted())
-                                        .child(
-                                            format!(
-                                                "{} go out with it",
-                                                plural(drafts, "pending comment")
-                                            )
-                                            .to_uppercase(),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .id("submit-drafts")
-                                        .max_h(px(160.))
-                                        .overflow_y_scroll()
-                                        .children(pending),
-                                )
-                        }))
-                        .children(s.error.clone().map(|e| {
-                            div()
-                                .px_3()
-                                .py_2()
-                                .rounded(px(ROW_RADIUS))
-                                .border_1()
-                                .border_color(theme::removed())
-                                .text_size(px(12.))
-                                .text_color(theme::removed())
-                                .child(e)
-                        }))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_3()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .flex()
-                                        .items_center()
-                                        .gap_1()
-                                        .text_size(px(11.))
-                                        .text_color(theme::faint())
-                                        .child(keys::caps("⇥", On::Plain))
-                                        .child("switches"),
-                                )
-                                .child(
-                                    div()
-                                        .id("submit-cancel")
-                                        .px_2()
-                                        .h(px(28.))
-                                        .flex()
-                                        .items_center()
-                                        .rounded(px(ROW_RADIUS))
-                                        .cursor_pointer()
-                                        .hover(|s| s.bg(theme::hover()))
-                                        .child("Cancel")
-                                        .tooltip(|_, cx| cx.new(|_| super::Tip("esc")).into())
-                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                            this.close_submit(cx)
-                                        })),
-                                )
-                                .child(
-                                    div()
-                                        .id("submit-go")
-                                        .h(px(28.))
-                                        .px(px(10.))
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(8.))
-                                        .rounded(px(ROW_RADIUS))
-                                        .bg(match s.verdict {
-                                            Verdict::Approve => theme::added(),
-                                            Verdict::RequestChanges => theme::removed(),
-                                            Verdict::Comment => theme::warning(),
-                                        })
-                                        .text_color(theme::base())
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .cursor_pointer()
-                                        .when(s.posting, |s| s.opacity(0.6))
-                                        .hover(|s| s.opacity(0.85))
-                                        .child(go)
-                                        .child(keys::caps("⌘↵", On::Filled))
-                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                            this.run_submit(cx)
-                                        })),
-                                ),
-                        ),
-                ),
-        )
+                            }),
+                    )
+                    .children(pending),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .children(VERDICTS.map(option)),
+            )
+            .child(
+                div()
+                    .px_2()
+                    .py(px(5.))
+                    .min_h(px(64.))
+                    .flex()
+                    .items_start()
+                    .rounded(px(ROW_RADIUS))
+                    .border_2()
+                    .border_color(theme::focus())
+                    .bg(theme::base())
+                    .cursor_text()
+                    .child(field),
+            )
+            .children((agent_drafts > 0).then(|| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .text_size(px(11.))
+                    .text_color(theme::muted())
+                    .child(icons::icon("bot").size(px(14.)).text_color(theme::agent()))
+                    .child(format!(
+                        "Your {} not part of the review — they go to your agent, not to {}.",
+                        if agent_drafts == 1 {
+                            "agent draft is".to_owned()
+                        } else {
+                            format!("{agent_drafts} agent drafts are")
+                        },
+                        if super::words::github() {
+                            "GitHub"
+                        } else {
+                            "GitLab"
+                        },
+                    ))
+            }))
+            .children(s.error.clone().map(|e| {
+                div()
+                    .px_3()
+                    .py_2()
+                    .rounded(px(ROW_RADIUS))
+                    .border_1()
+                    .border_color(theme::removed())
+                    .text_size(px(12.))
+                    .text_color(theme::removed())
+                    .child(e)
+            }));
+        let foot = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_size(px(11.))
+                    .text_color(theme::faint())
+                    .child(keys::caps("⇥", On::Plain))
+                    .child("verdict"),
+            )
+            .child(
+                div()
+                    .id("submit-cancel")
+                    .px_2()
+                    .h(px(28.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(ROW_RADIUS))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::hover()))
+                    .child("Cancel")
+                    .tooltip(|_, cx| cx.new(|_| super::Tip("esc")).into())
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_submit(cx))),
+            )
+            .child(
+                div()
+                    .id("submit-go")
+                    .h(px(28.))
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .rounded(px(ROW_RADIUS))
+                    .bg(match s.verdict {
+                        Verdict::Approve => theme::added(),
+                        Verdict::RequestChanges => theme::removed(),
+                        Verdict::Comment => theme::warning(),
+                    })
+                    .text_color(theme::base())
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .cursor_pointer()
+                    .when(s.posting, |s| s.opacity(0.6))
+                    .hover(|s| s.opacity(0.85))
+                    .child(go)
+                    .child(keys::caps("⌘↵", On::Filled))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.run_submit(cx))),
+            );
+        Some(ToolView {
+            title: "Submit review".into(),
+            count: None,
+            actions: Vec::new(),
+            body: body.into_any_element(),
+            foot: Some(foot.into_any_element()),
+        })
     }
 }

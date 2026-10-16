@@ -91,7 +91,7 @@ pub fn set_fetch_enabled(root: &Path, on: bool) {
 }
 
 /// Pane sizes in logical pixels.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
     /// Width of the branches/versions/commits column.
     pub sidebar: f32,
@@ -102,9 +102,12 @@ pub struct Layout {
     /// The branches/versions/commits column and the files column are shown (⌘1, ⌘2).
     pub show_sidebar: bool,
     pub show_files: bool,
-    /// The Versions island is folded to its label; the comments drawer is open.
+    /// The Versions island is folded to its label.
     pub fold_versions: bool,
-    pub comments_open: bool,
+    /// The tool window open on the right (`discussions`, `agents`, `notifications`), empty for none.
+    pub tool: String,
+    /// Its width.
+    pub tool_width: f32,
 }
 
 impl Default for Layout {
@@ -116,7 +119,8 @@ impl Default for Layout {
             show_sidebar: true,
             show_files: true,
             fold_versions: false,
-            comments_open: false,
+            tool: String::new(),
+            tool_width: 320.,
         }
     }
 }
@@ -137,7 +141,9 @@ impl Layout {
                 "show_sidebar" => layout.show_sidebar = value != "false",
                 "show_files" => layout.show_files = value != "false",
                 "fold_versions" => layout.fold_versions = value == "true",
-                "comments_open" => layout.comments_open = value == "true",
+                "tool" => layout.tool = value.to_owned(),
+                // Before the tool windows: the comments drawer, now Discussions.
+                "comments_open" if value == "true" => layout.tool = "discussions".to_owned(),
                 _ => {}
             }
             let Ok(value) = value.parse::<f32>() else {
@@ -147,6 +153,7 @@ impl Layout {
                 "sidebar" => layout.sidebar = value,
                 "files" => layout.files = value,
                 "branches" => layout.branches = value,
+                "tool_width" => layout.tool_width = value,
                 _ => {}
             }
         }
@@ -162,7 +169,8 @@ impl std::fmt::Display for Layout {
         writeln!(f, "show_sidebar={}", self.show_sidebar)?;
         writeln!(f, "show_files={}", self.show_files)?;
         writeln!(f, "fold_versions={}", self.fold_versions)?;
-        writeln!(f, "comments_open={}", self.comments_open)
+        writeln!(f, "tool={}", self.tool)?;
+        writeln!(f, "tool_width={}", self.tool_width)
     }
 }
 
@@ -545,9 +553,11 @@ mod tests {
             show_sidebar: false,
             show_files: true,
             fold_versions: true,
-            comments_open: false,
+            tool: "agents".into(),
+            tool_width: 300.,
         };
         assert_eq!(Layout::parse(&layout.to_string()), layout);
+        assert_eq!(Layout::parse("comments_open=true\n").tool, "discussions");
         assert_eq!(
             Layout::parse("files=abc\nnope\nwidth=3\n"),
             Layout::default()

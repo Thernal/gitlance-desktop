@@ -36,6 +36,7 @@ mod stack;
 mod submit;
 mod theme;
 mod toast;
+mod tools;
 mod watch;
 mod words;
 mod working;
@@ -621,6 +622,13 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.open_agent_pick(cx);
                             continue;
                         }
+                        // A tool window on the right, without saving it as the open one.
+                        tool if tool.starts_with("tool-") => {
+                            if let Some(t) = tools::Tool::parse(&tool[5..]) {
+                                this.set_tool(Some(t), cx);
+                            }
+                            continue;
+                        }
                         "keyboard" => {
                             this.open_settings(cx);
                             this.settings_section = settings::Section::Keyboard;
@@ -828,6 +836,8 @@ struct Diff {
 enum Split {
     Sidebar,
     Files,
+    /// The tool window's left edge: dragging left widens it.
+    Tool,
 }
 
 impl Split {
@@ -839,6 +849,7 @@ impl Split {
         match self {
             Split::Sidebar => (220., 720.),
             Split::Files => (160., 640.),
+            Split::Tool => (260., 640.),
         }
     }
 }
@@ -904,6 +915,8 @@ pub struct Workspace {
     agent_pick: Option<agent::AgentPick>,
     /// When the agents' answers were last read (`agent.rs`).
     answers_stamp: Option<std::time::SystemTime>,
+    /// The chats of this repository, for the Agents window (read while it is open).
+    agent_chats: Vec<crate::agents::Chat>,
     /// Settings → Agents: what connecting said, and whether it runs.
     agent_setup: Option<String>,
     agent_setup_busy: bool,
@@ -1090,6 +1103,7 @@ impl Workspace {
             open_ask: None,
             agent_pick: None,
             answers_stamp: None,
+            agent_chats: Vec::new(),
             agent_setup: None,
             agent_setup_busy: false,
             notices: Default::default(),
@@ -1957,7 +1971,13 @@ impl Workspace {
 
     /// A window under 1 100 px has no room for the files column: it opens over the diff instead.
     fn compact(&self) -> bool {
-        self.win_width < 1100.
+        // An open tool window takes its width from the diff's side of the window.
+        let tool = if self.tool_shown() {
+            self.layout.tool_width + GAP
+        } else {
+            0.
+        };
+        self.win_width - tool < 1100.
     }
 
     /// The files column is drawn: there is more than one file to list and room for the column.
@@ -2235,9 +2255,6 @@ impl Workspace {
     }
 
     fn palette_up(&mut self, _: &PaletteUp, _: &mut Window, cx: &mut Context<Self>) {
-        if self.notices.open {
-            return self.notices_step(false, cx);
-        }
         if self.ffind.is_some() {
             return self.ffind_step(false, cx);
         }
@@ -2245,9 +2262,6 @@ impl Workspace {
     }
 
     fn palette_down(&mut self, _: &PaletteDown, _: &mut Window, cx: &mut Context<Self>) {
-        if self.notices.open {
-            return self.notices_step(true, cx);
-        }
         if self.ffind.is_some() {
             return self.ffind_step(true, cx);
         }
@@ -2390,8 +2404,7 @@ impl Workspace {
                             ),
                         )
                     })
-                    .when(commits_tab, |s| s.child(self.render_pairs(diff, cx)))
-                    .children(self.render_comments_drawer(cx)),
+                    .when(commits_tab, |s| s.child(self.render_pairs(diff, cx))),
             )
             .into_any_element()
     }
@@ -2439,21 +2452,6 @@ impl Workspace {
                     ),
                 )
             }))
-            .child(
-                diff_view::group().child(
-                    chip(
-                        "comments-chip",
-                        match self.comments_total() {
-                            0 => "Comments".to_owned(),
-                            n => format!("Comments · {n}"),
-                        },
-                        self.layout.comments_open,
-                    )
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.set_comments_open(!this.layout.comments_open, cx)
-                    })),
-                ),
-            )
             .child(
                 diff_view::group().child(
                     chip("view", "View ▾", self.ctx_menu.is_some())

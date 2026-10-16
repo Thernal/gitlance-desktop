@@ -402,6 +402,8 @@ impl Workspace {
         if text.is_empty() {
             return row.children(active.then(caret)).child(
                 div()
+                    .min_w_0()
+                    .when(!look.wrap, |s| s.truncate())
                     .text_color(theme::faint())
                     .child(super::keys::text(placeholder).into_owned()),
             );

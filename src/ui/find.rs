@@ -245,9 +245,6 @@ impl Workspace {
         if self.palette.is_some() {
             return self.palette_key(event, window, cx);
         }
-        if self.notices.open {
-            return self.notices_key(event, cx);
-        }
         if self.open_ask.is_some() {
             return self.open_ask_key(event, cx);
         }
@@ -292,8 +289,8 @@ impl Workspace {
                 cx.notify();
             } else if self.note_sel.take().is_some() || self.sel.take().is_some() {
                 cx.notify();
-            } else if self.layout.comments_open {
-                self.set_comments_open(false, cx);
+            } else if self.tool().is_some() {
+                self.set_tool(None, cx);
             }
             return;
         }

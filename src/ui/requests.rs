@@ -4,7 +4,8 @@
 
 use super::px;
 use super::rows::Row;
-use super::{Header, Selection, Workspace, format, island, island_label, plural, row, theme};
+use super::tools::ToolView;
+use super::{Header, Selection, Workspace, format, island, plural, row, theme};
 use crate::git::{RefKind, Repo, Version};
 use crate::mr::{self, Draft, Mr, Pipeline, Thread};
 use gpui::{ClickEvent, Context, FontWeight, SharedString, Task, WeakEntity, div, prelude::*};
@@ -1121,15 +1122,9 @@ impl Workspace {
         )
     }
 
-    /// Every comment on the open diff, the request's in orange and the agent's in purple; a click
-    /// shows it in the diff.
-    pub(super) fn render_comments_drawer(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement + use<>> {
-        if !self.layout.comments_open {
-            return None;
-        }
+    /// The Discussions tool window: every comment on the open diff, the request's in orange and the
+    /// agent's in purple; a click shows it in the diff.
+    pub(super) fn discussions_tool(&self, cx: &mut Context<Self>) -> ToolView {
         let theirs: Vec<(usize, &Thread)> = if self.showing_request() {
             self.requests.threads.iter().enumerate().collect()
         } else {
@@ -1149,57 +1144,6 @@ impl Workspace {
             .filter(|&&n| n > 0)
             .count()
             > 1;
-        let heading = |text: String, keys: Option<&'static str>| {
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .px(px(14.))
-                .pt(px(10.))
-                .pb(px(4.))
-                .text_size(px(11.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme::muted())
-                .child(div().flex_1().child(text.to_uppercase()))
-                .children(keys.map(|k| super::keys::caps(k, super::keys::On::Plain)))
-        };
-        let item = |id: (&'static str, usize), tone, where_: String, body: String| {
-            div()
-                .id(id)
-                .mx(px(6.))
-                .px(px(8.))
-                .py(px(4.))
-                .rounded(px(super::ROW_RADIUS))
-                .cursor_pointer()
-                .hover(|s| s.bg(theme::hover()))
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(div().flex_none().size(px(6.)).rounded_full().bg(tone))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .font_family(theme::CODE_FONT)
-                                .text_size(px(11.))
-                                .text_color(theme::faint())
-                                .child(where_),
-                        ),
-                )
-                .child(
-                    div()
-                        .line_clamp(2)
-                        .pl(px(14.))
-                        .text_size(px(12.))
-                        .text_color(theme::muted())
-                        .child(body),
-                )
-        };
         let request_items = theirs.into_iter().map(|(ix, t)| {
             let target = t.path.clone().zip(t.new_line.or(t.old_line));
             let old = t.new_line.is_none();
@@ -1208,7 +1152,7 @@ impl Workspace {
                 None => "General".to_owned(),
             };
             let first = &t.notes[0];
-            item(
+            comment_item(
                 ("comment-mr", ix),
                 theme::warning(),
                 where_,
@@ -1227,7 +1171,7 @@ impl Workspace {
                 Some((p, n)) => format!("{}:{n} · pending", p.rsplit('/').next().unwrap_or(p)),
                 None => "pending".to_owned(),
             };
-            item(
+            comment_item(
                 ("comment-draft", ix),
                 theme::warning(),
                 where_,
@@ -1241,7 +1185,7 @@ impl Workspace {
         });
         let agent_items = self.comments.iter().map(|c| {
             let id = c.id;
-            item(
+            comment_item(
                 ("comment-agent", id as usize),
                 theme::agent(),
                 format!(
@@ -1252,25 +1196,6 @@ impl Workspace {
                 self.one_line(&c.body),
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.jump_to(id, cx)))
-        });
-        let drafts = self.agent_drafts().len();
-        let send = (drafts > 0).then(|| {
-            div()
-                .id("send-to-agent")
-                .px_2()
-                .h(px(24.))
-                .flex()
-                .items_center()
-                .gap_2()
-                .rounded(px(super::ROW_RADIUS))
-                .bg(theme::agent())
-                .text_color(theme::base())
-                .text_size(px(12.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .cursor_pointer()
-                .child(format!("Send to agent · {drafts}"))
-                .child(super::keys::caps("⇧⌘A", super::keys::On::Filled))
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_agent_pick(cx)))
         });
         let copy = (!self.comments.is_empty()).then(|| {
             div()
@@ -1313,93 +1238,48 @@ impl Workspace {
                 .child(format!("Submit review · {pending}"))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_submit(cx)))
         });
-        // Slides in over the right edge of the diff; the diff keeps its width underneath.
-        Some(
-            island()
-                .occlude()
-                .absolute()
-                .top(px(0.))
-                .bottom(px(0.))
-                .right(px(0.))
-                .w(px(380.))
-                .shadow_lg()
-                .border_2()
-                .border_color(theme::island_border())
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .child(island_label(format!("Comments · {total}")).flex_1())
-                        .child(
-                            div()
-                                .id("close-comments")
-                                .mr(px(8.))
-                                .mt(px(6.))
-                                .size(px(24.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(super::ROW_RADIUS))
-                                .text_color(theme::muted())
-                                .cursor_pointer()
-                                .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
-                                .tooltip(|_, cx| cx.new(|_| super::Tip("Close  esc")).into())
-                                .child("✕")
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.set_comments_open(false, cx)
-                                })),
-                        ),
-                )
-                .children((copy.is_some() || submit.is_some()).then(|| {
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_2()
-                        .px(px(12.))
-                        .pb(px(8.))
-                        .children(send)
-                        .children(copy)
-                        .children(submit)
+        ToolView {
+            title: "Discussions".into(),
+            count: (total > 0).then(|| total.to_string()),
+            actions: Vec::new(),
+            body: div()
+                .id("comments-list")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .py(px(6.))
+                .children((pending > 0 && (grouped || pending > 1)).then(|| {
+                    group_heading(format!("Pending · {pending}"), Some("⌥N"))
                 }))
-                .child(
+                .children(draft_items)
+                .children(
+                    (grouped && discussions > 0)
+                        .then(|| group_heading(format!("Discussions · {discussions}"), None)),
+                )
+                .children(request_items)
+                .children(
+                    (grouped && agents > 0)
+                        .then(|| group_heading(format!("For your agent · {agents}"), None)),
+                )
+                .children(agent_items)
+                .children((total == 0).then(|| {
                     div()
-                        .id("comments-list")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .pb(px(6.))
-                        .children((pending > 0 && (grouped || pending > 1)).then(|| {
-                            heading(format!("Pending · {pending}"), Some("⌥N"))
-                        }))
-                        .children(draft_items)
-                        .children(
-                            (grouped && discussions > 0)
-                                .then(|| heading(format!("Discussions · {discussions}"), None)),
-                        )
-                        .children(request_items)
-                        .children(
-                            (grouped && agents > 0)
-                                .then(|| heading(format!("For your agent · {agents}"), None)),
-                        )
-                        .children(agent_items)
-                        .children((total == 0).then(|| {
-                            div()
-                                .px(px(14.))
-                                .py(px(10.))
-                                .text_size(px(12.))
-                                .text_color(theme::muted())
-                                .child("No comments yet. Press c to comment on a line, or hover a line and press +.")
-                        })),
-                ),
-        )
-    }
-
-    /// Opens or closes the comments drawer; the choice is kept.
-    pub(super) fn set_comments_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.layout.comments_open != open {
-            self.layout.comments_open = open;
-            self.layout.save();
-            cx.notify();
+                        .px(px(14.))
+                        .py(px(10.))
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child("No comments yet. Press c to comment on a line, or hover a line and press +.")
+                }))
+                .into_any_element(),
+            foot: (copy.is_some() || submit.is_some()).then(|| {
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(copy)
+                    .children(submit)
+                    .into_any_element()
+            }),
         }
     }
 
@@ -1955,6 +1835,67 @@ fn next_unreviewed(reviewed: &[bool], at: Option<usize>) -> Option<usize> {
     (0..n)
         .map(|step| (start + step) % n)
         .find(|&ix| Some(ix) != at && !reviewed[ix])
+}
+
+/// A group's heading in a tool window's list; `keys` says how to walk it.
+pub(super) fn group_heading(text: String, keys: Option<&'static str>) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px(px(14.))
+        .pt(px(10.))
+        .pb(px(4.))
+        .text_size(px(11.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(theme::muted())
+        .child(div().flex_1().child(text.to_uppercase()))
+        .children(keys.map(|k| super::keys::caps(k, super::keys::On::Plain)))
+}
+
+/// A comment as one entry of a tool window's list: a dot in its colour, where it is, two lines of it.
+pub(super) fn comment_item(
+    id: (&'static str, usize),
+    tone: gpui::Rgba,
+    where_: String,
+    body: String,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .mx(px(6.))
+        .px(px(8.))
+        .py(px(4.))
+        .overflow_hidden()
+        .rounded(px(super::ROW_RADIUS))
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::hover()))
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().flex_none().size(px(6.)).rounded_full().bg(tone))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(theme::CODE_FONT)
+                        .text_size(px(11.))
+                        .text_color(theme::faint())
+                        .child(where_),
+                ),
+        )
+        .child(
+            div()
+                .line_clamp(2)
+                .pl(px(14.))
+                .text_size(px(12.))
+                .text_color(theme::muted())
+                .child(body),
+        )
 }
 
 #[cfg(test)]

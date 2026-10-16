@@ -47,11 +47,11 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("a", "approve the merge request · take the approval back"),
             (
                 "⌘⇧N",
-                "notifications: mentions, review requests, replies (j k ↵ e)",
+                "the Notifications window: mentions, review requests, replies (j k ↵ e)",
             ),
             ("r  x  o", "reply to, resolve, fold a discussion"),
             ("e", "edit your comment in the discussion"),
-            ("⌘⇧R", "show or hide the comments drawer"),
+            ("⌘⇧R", "show or hide the Discussions window · esc hides it"),
             ("⌥M", "comments as markdown / raw text"),
             ("⇧⌘A", "send the comments for your agent to its chat"),
             ("⌘B ⌘I ⌘⇧X ⌘⇧E ⌘⇧K", "bold, italic, strike, code, link"),

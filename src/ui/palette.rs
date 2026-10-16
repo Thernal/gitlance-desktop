@@ -86,7 +86,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
         Cmd::SendToAgent,
     ),
     ("Keyboard shortcuts", "?", Cmd::Shortcuts),
-    ("Show or hide the comments", "⌘⇧R", Cmd::Comments),
+    ("Show or hide the Discussions window", "⌘⇧R", Cmd::Comments),
     ("Find in the diff", "⌘F", Cmd::FindInDiff),
     ("Search in all files of the diff", "⌘⌥F", Cmd::FindInFiles),
     ("Annotate — who wrote each line", "⌥⌘B", Cmd::Annotate),
