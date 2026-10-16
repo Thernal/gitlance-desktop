@@ -190,6 +190,35 @@ impl Repo {
         Ok(Self { inner })
     }
 
+    /// The text of `path` in commit `rev`, read from the objects (no checkout); None when it is not
+    /// there or not text. The new request's template and CODEOWNERS come from here.
+    pub fn file_at(&self, rev: Oid, path: &str) -> Option<String> {
+        let tree = self.inner.find_commit(rev).ok()?.tree().ok()?;
+        let entry = tree.get_path(Path::new(path)).ok()?;
+        let blob = self.inner.find_blob(entry.id()).ok()?;
+        std::str::from_utf8(blob.content()).ok().map(str::to_owned)
+    }
+
+    /// The names of the files directly in folder `dir` of commit `rev`.
+    pub fn files_at(&self, rev: Oid, dir: &str) -> Vec<String> {
+        let names = || -> Option<Vec<String>> {
+            let tree = self.inner.find_commit(rev).ok()?.tree().ok()?;
+            let sub = if dir.is_empty() {
+                tree
+            } else {
+                let entry = tree.get_path(Path::new(dir)).ok()?;
+                self.inner.find_tree(entry.id()).ok()?
+            };
+            Some(
+                sub.iter()
+                    .filter(|e| e.kind() == Some(git2::ObjectType::Blob))
+                    .filter_map(|e| e.name().map(str::to_owned).ok())
+                    .collect(),
+            )
+        };
+        names().unwrap_or_default()
+    }
+
     /// `user.name` from git's config: whose avatar the composer shows.
     pub fn user_name(&self) -> Option<String> {
         self.inner.config().ok()?.get_string("user.name").ok()

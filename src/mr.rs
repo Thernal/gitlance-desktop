@@ -730,17 +730,33 @@ pub(crate) fn record(line: String) -> Result<bool> {
 }
 
 /// Opens a merge request from `source` into `target`. The branch must already be on the remote.
+/// What a new request asks for besides its branches, title and description.
+#[derive(Clone, Debug, Default)]
+pub struct NewOptions {
+    pub draft: bool,
+    pub remove_source: bool,
+    pub squash: bool,
+    /// Usernames to ask for a review.
+    pub reviewers: Vec<String>,
+}
+
 pub fn create(
     remote: &WebRemote,
     source: &str,
     target: &str,
     title: &str,
     description: &str,
-    draft: bool,
-    remove_source: bool,
+    options: &NewOptions,
 ) -> Result<Mr> {
+    let NewOptions {
+        draft,
+        remove_source,
+        squash,
+        reviewers,
+    } = options;
+    let (draft, remove_source, squash) = (*draft, *remove_source, *squash);
     if remote.github {
-        return github::create(remote, source, target, title, description, draft);
+        return github::create(remote, source, target, title, description, draft, reviewers);
     }
     let title = if draft && !title.to_lowercase().starts_with("draft:") {
         format!("Draft: {title}")
@@ -748,7 +764,8 @@ pub fn create(
         title.to_owned()
     };
     if record(format!(
-        "create {source} {target} {draft} {remove_source} {title}"
+        "create {source} {target} {draft} {remove_source} {squash} r={} {title}",
+        reviewers.join(",")
     ))? {
         return Ok(Mr {
             iid: 999,
@@ -775,12 +792,31 @@ pub fn create(
             ("title", title),
             ("description", description.to_owned()),
             ("remove_source_branch", remove_source.to_string()),
-        ],
+            ("squash", squash.to_string()),
+        ]
+        .into_iter()
+        .chain(
+            user_ids(remote, reviewers)
+                .into_iter()
+                .map(|id| ("reviewer_ids[]", id)),
+        )
+        .collect::<Vec<_>>(),
     )?;
     parse_mrs(&Value::Array(vec![value]))
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("GitLab answered without a merge request"))
+}
+
+/// GitLab's ids of the users named, as the API wants reviewers; a name it does not know is left out.
+fn user_ids(remote: &WebRemote, names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter_map(|name| {
+            let users = get(remote, &format!("/users?username={name}")).ok()?;
+            users.get(0)?.get("id")?.as_u64().map(|id| id.to_string())
+        })
+        .collect()
 }
 
 /// Marks a discussion resolved or open again.

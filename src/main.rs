@@ -4,6 +4,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod agents;
+mod codeowners;
 mod editor;
 mod generated;
 mod git;

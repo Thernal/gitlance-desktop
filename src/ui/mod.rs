@@ -2431,6 +2431,16 @@ impl Workspace {
     // ---- resizing ------------------------------------------------------------------------
 
     fn render_diff(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // A new merge request is written in the diff's place; Changes shows the diff again.
+        if self.newreq.is_some() && !self.create_shows_changes() {
+            return island()
+                .flex_1()
+                .min_w_0()
+                .bg(theme::editor())
+                .children(self.render_create_switch(cx))
+                .children(self.render_create_form(cx))
+                .into_any_element();
+        }
         let Some(diff) = &self.diff else {
             let message = if self.diff_task.is_some() {
                 "Loading…"
@@ -3077,6 +3087,7 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.set_zone(zones::Zone::Diff, cx)),
             )
+            .children(self.render_create_switch(cx))
             .child(self.render_diff_toolbar(diff, cx))
             .children(file.map(|f| {
                 let path = match (&f.old_path, &f.new_path) {

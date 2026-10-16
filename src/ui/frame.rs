@@ -1107,6 +1107,9 @@ impl Render for Workspace {
                                             .flex_col()
                                             .child(if self.zen.is_some() {
                                                 self.render_zen_head(diff).into_any_element()
+                                            } else if let Some(head) = self.render_create_header(cx)
+                                            {
+                                                head
                                             } else if let Some(head) =
                                                 self.render_request_header(cx)
                                             {
@@ -1164,7 +1167,6 @@ impl Render for Workspace {
             .children(self.render_ctx_menu(window.viewport_size(), cx))
             .children(self.render_picker(cx))
             .children(self.render_find_files(cx))
-            .children(self.render_create(cx))
             .children(self.render_open_ask(cx))
             .children(self.render_agent_pick(cx))
             .children(self.render_shortcuts(cx))

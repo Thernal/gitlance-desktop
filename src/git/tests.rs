@@ -562,3 +562,20 @@ fn a_local_branch_behind_its_upstream_is_stale() {
             .is_none()
     );
 }
+
+#[test]
+fn a_file_is_read_from_a_commit_without_a_checkout() {
+    let mut f = Fixture::new();
+    let c = f.commit(
+        "refs/heads/main",
+        &[],
+        &[("CODEOWNERS", "* @lead\n"), ("a.txt", "x")],
+        "commit",
+    );
+    let repo = f.open();
+    assert_eq!(repo.file_at(c, "CODEOWNERS").as_deref(), Some("* @lead\n"));
+    assert_eq!(repo.file_at(c, "missing"), None);
+    let mut names = repo.files_at(c, "");
+    names.sort();
+    assert_eq!(names, ["CODEOWNERS", "a.txt"]);
+}

@@ -897,8 +897,12 @@ pub fn create(
     title: &str,
     description: &str,
     draft: bool,
+    reviewers: &[String],
 ) -> Result<Mr> {
-    if crate::mr::record(format!("create {source} {target} {draft} {title}"))? {
+    if crate::mr::record(format!(
+        "create {source} {target} {draft} r={} {title}",
+        reviewers.join(",")
+    ))? {
         return Ok(Mr {
             iid: 999,
             title: title.to_owned(),
@@ -923,7 +927,18 @@ pub fn create(
             &json!({ "title": title, "head": source, "base": target, "body": description, "draft": draft }),
         ),
     )?;
-    parse_pull(&value).ok_or_else(|| anyhow!("GitHub answered without a pull request"))
+    let pull =
+        parse_pull(&value).ok_or_else(|| anyhow!("GitHub answered without a pull request"))?;
+    if !reviewers.is_empty() {
+        // The request exists either way; a reviewer GitHub refuses is not worth failing it for.
+        let _ = rest(
+            remote,
+            "POST",
+            &format!("pulls/{}/requested_reviewers", pull.iid),
+            Some(&json!({ "reviewers": reviewers })),
+        );
+    }
+    Ok(pull)
 }
 
 /// The user's unread notifications on pull requests of this repository, newest first.
