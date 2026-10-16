@@ -188,6 +188,20 @@ const ICONS: &[(&str, &str)] = &[
         lucide!(r#"<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>"#),
     ),
     (
+        "inbox",
+        lucide!(
+            r#"<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/>"#
+            r#"<path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>"#
+        ),
+    ),
+    (
+        "commit",
+        lucide!(
+            r#"<circle cx="12" cy="12" r="3"/>"#
+            r#"<line x1="3" x2="9" y1="12" y2="12"/><line x1="15" x2="21" y1="12" y2="12"/>"#
+        ),
+    ),
+    (
         "bot",
         lucide!(
             r#"<path d="M12 8V4H8"/>"#

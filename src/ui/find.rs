@@ -287,6 +287,9 @@ impl Workspace {
             } else if self.settings_open {
                 self.settings_open = false;
                 cx.notify();
+            } else if self.inbox {
+                self.inbox = false;
+                cx.notify();
             } else if self.note_sel.take().is_some() || self.sel.take().is_some() {
                 cx.notify();
             } else if self.tool().is_some() {

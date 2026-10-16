@@ -196,6 +196,10 @@ impl Workspace {
                 div()
                     .flex()
                     .gap(px(2.))
+                    .children(self.root.is_some().then(|| {
+                        nav_button("fold-places", "sidebar", "Fold the menu to icons", true)
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_places(cx)))
+                    }))
                     .child(
                         nav_button("go-back", "back", "Back  ⌘[", self.history.can_back())
                             .on_click(cx.listener(|this, _, _, cx| this.go_back(cx))),
@@ -386,91 +390,6 @@ impl Workspace {
                                     }))
                             }))
                     })),
-            )
-    }
-
-    /// The rail on the window's left edge: one button per hideable island (⌥⌘1, ⌥⌘2).
-    pub(super) fn render_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let button = |id: &'static str, icon: &'static str, on: bool, tip: &'static str| {
-            div()
-                .id(id)
-                .size(px(34.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(ROW_RADIUS + 2.))
-                .cursor_pointer()
-                .hover(|s| s.bg(theme::hover()))
-                .when(on, |s| s.bg(theme::hover()))
-                .tooltip(move |_, cx| cx.new(|_| Tip(tip)).into())
-                .child(icons::icon(icon).size(px(22.)).text_color(if on {
-                    theme::accent()
-                } else {
-                    theme::muted()
-                }))
-        };
-        div()
-            .w(px(42.))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(8.))
-            .pt(px(4.))
-            .child(
-                button(
-                    "rail-sidebar",
-                    "sidebar",
-                    self.layout.show_sidebar,
-                    "Side panel  ⌥⌘1",
-                )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_sidebar(&ToggleSidebar, window, cx)
-                })),
-            )
-            .child(
-                button(
-                    "rail-files",
-                    "files",
-                    self.layout.show_files,
-                    "Changes  ⌥⌘2",
-                )
-                .on_click(
-                    cx.listener(|this, _, window, cx| this.toggle_files(&ToggleFiles, window, cx)),
-                ),
-            )
-            .children(
-                (self.requests.available || self.requests.connectable).then(|| {
-                    let on =
-                        self.layout.show_sidebar && self.requests.side == requests::Side::Requests;
-                    let n = self.requests.list.len();
-                    div()
-                        .relative()
-                        .child(
-                            button("rail-requests", "pull-request", on, "Merge requests  ⌥⌘3")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.toggle_requests(&ToggleRequests, window, cx)
-                                })),
-                        )
-                        .children((n > 0 && self.requests.available).then(|| {
-                            div()
-                                .absolute()
-                                .top(px(-2.))
-                                .right(px(-2.))
-                                .min_w(px(16.))
-                                .h(px(16.))
-                                .px(px(4.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded_full()
-                                .bg(theme::accent())
-                                .text_color(theme::editor())
-                                .text_size(px(10.))
-                                .font_weight(FontWeight::BOLD)
-                                .child(n.to_string())
-                        }))
-                }),
             )
     }
 
@@ -983,7 +902,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))
             .on_action(cx.listener(|this, _: &EditComment, _, cx| {
                 // In the Notifications window, e is done with the selected one.
-                if this.zone == zones::Zone::Tool && this.tool() == Some(tools::Tool::Notifications)
+                if (this.zone == zones::Zone::Tool
+                    && this.tool() == Some(tools::Tool::Notifications))
+                    || (this.inbox && this.zone != zones::Zone::Tool)
                 {
                     this.dismiss_notice(this.notices.at, cx)
                 } else {
@@ -1153,7 +1074,7 @@ impl Render for Workspace {
                     // The stripe sits on the window's right edge; zen has none.
                     .pr(px(if self.zen.is_some() { GAP } else { 0. }))
                     .pb(px(GAP))
-                    .children(self.zen.is_none().then(|| self.render_rail(cx)))
+                    .children(self.render_places(cx))
                     // The header row over the panes, then the panes: side panel, diff, tool window.
                     .child(
                         div()
@@ -1161,17 +1082,36 @@ impl Render for Workspace {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .children(self.diff.as_ref().filter(|_| !self.choosing_request()).map(
-                                |diff| {
-                                    div()
-                                        .flex_none()
-                                        .flex()
-                                        .flex_col()
-                                        .child(self.render_header(diff, cx))
-                                        .child(div().h(px(GAP)))
-                                },
-                            ))
-                            .child(
+                            .children(self.inbox.then(|| {
+                                div()
+                                    .flex_none()
+                                    .flex()
+                                    .flex_col()
+                                    .child(self.render_inbox_header(cx))
+                                    .child(div().h(px(GAP)))
+                            }))
+                            .children(
+                                self.diff
+                                    .as_ref()
+                                    .filter(|_| !self.choosing_request() && !self.inbox)
+                                    .map(|diff| {
+                                        div()
+                                            .flex_none()
+                                            .flex()
+                                            .flex_col()
+                                            .child(self.render_header(diff, cx))
+                                            .child(div().h(px(GAP)))
+                                    }),
+                            )
+                            .children(self.inbox.then(|| {
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .flex()
+                                    .child(self.render_inbox(cx))
+                                    .children(self.render_tool(cx))
+                            }))
+                            .children((!self.inbox).then(|| {
                                 div()
                                     .flex_1()
                                     .min_h_0()
@@ -1196,8 +1136,8 @@ impl Render for Workspace {
                                             })
                                             .children(self.render_zen_keys()),
                                     )
-                                    .children(self.render_tool(cx)),
-                            ),
+                                    .children(self.render_tool(cx))
+                            })),
                     )
                     .children(self.stripe_gap())
                     .children(self.render_stripe(cx))

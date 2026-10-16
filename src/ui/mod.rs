@@ -24,6 +24,7 @@ mod menu;
 mod notifications;
 mod opening;
 mod palette;
+mod places;
 mod recents;
 mod requests;
 mod reviewed;
@@ -632,6 +633,18 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.layout.fold_commits = true;
                             continue;
                         }
+                        "fold-places" => {
+                            this.layout.fold_places = true;
+                            continue;
+                        }
+                        "inbox" => {
+                            this.go_place(places::Place::Inbox, cx);
+                            continue;
+                        }
+                        "review-requests" => {
+                            this.go_place(places::Place::ReviewRequests, cx);
+                            continue;
+                        }
                         "fold-changes" => {
                             this.layout.show_files = false;
                             continue;
@@ -929,6 +942,11 @@ pub struct Workspace {
     answers_stamp: Option<std::time::SystemTime>,
     /// The chats of this repository, for the Agents window (read while it is open).
     agent_chats: Vec<crate::agents::Chat>,
+    /// The Inbox place is shown, and which of its notifications it lists.
+    inbox: bool,
+    inbox_filter: places::InboxFilter,
+    /// The menu of places opened while a merge request is reviewed (it is folded there).
+    places_peek: bool,
     /// Settings → Agents: what connecting said, and whether it runs.
     agent_setup: Option<String>,
     agent_setup_busy: bool,
@@ -1115,6 +1133,9 @@ impl Workspace {
             agent_pick: None,
             answers_stamp: None,
             agent_chats: Vec::new(),
+            inbox: false,
+            inbox_filter: Default::default(),
+            places_peek: false,
             agent_setup: None,
             agent_setup_busy: false,
             notices: Default::default(),
@@ -2144,6 +2165,8 @@ impl Workspace {
         if self.picker_open && self.requests.side == requests::Side::Requests {
             return self.close_picker(cx);
         }
+        // ⌥⌘3 lists every request; the menu's places narrow it.
+        self.requests.scope = requests::Scope::All;
         self.open_picker(true, cx);
     }
 

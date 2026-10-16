@@ -17,8 +17,20 @@ pub enum Side {
     Requests,
 }
 
+/// Which requests the list shows: the menu of places picks one (#49).
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum Scope {
+    #[default]
+    All,
+    /// The token's user is asked to review.
+    ReviewMe,
+    /// The token's user wrote it.
+    Mine,
+}
+
 #[derive(Default)]
 pub struct Requests {
+    pub scope: Scope,
     pub available: bool,
     /// A GitLab project without a token: the rail offers to connect instead of listing.
     pub connectable: bool,
@@ -69,17 +81,29 @@ impl Workspace {
             return;
         }
         self.requests.loading = true;
+        // Who the token is, once: the menu of places counts the requests asking for them.
+        let known = self.requests.login.is_some();
         self.requests.task = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { mr::list(&remote) })
+                .spawn(async move {
+                    let login = if known {
+                        None
+                    } else {
+                        mr::username(&remote).ok()
+                    };
+                    mr::list(&remote).map(|list| (list, login))
+                })
                 .await;
             this.update(cx, |this, cx| {
                 this.requests.loading = false;
                 match result {
-                    Ok(list) => {
+                    Ok((list, login)) => {
                         this.requests.list = list;
                         this.requests.error = None;
+                        if login.is_some() {
+                            this.requests.login = login;
+                        }
                     }
                     Err(e) => this.requests.error = Some(format!("{e:#}")),
                 }
@@ -1301,6 +1325,7 @@ impl Workspace {
             .requests
             .list
             .iter()
+            .filter(|m| self.in_scope(m, self.requests.scope))
             .filter(|m| {
                 let hay = format!(
                     "{} {} {} {}",
@@ -1319,6 +1344,16 @@ impl Workspace {
             shown.sort_by_key(|m| std::cmp::Reverse(m.created));
         }
         shown
+    }
+
+    /// Whether `m` is one the scope lists, by the token's user.
+    pub(super) fn in_scope(&self, m: &Mr, scope: Scope) -> bool {
+        let me = self.requests.login.as_deref().unwrap_or_default();
+        match scope {
+            Scope::All => true,
+            Scope::ReviewMe => !me.is_empty() && m.reviewers.iter().any(|r| r == me),
+            Scope::Mine => !me.is_empty() && m.author_login == me,
+        }
     }
 
     /// Newest first, or most recently updated first.
@@ -1342,7 +1377,18 @@ impl Workspace {
             let label = if self.requests.loading && n == 0 {
                 super::words::say("Merge requests …").into_owned()
             } else {
-                super::words::say(&format!("Merge requests · {n}")).into_owned()
+                let name = match self.requests.scope {
+                    Scope::All => "Merge requests",
+                    Scope::ReviewMe => "Review requests",
+                    Scope::Mine => "My requests",
+                };
+                let n = self
+                    .requests
+                    .list
+                    .iter()
+                    .filter(|m| self.in_scope(m, self.requests.scope))
+                    .count();
+                super::words::say(&format!("{name} · {n}")).into_owned()
             };
             return super::island_label(format!(
                 "{label}{}",

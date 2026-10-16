@@ -87,6 +87,10 @@ impl Workspace {
 
     /// ↑ and ↓ in the zone that has the keyboard.
     pub(super) fn zone_vertical(&mut self, down: bool, cx: &mut Context<Self>) {
+        // The Inbox has the window: j k walk its list.
+        if self.inbox && self.zone != Zone::Tool {
+            return self.inbox_step(down, cx);
+        }
         match self.zone {
             Zone::Commits => self.step_commit_row(down, cx),
             Zone::Branches => self.step_branch(down, cx),
@@ -141,6 +145,10 @@ impl Workspace {
 
     /// ↵: one step in.
     pub(super) fn activate(&mut self, cx: &mut Context<Self>) {
+        if self.inbox && self.zone != Zone::Tool {
+            self.inbox = false;
+            return self.open_notice(self.notices.at, cx);
+        }
         match self.zone {
             Zone::Tool => {
                 if self.tool() == Some(super::tools::Tool::Notifications) {

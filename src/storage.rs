@@ -103,6 +103,8 @@ pub struct Layout {
     /// The side panel's Versions and Commits sections are folded to their headers.
     pub fold_versions: bool,
     pub fold_commits: bool,
+    /// The menu of places is folded to icons.
+    pub fold_places: bool,
     /// The tool window open on the right (`discussions`, `agents`, `notifications`), empty for none.
     pub tool: String,
     /// Its width.
@@ -118,6 +120,7 @@ impl Default for Layout {
             show_files: true,
             fold_versions: false,
             fold_commits: false,
+            fold_places: false,
             tool: String::new(),
             tool_width: 320.,
         }
@@ -141,6 +144,7 @@ impl Layout {
                 "show_files" => layout.show_files = value != "false",
                 "fold_versions" => layout.fold_versions = value == "true",
                 "fold_commits" => layout.fold_commits = value == "true",
+                "fold_places" => layout.fold_places = value == "true",
                 "tool" => layout.tool = value.to_owned(),
                 // Before the tool windows: the comments drawer, now Discussions.
                 "comments_open" if value == "true" => layout.tool = "discussions".to_owned(),
@@ -168,6 +172,7 @@ impl std::fmt::Display for Layout {
         writeln!(f, "show_files={}", self.show_files)?;
         writeln!(f, "fold_versions={}", self.fold_versions)?;
         writeln!(f, "fold_commits={}", self.fold_commits)?;
+        writeln!(f, "fold_places={}", self.fold_places)?;
         writeln!(f, "tool={}", self.tool)?;
         writeln!(f, "tool_width={}", self.tool_width)
     }
@@ -552,6 +557,7 @@ mod tests {
             show_files: true,
             fold_versions: true,
             fold_commits: true,
+            fold_places: true,
             tool: "agents".into(),
             tool_width: 300.,
         };

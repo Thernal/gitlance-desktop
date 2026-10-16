@@ -98,6 +98,13 @@ pub struct Notices {
     scroll: ScrollHandle,
 }
 
+impl Notice {
+    /// "mentioned you", "asked for your review", …
+    pub fn kind_verb(&self) -> &'static str {
+        self.kind.verb()
+    }
+}
+
 impl Notices {
     pub fn unread(&self) -> usize {
         self.list
@@ -405,6 +412,14 @@ impl Workspace {
     }
 
     /// Opens notice `ix`: its request, at its comment.
+    /// Notice `ix` is not read yet.
+    pub(super) fn notice_unread(&self, ix: usize) -> bool {
+        self.notices
+            .list
+            .get(ix)
+            .is_some_and(|n| !self.notices.read.contains(&n.key))
+    }
+
     pub(super) fn open_notice(&mut self, ix: usize, cx: &mut Context<Self>) {
         let Some(n) = self.notices.list.get(ix).cloned() else {
             return;
@@ -457,7 +472,7 @@ impl Workspace {
     }
 
     /// Everything listed counts as read.
-    fn read_all_notices(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn read_all_notices(&mut self, cx: &mut Context<Self>) {
         let keys: Vec<String> = self.notices.list.iter().map(|n| n.key.clone()).collect();
         self.notices.read.extend(keys);
         self.notices.save_read();
