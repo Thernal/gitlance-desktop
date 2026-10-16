@@ -2351,8 +2351,6 @@ impl Workspace {
             .min_w_0()
             .flex()
             .flex_col()
-            .child(self.render_header(diff, cx))
-            .child(div().h(px(GAP)).flex_none())
             .child(
                 div()
                     .relative()
@@ -2365,6 +2363,7 @@ impl Workspace {
             .into_any_element()
     }
 
+    /// The header row over the panes: the screen's identity.
     fn render_header(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
         island()
             .flex_none()
@@ -2374,7 +2373,6 @@ impl Workspace {
             .px_4()
             .py(px(8.))
             .child(self.render_summary(diff, cx))
-            .child(self.render_toolbar(cx))
     }
 
     /// The diff options, as chips; the same toggles live in the View menu.
@@ -2433,6 +2431,109 @@ impl Workspace {
                         ),
                 ),
             )
+    }
+
+    /// The left of the diff's toolbar: which range is shown, as the screen offers it.
+    fn render_what(&self, diff: &Diff, cx: &mut Context<Self>) -> gpui::AnyElement {
+        match &diff.header {
+            Header::Commit(c) => div()
+                .text_size(px(12.))
+                .text_color(theme::muted())
+                .child(format!("{} · against its parent", format::short(c.id)))
+                .into_any_element(),
+            Header::WorkingTree { only_unstaged } => {
+                let only = *only_unstaged;
+                diff_view::group()
+                    .child(chip("wt-all", "All changes", !only).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.set_only_unstaged(false, cx)
+                        }),
+                    ))
+                    .child(chip("wt-unstaged", "Not staged only", only).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.set_only_unstaged(true, cx)),
+                    ))
+                    .into_any_element()
+            }
+            Header::Compare {
+                base,
+                head,
+                since_merge_base,
+                request,
+                ..
+            } => {
+                let (b, h, since, req) = (base.clone(), head.clone(), *since_merge_base, *request);
+                let (b2, h2) = (b.clone(), h.clone());
+                let (b3, h3) = (b.clone(), h.clone());
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        diff_view::group()
+                            .child(chip("cmp-since", "Since merge base", since).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.run_compare(b.clone(), h.clone(), true, req, cx)
+                                }),
+                            ))
+                            .child(chip("cmp-direct", "Direct", !since).on_click(cx.listener(
+                                move |this, _: &ClickEvent, _, cx| {
+                                    this.run_compare(b2.clone(), h2.clone(), false, req, cx)
+                                },
+                            ))),
+                    )
+                    .child(chip("cmp-swap", "⇄ Swap", false).on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.run_compare(h3.clone(), b3.clone(), since, None, cx)
+                        },
+                    )))
+                    .into_any_element()
+            }
+            Header::Interdiff { from, to, .. } => {
+                let (from, to) = (*from, *to);
+                chip("back-to-commits", "← Commits", false)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.select_versions(from, to, cx)
+                    }))
+                    .into_any_element()
+            }
+            Header::Versions { .. } => diff_view::group()
+                .child(
+                    chip("tab-files", "Files", self.version_tab == VersionTab::Files).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.version_tab = VersionTab::Files;
+                            cx.notify();
+                        }),
+                    ),
+                )
+                .child(
+                    chip(
+                        "tab-commits",
+                        format!("Commits · {}", diff.pairs.len()),
+                        self.version_tab == VersionTab::Commits,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.version_tab = VersionTab::Commits;
+                        cx.notify();
+                    })),
+                )
+                .into_any_element(),
+        }
+    }
+
+    /// The diff's toolbar, read left to right: what is shown, then how it is drawn.
+    fn render_diff_toolbar(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .h(px(40.))
+            .px(px(12.))
+            .border_b_1()
+            .border_color(theme::island_border())
+            .child(self.render_what(diff, cx))
+            .child(div().flex_1())
+            .child(self.render_toolbar(cx))
     }
 
     fn render_summary(&self, diff: &Diff, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2559,20 +2660,11 @@ impl Workspace {
                                 div()
                                     .text_size(px(15.))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Working tree against HEAD"),
-                            )
-                            .child(
-                                diff_view::group()
-                                    .child(chip("wt-all", "All changes", !only).on_click(
-                                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                                            this.set_only_unstaged(false, cx)
-                                        }),
-                                    ))
-                                    .child(chip("wt-unstaged", "Not staged only", only).on_click(
-                                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                                            this.set_only_unstaged(true, cx)
-                                        }),
-                                    )),
+                                    .child(if only {
+                                        "Working tree against the index"
+                                    } else {
+                                        "Working tree against HEAD"
+                                    }),
                             ),
                     )
                     .child(
@@ -2594,10 +2686,8 @@ impl Workspace {
                 request,
                 stale,
             } => {
-                let (b, h, since, req) = (base.clone(), head.clone(), *since_merge_base, *request);
-                let (b2, h2) = (b.clone(), h.clone());
-                let (b3, h3) = (b.clone(), h.clone());
-                let (h4, b5, h5) = (h.clone(), b.clone(), h.clone());
+                let (since, req) = (*since_merge_base, *request);
+                let (h4, b5, h5) = (head.clone(), base.clone(), head.clone());
                 // Why the result looks wrong, with the one click that fixes it.
                 let warning = |text: String, button: gpui::Stateful<gpui::Div>| {
                     div()
@@ -2662,25 +2752,7 @@ impl Workspace {
                                     .text_size(px(15.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(format!("{} … {}", base.0, head.0)),
-                            )
-                            .child(
-                                diff_view::group()
-                                    .child(chip("cmp-since", "Since merge base", since).on_click(
-                                        cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                            this.run_compare(b.clone(), h.clone(), true, req, cx)
-                                        }),
-                                    ))
-                                    .child(chip("cmp-direct", "Direct", !since).on_click(
-                                        cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                            this.run_compare(b2.clone(), h2.clone(), false, req, cx)
-                                        }),
-                                    )),
-                            )
-                            .child(chip("cmp-swap", "⇄ Swap", false).on_click(cx.listener(
-                                move |this, _: &ClickEvent, _, cx| {
-                                    this.run_compare(h3.clone(), b3.clone(), since, None, cx)
-                                },
-                            ))),
+                            ),
                     )
                     .child(
                         div()
@@ -2698,42 +2770,34 @@ impl Workspace {
                     .children(stale_note)
                     .children(empty_note)
             }
-            Header::Interdiff { from, to, old, new } => {
-                let (from, to) = (*from, *to);
-                header
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .flex_wrap()
-                            .gap_x(px(12.))
-                            .gap_y(px(4.))
-                            .child(chip("back-to-commits", "← Commits", false).on_click(
-                                cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    this.select_versions(from, to, cx)
-                                }),
-                            ))
-                            .child(
-                                div()
-                                    .text_size(px(15.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(format!("Interdiff · {}", new.summary)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap_3()
-                            .text_size(px(12.))
-                            .text_color(theme::muted())
-                            .child(format!(
-                                "{} → {} · the old commit's patch against the new one's",
-                                format::short(old.id),
-                                format::short(new.id)
-                            ))
-                            .child(stats),
-                    )
-            }
+            Header::Interdiff { old, new, .. } => header
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .flex_wrap()
+                        .gap_x(px(12.))
+                        .gap_y(px(4.))
+                        .child(
+                            div()
+                                .text_size(px(15.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format!("Interdiff · {}", new.summary)),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_3()
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child(format!(
+                            "{} → {} · the old commit's patch against the new one's",
+                            format::short(old.id),
+                            format::short(new.id)
+                        ))
+                        .child(stats),
+                ),
             Header::Versions {
                 from,
                 to,
@@ -2741,45 +2805,12 @@ impl Workspace {
                 conflicts,
             } => header
                 .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .child(
-                            div()
-                                .text_size(px(15.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(format!("Changes from v{} to v{}", from.number, to.number)),
-                        )
-                        .child(
-                            diff_view::group()
-                                .child(
-                                    chip(
-                                        "tab-files",
-                                        "Files",
-                                        self.version_tab == VersionTab::Files,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _: &ClickEvent, _, cx| {
-                                            this.version_tab = VersionTab::Files;
-                                            cx.notify();
-                                        },
-                                    )),
-                                )
-                                .child(
-                                    chip(
-                                        "tab-commits",
-                                        format!("Commits · {}", diff.pairs.len()),
-                                        self.version_tab == VersionTab::Commits,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _: &ClickEvent, _, cx| {
-                                            this.version_tab = VersionTab::Commits;
-                                            cx.notify();
-                                        },
-                                    )),
-                                ),
-                        ),
+                    div().flex().items_center().gap_3().child(
+                        div()
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(format!("Changes from v{} to v{}", from.number, to.number)),
+                    ),
                 )
                 .child(
                     div()
@@ -2885,6 +2916,7 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.set_zone(zones::Zone::Diff, cx)),
             )
+            .child(self.render_diff_toolbar(diff, cx))
             .children(file.map(|f| {
                 let path = match (&f.old_path, &f.new_path) {
                     (Some(old), Some(new)) if old != new => format!("{old} → {new}"),

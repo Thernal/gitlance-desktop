@@ -1154,27 +1154,51 @@ impl Render for Workspace {
                     .pr(px(if self.zen.is_some() { GAP } else { 0. }))
                     .pb(px(GAP))
                     .children(self.zen.is_none().then(|| self.render_rail(cx)))
-                    .children(self.render_side(cx).map(|side| {
-                        div()
-                            .flex()
-                            .flex_none()
-                            .child(side)
-                            .child(self.handle(Split::Sidebar, cx))
-                    }))
+                    // The header row over the panes, then the panes: side panel, diff, tool window.
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .child(if self.choosing_request() {
-                                self.render_choose_request().into_any_element()
-                            } else {
-                                self.render_diff(cx).into_any_element()
-                            })
-                            .children(self.render_zen_keys()),
+                            .children(self.diff.as_ref().filter(|_| !self.choosing_request()).map(
+                                |diff| {
+                                    div()
+                                        .flex_none()
+                                        .flex()
+                                        .flex_col()
+                                        .child(self.render_header(diff, cx))
+                                        .child(div().h(px(GAP)))
+                                },
+                            ))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .flex()
+                                    .children(self.render_side(cx).map(|side| {
+                                        div()
+                                            .flex()
+                                            .flex_none()
+                                            .child(side)
+                                            .child(self.handle(Split::Sidebar, cx))
+                                    }))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .flex()
+                                            .flex_col()
+                                            .child(if self.choosing_request() {
+                                                self.render_choose_request().into_any_element()
+                                            } else {
+                                                self.render_diff(cx).into_any_element()
+                                            })
+                                            .children(self.render_zen_keys()),
+                                    )
+                                    .children(self.render_tool(cx)),
+                            ),
                     )
-                    .children(self.render_tool(cx))
                     .children(self.stripe_gap())
                     .children(self.render_stripe(cx))
                     .into_any_element(),
