@@ -31,6 +31,122 @@ pub struct Comment {
     /// What the agent said about it since.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub replies: Vec<Reply>,
+    /// The reviewer's answer to the agent's last question, to go with the next send (#10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<Answered>,
+    /// Written on a GitLab / GitHub discussion (#50 G): that discussion as the agent should read
+    /// it. Kept on this Mac, never posted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<String>,
+}
+
+/// A small form an agent asks with (#10 C, Design `design/next/agent-answer/kinds.html`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Form {
+    pub kind: FormKind,
+    /// The choices (one, many, plan, files, code, scale, line, text's suggestions, order's items).
+    #[serde(default)]
+    pub options: Vec<FormOption>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FormKind {
+    /// One of the options.
+    #[default]
+    One,
+    /// Any of them.
+    Many,
+    /// Yes or no: the first two options (a default pair when none are given).
+    Confirm,
+    /// Steps to approve, each on or off.
+    Plan,
+    /// Versions of code, one to pick, stacked.
+    Code,
+    /// Files to touch, each on or off.
+    Files,
+    /// A name or text: suggestions to pick, or one's own in the note.
+    Text,
+    /// The items in the order they should go.
+    Order,
+    /// How far: one of a range of scopes.
+    Scale,
+    /// Which line: one of the lines given.
+    Line,
+}
+
+impl FormKind {
+    /// Whether several options can be on at once.
+    pub fn many(self) -> bool {
+        matches!(self, FormKind::Many | FormKind::Plan | FormKind::Files)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FormOption {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+    /// For code: the lines of this version.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code: Vec<String>,
+    /// On to begin with (plan steps, files).
+    #[serde(default)]
+    pub on: bool,
+}
+
+impl Form {
+    /// The options as drawn: Confirm's default pair when the agent gave none.
+    pub fn choices(&self) -> Vec<FormOption> {
+        if self.kind == FormKind::Confirm && self.options.len() < 2 {
+            return ["Yes", "No"]
+                .map(|l| FormOption {
+                    label: l.to_owned(),
+                    ..Default::default()
+                })
+                .to_vec();
+        }
+        self.options.clone()
+    }
+}
+
+/// The reviewer's answer: the options picked (for Order, the new order), "your call", a note.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Answered {
+    #[serde(default)]
+    pub picks: Vec<usize>,
+    #[serde(default)]
+    pub your_call: bool,
+    #[serde(default)]
+    pub note: String,
+}
+
+impl Answered {
+    /// The answer in words, for the agent: what was picked, then the note.
+    pub fn words(&self, form: Option<&Form>) -> String {
+        let mut parts = Vec::new();
+        if self.your_call {
+            parts.push("Your call — decide yourself.".to_owned());
+        } else if let Some(form) = form {
+            let choices = form.choices();
+            let picked: Vec<String> = self
+                .picks
+                .iter()
+                .filter_map(|&i| choices.get(i).map(|c| c.label.clone()))
+                .collect();
+            if !picked.is_empty() {
+                parts.push(match form.kind {
+                    FormKind::Order => format!("In this order: {}", picked.join(" → ")),
+                    k if k.many() => format!("Picked: {}", picked.join("; ")),
+                    _ => format!("Picked: {}", picked[0]),
+                });
+            }
+        }
+        if !self.note.trim().is_empty() {
+            parts.push(self.note.trim().to_owned());
+        }
+        parts.join("\n")
+    }
 }
 
 /// A comment's life with an agent: written, sent to a chat, done by the agent, confirmed by the
@@ -64,6 +180,9 @@ pub struct Reply {
     /// Unique, so an answer applied twice is applied once.
     pub uid: String,
     pub body: String,
+    /// The form the agent asked with (#10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form: Option<Form>,
     /// Seconds since the epoch.
     pub at: i64,
 }

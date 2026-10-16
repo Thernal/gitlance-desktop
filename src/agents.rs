@@ -46,6 +46,9 @@ pub struct Answer {
     pub kind: Kind,
     #[serde(default)]
     pub body: String,
+    /// A reply asking with a form (#10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form: Option<review::Form>,
     pub at: i64,
 }
 
@@ -227,8 +230,13 @@ pub fn apply(comments: &mut [Comment], answers: &[Answer]) -> bool {
                     c.replies.push(Reply {
                         uid: answer.uid.clone(),
                         body: answer.body.trim().to_owned(),
+                        form: answer.form.clone(),
                         at: answer.at,
                     });
+                    // A new question: the last answer was to the one before.
+                    if answer.kind == Kind::Reply {
+                        c.answer = None;
+                    }
                 }
                 if answer.kind == Kind::Addressed && c.state == State::Sent {
                     c.state = State::Addressed;
@@ -480,8 +488,17 @@ pub fn brief(root: &Path, comments: &[&Comment]) -> String {
             c.quoted(),
             c.body.trim()
         ));
+        if let Some(thread) = &c.thread {
+            out.push_str(&format!(
+                "\nThis note is on a discussion of the merge request (the reviewer's own, not posted):\n{thread}\n"
+            ));
+        }
         for r in &c.replies {
-            out.push_str(&format!("\n> Earlier answer: {}\n", r.body));
+            out.push_str(&format!("\n> Your earlier answer: {}\n", r.body));
+        }
+        if let Some(a) = &c.answer {
+            let form = c.replies.last().and_then(|r| r.form.as_ref());
+            out.push_str(&format!("\nThe reviewer answered:\n{}\n", a.words(form)));
         }
     }
     out
@@ -503,6 +520,45 @@ mod tests {
     }
 
     #[test]
+    fn a_question_with_a_form_is_kept_and_the_answer_goes_with_the_next_send() {
+        let form: review::Form = serde_json::from_value(serde_json::json!({
+            "kind": "one",
+            "options": [{ "label": "Only after a failure" }, { "label": "In both cases" }]
+        }))
+        .unwrap();
+        let mut comments = vec![comment(1)];
+        let batch = send(&mut comments, &[1], "s1", "Fix login");
+        let ask = Answer {
+            uid: "u1".into(),
+            id: 1,
+            batch,
+            kind: Kind::Reply,
+            body: "When should lastForm be cleared?".into(),
+            form: Some(form),
+            at: 2,
+        };
+        assert!(apply(&mut comments, &[ask]));
+        assert_eq!(
+            comments[0].replies[0].form.as_ref().unwrap().options.len(),
+            2
+        );
+        comments[0].answer = Some(review::Answered {
+            picks: vec![1],
+            note: "and on sign-out".into(),
+            ..Default::default()
+        });
+        comments[0].thread = Some("> Ember: is this cleared?".into());
+        let text = brief(Path::new("/nope"), &[&comments[0]]);
+        assert!(text.contains("The reviewer answered:\nPicked: In both cases\nand on sign-out"));
+        assert!(text.contains("> Ember: is this cleared?"));
+        let confirm = review::Form {
+            kind: review::FormKind::Confirm,
+            ..Default::default()
+        };
+        assert_eq!(confirm.choices().len(), 2);
+    }
+
+    #[test]
     fn a_sent_comment_waits_for_its_chat_until_delivered() {
         let mut comments = vec![comment(1), comment(2)];
         let batch = send(&mut comments, &[1], "s1", "Fix login");
@@ -514,6 +570,7 @@ mod tests {
             batch,
             kind: Kind::Delivered,
             body: String::new(),
+            form: None,
             at: 0,
         };
         assert!(apply(&mut comments, std::slice::from_ref(&delivered)));
@@ -531,6 +588,7 @@ mod tests {
             batch: first,
             kind: Kind::Addressed,
             body: "Clamped to 0..100.".into(),
+            form: None,
             at: 5,
         };
         apply(&mut comments, std::slice::from_ref(&done));
@@ -583,6 +641,7 @@ mod tests {
             batch,
             kind: Kind::Addressed,
             body: "Done.".into(),
+            form: None,
             at: 1,
         };
         bus.answer(&root, &answer).unwrap();

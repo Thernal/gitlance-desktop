@@ -726,10 +726,13 @@ impl Workspace {
                 .ok();
             });
         // Replying: the timeline runs on from the last note to my avatar.
-        let replying = self
-            .compose
-            .as_ref()
-            .is_some_and(|c| c.target == super::comments::Target::Reply(ix));
+        let replying = self.compose.as_ref().is_some_and(|c| {
+            matches!(
+                c.target,
+                super::comments::Target::Reply(i) | super::comments::Target::ThreadNote(i)
+                    if i == ix
+            )
+        });
         let last = t.notes.len() - 1;
         let mine = self.my_note_in(ix);
         let notes = t.notes.iter().enumerate().map(|(n, note)| {

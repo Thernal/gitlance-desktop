@@ -93,6 +93,7 @@ pub fn run() {
                         batch,
                         kind: Kind::Delivered,
                         body: String::new(),
+                        form: None,
                         at: agents::now(),
                     },
                 );

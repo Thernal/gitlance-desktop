@@ -17,7 +17,10 @@ So that they reach this chat, start the watcher once, in the background, as soon
 run `\"{exe}\" agent-watch` with the Monitor tool if you have it, otherwise with Bash and run_in_background. \
 Do not wait for it. When it prints (review comments arrived), call list_comments, change the code for each comment, \
 call address_comment with its id and one line on what you did — or reply_comment to ask the reviewer — then start the \
-watcher again. Never claim a comment is resolved: the reviewer confirms each one in GitLance."
+watcher again. Read each comment for what it wants: a question gets an answer (reply_comment); a clear change gets made \
+(then address_comment); a change that is large or unclear is asked about first, with a form (reply_comment with \
+`form`: a plan to approve, a confirm, versions of code …); after explaining, you may offer the fix as a confirm. \
+Never claim a comment is resolved: the reviewer confirms each one in GitLance."
     )
 }
 
@@ -42,12 +45,33 @@ fn tools() -> Value {
         },
         {
             "name": "reply_comment",
-            "description": "Answer a review comment without saying it is done: a question for the reviewer, or why you did not change it.",
+            "description": "Answer a review comment without saying it is done: a question for the reviewer, or why you did not change it. To ask, give a form: the reviewer answers in GitLance with a click, and the answer comes with the comment the next time it is sent.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "id": {"type": "integer"},
-                    "text": {"type": "string"}
+                    "text": {"type": "string", "description": "The question or the reason, in a sentence or two"},
+                    "form": {
+                        "type": "object",
+                        "description": "Optional. How the reviewer answers: one (pick one), many (pick any), confirm (yes / no; options give the two labels), plan (steps to approve, each on or off), code (versions of code to pick from, each with `code` lines), files (files to touch), text (a name, with suggestions), order (put the items in order), scale (how far: this function … everywhere), line (which line). The reviewer can always say \"your call\" or add a note.",
+                        "properties": {
+                            "kind": {"type": "string", "enum": ["one", "many", "confirm", "plan", "code", "files", "text", "order", "scale", "line"]},
+                            "options": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "label": {"type": "string"},
+                                        "detail": {"type": "string"},
+                                        "code": {"type": "array", "items": {"type": "string"}},
+                                        "on": {"type": "boolean", "description": "Checked to begin with (plan, files)"}
+                                    },
+                                    "required": ["label"]
+                                }
+                            }
+                        },
+                        "required": ["kind"]
+                    }
                 },
                 "required": ["id", "text"]
             }
@@ -93,6 +117,10 @@ fn call(bus: &Bus, name: &str, args: &Value) -> Result<String, String> {
             .unwrap_or_default(),
         kind,
         body: body.to_owned(),
+        // A reply may ask with a form; one that does not parse is sent as the text alone.
+        form: (kind == Kind::Reply)
+            .then(|| serde_json::from_value(args["form"].clone()).ok())
+            .flatten(),
         at: agents::now(),
     };
     bus.answer(&root, &answer).map_err(|e| e.to_string())?;

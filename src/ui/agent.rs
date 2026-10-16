@@ -49,6 +49,11 @@ impl Workspace {
     /// Opens the card; without drafts, says so.
     pub(super) fn open_agent_pick(&mut self, cx: &mut Context<Self>) {
         let ids = self.agent_drafts();
+        self.open_agent_pick_for(ids, cx);
+    }
+
+    /// The chat card for `ids`: where to send them.
+    pub(super) fn open_agent_pick_for(&mut self, ids: Vec<u64>, cx: &mut Context<Self>) {
         if ids.is_empty() {
             self.error =
                 Some("No comments to send — every comment is already with an agent.".into());
@@ -91,6 +96,374 @@ impl Workspace {
             ids,
         });
         cx.notify();
+    }
+
+    /// Sends `ids` to the chat they usually go to (#50 F: there is usually one): the last one
+    /// comments went to while it listens, else any that listens; with none, the card asks.
+    pub(super) fn send_agent(&mut self, ids: Vec<u64>, cx: &mut Context<Self>) {
+        if ids.is_empty() {
+            return;
+        }
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let chats = Self::bus().map(|b| b.chats(&root)).unwrap_or_default();
+        let last = self
+            .comments
+            .iter()
+            .rev()
+            .filter_map(|c| c.sent.as_ref())
+            .find(|s| !s.session.is_empty())
+            .map(|s| s.session.clone());
+        let chat = chats
+            .iter()
+            .find(|c| Some(&c.session) == last.as_ref() && c.listening())
+            .or_else(|| chats.iter().find(|c| c.listening()));
+        let Some(chat) = chat.cloned() else {
+            return self.open_agent_pick_for(ids, cx);
+        };
+        agents::send(&mut self.comments, &ids, &chat.session, &chat.title);
+        self.save_comments();
+        self.refresh_rows();
+        cx.notify();
+    }
+
+    /// The reviewer's pick on the agent's form for comment `id`: saved to the drafts at once
+    /// (#10 C) — it goes with the next send.
+    pub(super) fn pick_answer(&mut self, id: u64, pick: Option<usize>, cx: &mut Context<Self>) {
+        let Some(c) = self.comments.iter_mut().find(|c| c.id == id) else {
+            return;
+        };
+        let form = c.replies.last().and_then(|r| r.form.clone());
+        let a = c.answer.get_or_insert_with(|| crate::review::Answered {
+            picks: match &form {
+                Some(f) if f.kind == crate::review::FormKind::Order => {
+                    (0..f.choices().len()).collect()
+                }
+                Some(f) if f.kind.many() => f
+                    .choices()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, o)| o.on)
+                    .map(|(i, _)| i)
+                    .collect(),
+                _ => Vec::new(),
+            },
+            ..Default::default()
+        });
+        match (pick, &form) {
+            (None, _) => {
+                a.your_call = !a.your_call;
+            }
+            (Some(i), Some(f)) if f.kind.many() => {
+                a.your_call = false;
+                match a.picks.iter().position(|p| *p == i) {
+                    Some(at) => {
+                        a.picks.remove(at);
+                    }
+                    None => a.picks.push(i),
+                }
+                a.picks.sort_unstable();
+            }
+            (Some(i), _) => {
+                a.your_call = false;
+                a.picks = vec![i];
+            }
+        }
+        c.state = State::Draft;
+        self.save_comments();
+        self.refresh_rows();
+        cx.notify();
+    }
+
+    /// Order: moves item `at` of the answer one place up (or down).
+    pub(super) fn move_answer(&mut self, id: u64, at: usize, up: bool, cx: &mut Context<Self>) {
+        let Some(c) = self.comments.iter_mut().find(|c| c.id == id) else {
+            return;
+        };
+        let n = c
+            .replies
+            .last()
+            .and_then(|r| r.form.as_ref())
+            .map_or(0, |f| f.choices().len());
+        let a = c.answer.get_or_insert_with(|| crate::review::Answered {
+            picks: (0..n).collect(),
+            ..Default::default()
+        });
+        let to = if up { at.checked_sub(1) } else { Some(at + 1) };
+        if let Some(to) = to.filter(|&t| t < a.picks.len()) {
+            a.picks.swap(at, to);
+            c.state = State::Draft;
+            self.save_comments();
+            self.refresh_rows();
+            cx.notify();
+        }
+    }
+
+    /// Under the agent's question: its form, answered with clicks; the foot sends (#10 C).
+    pub(super) fn render_agent_form(
+        &self,
+        id: u64,
+        this: gpui::WeakEntity<Self>,
+    ) -> Option<gpui::AnyElement> {
+        use crate::review::FormKind;
+        let c = self.comments.iter().find(|c| c.id == id)?;
+        if !matches!(c.state, State::Sent | State::Draft) {
+            return None;
+        }
+        let reply = c.replies.last()?;
+        let form = reply.form.as_ref();
+        let answer = c.answer.clone().unwrap_or_default();
+        let answered = c.answer.is_some();
+        let others = self.agent_drafts().into_iter().filter(|d| *d != id).count();
+        let order: Vec<usize> = match form {
+            Some(f) if f.kind == FormKind::Order => {
+                if answer.picks.len() == f.choices().len() {
+                    answer.picks.clone()
+                } else {
+                    (0..f.choices().len()).collect()
+                }
+            }
+            Some(f) => (0..f.choices().len()).collect(),
+            None => Vec::new(),
+        };
+        let mark = |on: bool, many: bool| {
+            div()
+                .size(px(14.))
+                .flex_none()
+                .rounded(px(if many { 3. } else { 7. }))
+                .border_2()
+                .border_color(if on { theme::agent() } else { theme::faint() })
+                .when(on, |s| s.bg(theme::agent()))
+        };
+        let rows: Vec<gpui::AnyElement> = form
+            .map(|f| {
+                let choices = f.choices();
+                let many = f.kind.many();
+                order
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(place, &i)| {
+                        let o = choices.get(i)?.clone();
+                        let on = if f.kind == FormKind::Order {
+                            false
+                        } else if answered {
+                            answer.picks.contains(&i)
+                        } else {
+                            many && o.on
+                        };
+                        let (pick, up, down) = (this.clone(), this.clone(), this.clone());
+                        let order_kind = f.kind == FormKind::Order;
+                        Some(
+                            div()
+                                .id(("form-option", id as usize * 64 + i))
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .px(px(8.))
+                                .py(px(6.))
+                                .rounded(px(ROW_RADIUS))
+                                .cursor_pointer()
+                                .when(on, |s| s.bg(theme::agent_bg()))
+                                .hover(|s| s.bg(theme::hover()))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.))
+                                        .child(
+                                            div()
+                                                .w(px(16.))
+                                                .text_size(px(11.))
+                                                .text_color(theme::faint())
+                                                .child((place + 1).to_string()),
+                                        )
+                                        .children((!order_kind).then(|| mark(on, many)))
+                                        .child(div().flex_1().child(o.label.clone()))
+                                        .children((!o.detail.is_empty()).then(|| {
+                                            div()
+                                                .text_size(px(12.))
+                                                .text_color(theme::muted())
+                                                .child(o.detail.clone())
+                                        }))
+                                        .children(order_kind.then(|| {
+                                            div()
+                                                .flex()
+                                                .gap(px(2.))
+                                                .child(
+                                                    div()
+                                                        .id(("form-up", id as usize * 64 + i))
+                                                        .px(px(6.))
+                                                        .rounded(px(4.))
+                                                        .hover(|s| s.bg(theme::selected()))
+                                                        .child("↑")
+                                                        .on_click(move |_, _, cx| {
+                                                            cx.stop_propagation();
+                                                            up.update(cx, |this, cx| {
+                                                                this.move_answer(
+                                                                    id, place, true, cx,
+                                                                )
+                                                            })
+                                                            .ok();
+                                                        }),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .id(("form-down", id as usize * 64 + i))
+                                                        .px(px(6.))
+                                                        .rounded(px(4.))
+                                                        .hover(|s| s.bg(theme::selected()))
+                                                        .child("↓")
+                                                        .on_click(move |_, _, cx| {
+                                                            cx.stop_propagation();
+                                                            down.update(cx, |this, cx| {
+                                                                this.move_answer(
+                                                                    id, place, false, cx,
+                                                                )
+                                                            })
+                                                            .ok();
+                                                        }),
+                                                )
+                                        })),
+                                )
+                                .children((!o.code.is_empty()).then(|| {
+                                    div()
+                                        .ml(px(38.))
+                                        .px(px(10.))
+                                        .py(px(6.))
+                                        .rounded(px(6.))
+                                        .bg(theme::editor())
+                                        .font_family(theme::CODE_FONT)
+                                        .text_size(px(12.))
+                                        .children(o.code.iter().map(|l| div().child(l.clone())))
+                                }))
+                                .when(!order_kind, |s| {
+                                    s.on_click(move |_, _, cx| {
+                                        pick.update(cx, |this, cx| {
+                                            this.pick_answer(id, Some(i), cx)
+                                        })
+                                        .ok();
+                                    })
+                                })
+                                .into_any_element(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let (call, note, only, all) = (this.clone(), this.clone(), this.clone(), this);
+        let button = |idn: (&'static str, usize), label: String, primary: bool| {
+            div()
+                .id(idn)
+                .h(px(26.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap_2()
+                .rounded(px(ROW_RADIUS))
+                .cursor_pointer()
+                .text_size(px(12.))
+                .when(primary, |s| {
+                    s.bg(theme::agent())
+                        .text_color(theme::base())
+                        .font_weight(FontWeight::SEMIBOLD)
+                })
+                .when(!primary, |s| {
+                    s.border_1()
+                        .border_color(theme::island_border())
+                        .hover(|s| s.bg(theme::hover()))
+                })
+                .child(label)
+        };
+        Some(
+            div()
+                .mx(px(12.))
+                .mb(px(10.))
+                .ml(px(52.))
+                .p(px(8.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(gpui::Rgba {
+                    a: 0.35,
+                    ..theme::agent()
+                })
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .children(rows)
+                .children((!answer.note.is_empty()).then(|| {
+                    div()
+                        .px(px(8.))
+                        .pt(px(4.))
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child(format!("Your note: {}", answer.note))
+                }))
+                .child(
+                    div()
+                        .pt(px(6.))
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            button(("form-call", id as usize), "0  Your call".to_owned(), false)
+                                .when(answer.your_call, |s| s.bg(theme::agent_bg()))
+                                .on_click(move |_, _, cx| {
+                                    call.update(cx, |this, cx| this.pick_answer(id, None, cx))
+                                        .ok();
+                                }),
+                        )
+                        .child(
+                            button(
+                                ("form-note", id as usize),
+                                "⇥  Add a note".to_owned(),
+                                false,
+                            )
+                            .on_click(move |_, _, cx| {
+                                note.update(cx, |this, cx| this.start_answer(id, cx)).ok();
+                            }),
+                        )
+                        .children(answered.then(|| {
+                            div()
+                                .text_size(px(12.))
+                                .text_color(theme::agent())
+                                .child("✓ In drafts")
+                        }))
+                        .child(div().flex_1())
+                        .children((answered && others > 0).then(|| {
+                            button(
+                                ("form-only", id as usize),
+                                super::keys::text("Send this only  ⌥⌘↵").into_owned(),
+                                false,
+                            )
+                            .on_click(move |_, _, cx| {
+                                only.update(cx, |this, cx| this.send_agent(vec![id], cx))
+                                    .ok();
+                            })
+                        }))
+                        .children(answered.then(|| {
+                            let label = if others > 0 {
+                                format!("Send all {}  ⇧⌘↵", others + 1)
+                            } else {
+                                "Send  ⇧⌘↵".to_owned()
+                            };
+                            button(
+                                ("form-all", id as usize),
+                                super::keys::text(&label).into_owned(),
+                                true,
+                            )
+                            .on_click(move |_, _, cx| {
+                                all.update(cx, |this, cx| {
+                                    let ids = this.agent_drafts();
+                                    this.send_agent(ids, cx)
+                                })
+                                .ok();
+                            })
+                        })),
+                )
+                .into_any_element(),
+        )
     }
 
     fn send_to_chat(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -219,11 +592,30 @@ impl Workspace {
                             .child(c.title.clone())
                     }))
             });
-        let group = |state: State, label: &'static str| {
+        // Where each comment is in its life with the agent (#50: Drafts · Asks you · Sent ·
+        // Addressed · Sent back · Resolved).
+        #[derive(PartialEq)]
+        enum Group {
+            Drafts,
+            Asks,
+            Sent,
+            Addressed,
+            Back,
+            Resolved,
+        }
+        let group_of = |c: &crate::review::Comment| match c.state {
+            State::Draft if c.sent.is_some() && c.answer.is_none() => Group::Back,
+            State::Draft => Group::Drafts,
+            State::Sent if !c.replies.is_empty() && c.answer.is_none() => Group::Asks,
+            State::Sent => Group::Sent,
+            State::Addressed => Group::Addressed,
+            State::Resolved => Group::Resolved,
+        };
+        let group = |which: Group, label: &'static str| {
             let items: Vec<_> = self
                 .comments
                 .iter()
-                .filter(|c| c.state == state)
+                .filter(|c| group_of(c) == which)
                 .map(|c| {
                     let id = c.id;
                     comment_item(
@@ -262,10 +654,37 @@ impl Workspace {
                 .text_size(px(12.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .cursor_pointer()
-                .child(format!("Send to agent · {drafts}"))
+                .child(if drafts > 1 {
+                    format!("Send all {drafts}")
+                } else {
+                    "Send".to_owned()
+                })
                 .child(keys::caps("⇧⌘A", On::Filled))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    let ids = this.agent_drafts();
+                    this.send_agent(ids, cx)
+                }));
+            // The chat it goes to changes rarely: here, beside it.
+            let chat = div()
+                .id("send-choose-chat")
+                .px_2()
+                .h(px(24.))
+                .flex()
+                .items_center()
+                .rounded(px(ROW_RADIUS))
+                .text_size(px(12.))
+                .text_color(theme::muted())
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                .child("Choose the chat…")
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_agent_pick(cx)));
-            div().flex().child(send).into_any_element()
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(send)
+                .child(chat)
+                .into_any_element()
         });
         ToolView {
             title: "Agents".into(),
@@ -287,10 +706,12 @@ impl Workspace {
                         .text_color(theme::muted())
                         .child("No chat listens in this repository. An agent starts listening with GitLance agent-watch (Settings → Agents).")
                 }))
-                .children(group(State::Draft, "Drafts"))
-                .children(group(State::Sent, "Sent"))
-                .children(group(State::Addressed, "Addressed"))
-                .children(group(State::Resolved, "Resolved"))
+                .children(group(Group::Drafts, "Drafts"))
+                .children(group(Group::Asks, "Asks you"))
+                .children(group(Group::Sent, "Sent"))
+                .children(group(Group::Addressed, "Addressed"))
+                .children(group(Group::Back, "Sent back"))
+                .children(group(Group::Resolved, "Resolved"))
                 .children(self.comments.is_empty().then(|| {
                     div()
                         .px(px(14.))

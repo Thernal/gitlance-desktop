@@ -632,6 +632,67 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             }
                             continue;
                         }
+                        // An agent comment sent, and the agent asking back with a plan (#10).
+                        "agent-form" => {
+                            let (Some(data), Some(path)) = (&this.data, this.current_path()) else {
+                                continue;
+                            };
+                            let line = this.rows.iter().find_map(|row| match row {
+                                Row::Split { right: Some(c), .. }
+                                | Row::Unified {
+                                    cell: c,
+                                    old: false,
+                                    ..
+                                } if c.kind == crate::git::LineKind::Added => Some(c.line),
+                                _ => None,
+                            });
+                            if let Some(line) = line {
+                                use crate::review::{
+                                    Form, FormKind, FormOption, Reply, Sent, State,
+                                };
+                                let step = |l: &str, on: bool| FormOption {
+                                    label: l.into(),
+                                    on,
+                                    ..Default::default()
+                                };
+                                this.comments.push(crate::review::Comment {
+                                    id: 7,
+                                    path: path.clone(),
+                                    line,
+                                    code: data.side(false).line(line).0.to_owned(),
+                                    body: "Keep the last form so Retry can resend it.".into(),
+                                    at: "7c5758f".into(),
+                                    state: State::Sent,
+                                    sent: Some(Sent {
+                                        session: "s".into(),
+                                        title: "Claude · payments-service".into(),
+                                        batch: "b".into(),
+                                        delivered: true,
+                                    }),
+                                    replies: vec![Reply {
+                                        uid: "r".into(),
+                                        body: "That touches three places. Which should I do?"
+                                            .into(),
+                                        form: Some(Form {
+                                            kind: FormKind::Plan,
+                                            options: vec![
+                                                step("Set `lastForm` in `submit`", true),
+                                                step("Clear it on success", true),
+                                                step("Add a test: retry after a failure", true),
+                                                step(
+                                                    "Rename `Done` to `Signed` across the module",
+                                                    false,
+                                                ),
+                                            ],
+                                        }),
+                                        at: 0,
+                                    }],
+                                    ..Default::default()
+                                });
+                                this.refresh_rows();
+                            }
+                            continue;
+                        }
                         "notice" => {
                             this.notice = Some(Notice {
                                 text: "v3 arrived — this comparison now ends at v3.".into(),
