@@ -430,6 +430,7 @@ impl Workspace {
                 .text_color(if all { theme::base() } else { theme::added() })
                 .cursor_pointer()
                 .hover(|s| s.border_color(theme::text()))
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(move |_, cx| {
                     cx.new(|_| {
                         super::Tip(if all {
@@ -510,6 +511,7 @@ impl Workspace {
                 })
                 .cursor_pointer()
                 .hover(|s| s.border_color(theme::text()))
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(move |_, cx| {
                     cx.new(|_| {
                         super::Tip(match state {
@@ -561,6 +563,7 @@ impl Workspace {
                 (false, true) => format!("Mark {} shown", shown.len()),
             },
         )
+        .tooltip_show_delay(crate::ui::hover::LONG)
         .tooltip(|_, cx| {
             cx.new(|_| super::Tip("Mark or unmark every file in the list  ⌥⇧V"))
                 .into()

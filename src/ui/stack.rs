@@ -884,7 +884,7 @@ impl Workspace {
                                 .text_color(theme::muted()),
                             ),
                     )
-                    .child(super::change_badge(file.change))
+                    .child(super::change_badge(file))
                     .child(
                         div()
                             .flex_1()

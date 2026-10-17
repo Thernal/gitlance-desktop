@@ -86,6 +86,8 @@ pub enum Press {
 pub type OnPress = Rc<dyn Fn(Press, &mut App)>;
 /// A link clicked in a comment: `true` when the app followed it itself.
 pub type OnLink = Rc<dyn Fn(&str, &mut App) -> bool>;
+/// The card of the person a `@login` mention names, on a long hover (#51).
+pub type OnMention = Rc<dyn Fn(&str, &mut App) -> Option<gpui::AnyView>>;
 
 /// Selecting in comments: the selection now, and where presses go.
 #[derive(Clone)]
@@ -94,6 +96,7 @@ pub struct Selecting {
     pub on: OnPress,
     /// GitLab links into the open project open in the app (⌘-click: the browser).
     pub link: OnLink,
+    pub mention: OnMention,
 }
 
 /// Where relative links of a comment point: GitLab writes uploads as `/uploads/…`, relative to the
@@ -677,21 +680,35 @@ fn inline(i: &Inline, ctx: &mut Ctx) -> AnyElement {
         })
         .collect();
     let layout = styled.layout().clone();
-    if links.is_empty() {
+    // The mentions a card can be shown for: (range, login).
+    let tagged: Vec<(Range<usize>, String)> = match ctx.sel.as_ref() {
+        Some(_) => crate::markdown::mentions(&i.text)
+            .into_iter()
+            .map(|r| (r.clone(), i.text[r.start + 1..r.end].to_owned()))
+            .collect(),
+        None => Vec::new(),
+    };
+    if links.is_empty() && tagged.is_empty() {
         return text_block(styled.into_any_element(), layout, &i.text, ctx);
     }
     ctx.next += 1;
     let id = ElementId::NamedInteger(ctx.key.clone(), ctx.next as u64);
     let (ranges, urls): (Vec<_>, Vec<_>) = links.into_iter().unzip();
     let here = ctx.sel.as_ref().map(|s| s.link.clone());
-    let linked = InteractiveText::new(id, styled).on_click(ranges, move |ix, window, cx| {
-        if let Some(url) = urls.get(ix) {
-            let browser = window.modifiers().secondary();
-            if browser || !here.as_ref().is_some_and(|open| open(url, cx)) {
-                cx.open_url(url);
+    let card = ctx.sel.as_ref().map(|s| s.mention.clone());
+    let linked = InteractiveText::new(id, styled)
+        .on_click(ranges, move |ix, window, cx| {
+            if let Some(url) = urls.get(ix) {
+                let browser = window.modifiers().secondary();
+                if browser || !here.as_ref().is_some_and(|open| open(url, cx)) {
+                    cx.open_url(url);
+                }
             }
-        }
-    });
+        })
+        .tooltip(move |at, _, cx| {
+            let (_, login) = tagged.iter().find(|(r, _)| r.contains(&at))?;
+            card.as_ref().and_then(|card| card(login, cx))
+        });
     text_block(linked.into_any_element(), layout, &i.text, ctx)
 }
 

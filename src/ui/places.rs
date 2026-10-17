@@ -208,6 +208,7 @@ impl Workspace {
                             .text_color(theme::base())
                             .child(n.min(99).to_string())
                     }))
+                    .tooltip_show_delay(crate::ui::hover::LONG)
                     .tooltip(move |_, cx| {
                         cx.new(|_| super::TipOwned(super::words::say(label).into_owned().into()))
                             .into()
@@ -457,11 +458,15 @@ impl Workspace {
                                         .child(format!("{} {}", n.who, n.kind_verb())),
                                 )
                                 .child(
-                                    div()
-                                        .flex_none()
-                                        .text_size(px(11.))
-                                        .text_color(theme::faint())
-                                        .child(format::ago(n.created)),
+                                    super::hover::ago(
+                                        gpui::SharedString::from(format!(
+                                            "inbox-ago-{}",
+                                            n.created
+                                        )),
+                                        n.created,
+                                    )
+                                    .text_size(px(11.))
+                                    .text_color(theme::faint()),
                                 ),
                         )
                         .child(

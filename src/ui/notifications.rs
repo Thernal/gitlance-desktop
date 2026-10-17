@@ -13,7 +13,7 @@
 use super::keys::{self, On};
 use super::px;
 use super::tools::{Tool, ToolView, tool_button};
-use super::{ROW_RADIUS, Workspace, format, theme};
+use super::{ROW_RADIUS, Workspace, theme};
 use crate::links::{self, Target};
 use crate::mr::{self, Mr, Thread, Todo};
 use crate::storage;
@@ -544,11 +544,12 @@ impl Workspace {
                                         .child(format!("{} {}", n.who, n.kind.verb())),
                                 )
                                 .child(
-                                    div()
-                                        .flex_none()
-                                        .text_size(px(11.))
-                                        .text_color(theme::faint())
-                                        .child(format::ago(n.created)),
+                                    super::hover::ago(
+                                        gpui::SharedString::from(format!("note-ago-{}", n.created)),
+                                        n.created,
+                                    )
+                                    .text_size(px(11.))
+                                    .text_color(theme::faint()),
                                 ),
                         )
                         .child(

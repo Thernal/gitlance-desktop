@@ -188,6 +188,7 @@ impl Workspace {
                         theme::muted()
                     },
                 ))
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(|_, cx| cx.new(|_| Tip("Search commits  ⌘⇧F")).into())
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     if this.layout.fold_commits {

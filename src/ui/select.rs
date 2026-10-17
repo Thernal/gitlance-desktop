@@ -224,6 +224,7 @@ impl Workspace {
     /// How the text of comments can be selected: the selection now, and presses back to here.
     pub(super) fn selecting(&self, this: gpui::WeakEntity<Self>) -> super::markdown::Selecting {
         let link = this.clone();
+        let mention = this.clone();
         super::markdown::Selecting {
             current: self.note_sel.clone(),
             on: std::rc::Rc::new(move |press, cx| {
@@ -232,6 +233,20 @@ impl Workspace {
             link: std::rc::Rc::new(move |url, cx| {
                 link.update(cx, |this, cx| this.open_url_here(url, cx))
                     .unwrap_or(false)
+            }),
+            mention: std::rc::Rc::new(move |login, cx| {
+                let ws = mention.upgrade()?;
+                let card = {
+                    let this = ws.read(cx);
+                    let name = this
+                        .requests
+                        .members
+                        .iter()
+                        .find(|(l, _)| l == login)
+                        .map_or_else(|| login.to_owned(), |(_, n)| n.clone());
+                    this.person_card(&name, login, mention.clone())
+                };
+                Some(gpui::AppContext::new(cx, |_| card).into())
             }),
         }
     }

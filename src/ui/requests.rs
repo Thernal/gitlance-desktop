@@ -2,6 +2,7 @@
 //! branch, and the discussions other people left on one, in the review panel. Read-only; GitLab
 //! only (see `crate::mr`).
 
+use super::hover::Hover;
 use super::px;
 use super::rows::Row;
 use super::tools::ToolView;
@@ -664,7 +665,7 @@ impl Workspace {
             this.clone(),
         );
         let history = self.render_history(ix, this.clone());
-        let selecting = self.selecting(this);
+        let selecting = self.selecting(this.clone());
         let first = &t.notes[0];
         let author = self
             .requests
@@ -714,6 +715,7 @@ impl Workspace {
                     })
             }))
             .children(t.resolvable.then(|| discussion::state(t.resolved)))
+            .tooltip_show_delay(crate::ui::hover::LONG)
             .tooltip(move |_, cx| {
                 cx.new(|_| super::Tip(if open { "Collapse  O" } else { "Expand  O" }))
                     .into()
@@ -789,6 +791,15 @@ impl Workspace {
                             )
                         }))
                         .into_any_element()
+                }),
+                (!own).then(|| {
+                    let card =
+                        std::rc::Rc::new(self.person_card(&note.author, &note.login, this.clone()));
+                    let build: discussion::Card = std::rc::Rc::new(move |_, cx| {
+                        let c = card.clone();
+                        cx.new(|_| super::hover::PersonCard::clone_of(&c)).into()
+                    });
+                    (build, note.created)
                 }),
             );
             // Hovering a note shows its reaction bar.
@@ -1090,6 +1101,7 @@ impl Workspace {
                         ),
                         true,
                         None,
+                        None,
                     ))),
             )
             .into_any_element()
@@ -1214,6 +1226,7 @@ impl Workspace {
         Some(
             super::commit_chip("request-row", selected)
                 .child(super::words::number(iid))
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(|_, cx| cx.new(|_| super::Tip("The whole merge request")).into())
                 .child(div().text_color(theme::warning()).child(n.to_string()))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -1731,6 +1744,16 @@ impl Workspace {
             let reviewed = head.is_some_and(|h| self.head_reviewed(h));
             let part = head.and_then(|h| self.head_part(h));
             row(("mr", iid), current)
+                // A long hover: the whole title, the branches and who opened it (#53).
+                .tip(format!(
+                    "{} {} · {} → {} · {} · updated {}",
+                    super::words::number(iid),
+                    m.title,
+                    m.source,
+                    m.target,
+                    m.author,
+                    super::hover::full_date(m.updated)
+                ))
                 .h(px(50.))
                 .flex_col()
                 .items_start()
@@ -1900,6 +1923,7 @@ impl Workspace {
                 .text_color(color)
                 .cursor_pointer()
                 .hover(|s| s.bg(theme::hover()))
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(|_, cx| cx.new(|_| super::Tip("Open the pipeline on GitLab")).into())
                 .child(format!("{glyph} {word}"))
                 .children(ago.map(|a| div().text_color(theme::faint()).child(a)))
@@ -1959,6 +1983,7 @@ impl Workspace {
                 .when(a.can && !a.mine, |s| {
                     s.child(super::keys::caps("a", super::keys::On::Plain))
                 })
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_approval(cx)))
         })
@@ -2017,6 +2042,7 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
                         .child("✕")
+                        .tooltip_show_delay(crate::ui::hover::LONG)
                         .tooltip(|_, cx| {
                             cx.new(|_| {
                                 super::Tip("Leave the merge request — back to your branch  ⌥⌘L")

@@ -128,7 +128,8 @@ impl Workspace {
             return None;
         }
         let open = self.tool();
-        let button = |tool: Tool, badge: Option<(String, Rgba)>, dot: bool| {
+        // The long hover says what the count is (#53): "Discussions · 3 comments".
+        let button = |tool: Tool, badge: Option<(String, Rgba)>, dot: bool, what: String| {
             let id = tool.name();
             let on = open == Some(tool);
             div()
@@ -175,9 +176,15 @@ impl Workspace {
                         .rounded_full()
                         .bg(theme::accent())
                 }))
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(move |_, cx| {
-                    cx.new(|_| TipOwned(keys::text(tool.tip()).into_owned().into()))
-                        .into()
+                    let tip = keys::text(tool.tip()).into_owned();
+                    let tip = if what.is_empty() {
+                        tip
+                    } else {
+                        format!("{tip}  ·  {what}")
+                    };
+                    cx.new(|_| TipOwned(tip.into())).into()
                 })
                 .on_click(
                     cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_tool(tool, cx)),
@@ -196,19 +203,29 @@ impl Workspace {
                 .pt(px(2.))
                 .children(
                     self.showing_request()
-                        .then(|| button(Tool::Details, None, false)),
+                        .then(|| button(Tool::Details, None, false, String::new())),
                 )
                 .child(button(
                     Tool::Discussions,
                     count(self.comments_total(), theme::accent()),
                     false,
+                    super::plural(self.comments_total(), "comment"),
                 ))
-                .child(button(Tool::Agents, count(drafts, theme::agent()), false))
-                .children(
-                    self.requests
-                        .available
-                        .then(|| button(Tool::Notifications, None, self.notices.unread() > 0)),
-                ),
+                .child(button(
+                    Tool::Agents,
+                    count(drafts, theme::agent()),
+                    false,
+                    super::plural(drafts, "draft"),
+                ))
+                .children(self.requests.available.then(|| {
+                    let unread = self.notices.unread();
+                    button(
+                        Tool::Notifications,
+                        None,
+                        unread > 0,
+                        format!("{unread} new"),
+                    )
+                })),
         )
     }
 
@@ -244,6 +261,7 @@ impl Workspace {
                     .text_color(theme::muted())
                     .group_hover("tool-close", |s| s.text_color(theme::text())),
             )
+            .tooltip_show_delay(crate::ui::hover::LONG)
             .tooltip(|_, cx| cx.new(|_| Tip("Hide  esc")).into())
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if submitting {

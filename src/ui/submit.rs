@@ -442,6 +442,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(theme::hover()))
                     .child("Cancel")
+                    .tooltip_show_delay(crate::ui::hover::LONG)
                     .tooltip(|_, cx| cx.new(|_| super::Tip("esc")).into())
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_submit(cx))),
             )

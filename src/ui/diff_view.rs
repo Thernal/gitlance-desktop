@@ -249,6 +249,7 @@ fn annot_col(style: RowStyle<'_>, line: Option<u32>, events: OnEvents) -> Option
             })
             .cursor_pointer()
             .hover(|s| s.text_color(theme::text()))
+            .tooltip_show_delay(crate::ui::hover::LONG)
             .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
             .children(cell.label.clone())
             .on_click(move |_, _, cx| (events.annotate)(false, n, cx))

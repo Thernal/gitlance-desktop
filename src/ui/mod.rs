@@ -16,6 +16,7 @@ mod findfiles;
 mod format;
 mod frame;
 mod goto;
+mod hover;
 mod icons;
 mod image_view;
 mod input;
@@ -952,6 +953,32 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                 }
                 wait(400).await;
             }
+        }
+        // The pointer resting at `x,y` (window points) long enough for a tooltip or a card (#53).
+        if let Ok(at) = std::env::var("GITLANCE_SNAPSHOT_HOVER")
+            && let Some((x, y)) = at.split_once(',')
+            && let (Ok(x), Ok(y)) = (x.trim().parse::<f32>(), y.trim().parse::<f32>())
+        {
+            for dx in [0., 1.] {
+                cx.update_window(window.into(), |_, window, cx| {
+                    window.dispatch_event(
+                        gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                            position: gpui::point(gpui::px(x + dx), gpui::px(y)),
+                            pressed_button: None,
+                            modifiers: Default::default(),
+                        }),
+                        cx,
+                    );
+                    // A hidden window draws only by hand: the hover is known after a frame.
+                    window.draw(cx).clear(cx);
+                })
+                .ok();
+                wait(200).await;
+            }
+            wait(1400).await;
+            cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+                .ok();
+            wait(300).await;
         }
         // The first discussion's first note hovered: its reaction bar, or ☺+ open (#9).
         if let Ok(view) = std::env::var("GITLANCE_SNAPSHOT_VIEW")
@@ -3270,7 +3297,7 @@ impl Workspace {
                     .px_4()
                     .border_b_1()
                     .border_color(theme::island_border())
-                    .child(change_badge(f.change))
+                    .child(change_badge(f))
                     .child(div().flex_1().min_w_0().truncate().child(path))
                     // An SVG read as its source can go back to the picture.
                     .children(
@@ -3647,7 +3674,7 @@ pub(super) fn render_file_row(
         .gap_2()
         .when(done, |s| s.text_color(theme::muted()))
         .children(review)
-        .child(change_badge(file.change))
+        .child(change_badge(file))
         .child(
             div()
                 .flex_1()
@@ -3706,8 +3733,10 @@ fn stats(file: &FileDiff) -> impl IntoElement + use<> {
         })
 }
 
-fn change_badge(change: ChangeKind) -> impl IntoElement {
-    let (letter, color) = match change {
+/// A file's status letter; a long hover says what it stands for, with the file's whole path.
+fn change_badge(file: &FileDiff) -> impl IntoElement {
+    use hover::Hover;
+    let (letter, color) = match file.change {
         ChangeKind::Added => ("A", theme::added()),
         ChangeKind::Deleted => ("D", theme::removed()),
         ChangeKind::Modified => ("M", theme::accent()),
@@ -3716,12 +3745,20 @@ fn change_badge(change: ChangeKind) -> impl IntoElement {
         ChangeKind::TypeChanged => ("T", theme::warning()),
     };
     div()
+        .id(SharedString::from(format!("status-{}", file.path())))
         .w(px(16.))
         .flex_none()
         .text_size(px(11.))
         .font_weight(FontWeight::BOLD)
         .text_color(color)
         .child(letter)
+        .tip(format!(
+            "{} · {} · +{} −{}",
+            hover::status_word(file.change, file.old_path.as_deref()),
+            file.path(),
+            file.added,
+            file.removed
+        ))
 }
 
 fn section_label(text: impl Into<SharedString>) -> gpui::Div {
@@ -3849,6 +3886,7 @@ fn icon_button(
                 .text_color(theme::muted())
                 .group_hover(id, |s| s.text_color(theme::text())),
         )
+        .tooltip_show_delay(crate::ui::hover::LONG)
         .tooltip(move |_, cx| cx.new(|_| Tip(tip)).into())
 }
 
@@ -3882,6 +3920,7 @@ fn nav_button(
         button
             .cursor_pointer()
             .hover(|s| s.bg(theme::hover()))
+            .tooltip_show_delay(crate::ui::hover::LONG)
             .tooltip(move |_, cx| cx.new(|_| Tip(tip)).into())
     } else {
         button.opacity(0.45)

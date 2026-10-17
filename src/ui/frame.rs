@@ -2,6 +2,7 @@
 //! welcome, the sidebar (versions and commits), the switch picker, zen's line and the splitters.
 
 use super::*;
+use hover::Hover;
 
 impl Workspace {
     pub(super) fn render_picker(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
@@ -267,6 +268,7 @@ impl Workspace {
                             .text_color(theme::muted())
                             .cursor_pointer()
                             .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                            .tooltip_show_delay(crate::ui::hover::LONG)
                             .tooltip(|_, cx| cx.new(|_| Tip("Branches  ⌃1")).into())
                             .child(icons::icon("branch").text_color(theme::muted()))
                             .child(div().min_w_0().truncate().child(b))
@@ -545,6 +547,18 @@ impl Workspace {
                             }),
                     );
                 let item = row(("version", ix), chosen)
+                    // A long hover: who pushed it, exactly when, and what moved the branch (#53).
+                    .tip(format!(
+                        "v{} · {} · {} · {}",
+                        v.number,
+                        v.author,
+                        hover::full_date(v.time),
+                        if v.reason.is_empty() {
+                            kind
+                        } else {
+                            v.reason.as_str()
+                        }
+                    ))
                     .h(px(44.))
                     .items_start()
                     .gap_2()
@@ -742,20 +756,21 @@ impl Workspace {
                         div().flex().min_w_0().flex_shrink(1.).gap_2().children(
                             self.decor
                                 .get(&commit.id)
-                                .map(|d| {
-                                    lists::deco_tags(d).into_iter().take(1).collect::<Vec<_>>()
-                                })
+                                // The first label and "+N" for the rest; the card names them all.
+                                .map(|d| lists::deco_tags(d))
                                 .unwrap_or_default(),
                         ),
                     )
-                    // Always shown: a branch of one's own still has commits by others under it.
+                    // Always shown: a branch of one's own still has commits by others under it. The
+                    // labels give way first; the card has the whole name.
                     .child(
                         div()
-                            .flex_1()
-                            .min_w(px(40.))
+                            .flex_none()
+                            .max_w(px(160.))
                             .truncate()
                             .child(commit.author.clone()),
                     )
+                    .child(div().flex_1())
                     .child(
                         div()
                             .flex_none()
@@ -770,6 +785,17 @@ impl Workspace {
                 }),
             )
             .on_click(cx.listener(move |this, _, _, cx| this.select_commit(ix, cx)));
+        // A long hover: the commit's card (#53) — its whole message start, author, date, id, labels.
+        let item = match self.commit_card(ix) {
+            Some(card) => {
+                let card = std::rc::Rc::new(card);
+                item.card(move |_, cx| {
+                    let c = card.clone();
+                    cx.new(|_| hover::CommitCard::clone_of(&c)).into()
+                })
+            }
+            None => item,
+        };
         div().w_full().h(px(64.)).px(px(6.)).py(px(1.)).child(item)
     }
 }

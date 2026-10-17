@@ -223,6 +223,7 @@ impl Workspace {
                         .cursor_pointer()
                         .child(emoji::get(&name).unwrap_or("·"))
                         .child(div().text_size(px(12.)).child(who.len().to_string()))
+                        .tooltip_show_delay(crate::ui::hover::LONG)
                         .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
                         .on_click(move |_, _, cx| {
                             this.update(cx, |this, cx| this.toggle_reaction(note, &toggle, cx))
@@ -366,6 +367,7 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.bg(theme::hover()))
                         .child(emoji::get(name).unwrap_or("·"))
+                        .tooltip_show_delay(crate::ui::hover::LONG)
                         .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
                         .on_click(move |_, _, cx| {
                             this.update(cx, |this, cx| this.toggle_reaction(note, name, cx))

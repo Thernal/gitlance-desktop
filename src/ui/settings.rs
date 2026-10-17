@@ -685,7 +685,8 @@ impl Workspace {
                     })
                     .child(keys::caps(&keymap::symbols(k), On::Plain))
                     .when_some(mine, |s, tip| {
-                        s.tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
+                        s.tooltip_show_delay(crate::ui::hover::LONG)
+                            .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
                     })
             });
             div()

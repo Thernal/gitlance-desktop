@@ -2,6 +2,7 @@
 //! changed files as a folder tree or a flat list with a path filter, the labels on commits, and
 //! back / forward through what was looked at. Designed in review round 1 (A9, A10, A11, A13).
 
+use super::hover::Hover;
 use super::input::{self, Edit};
 use super::px;
 use super::{Workspace, change_badge, row, theme};
@@ -144,8 +145,20 @@ pub fn deco_tags(decos: &[Deco]) -> Vec<gpui::AnyElement> {
             DecoKind::Tag => tag(d.name.clone(), theme::warning()),
         })
         .collect();
+    // The count never gives way: it says there is more.
     if decos.len() > 1 {
-        out.push(tag(format!("+{}", decos.len() - 1), theme::faint()));
+        out.push(
+            div()
+                .flex_none()
+                .px(px(6.))
+                .rounded_full()
+                .border_1()
+                .border_color(theme::faint())
+                .text_size(px(10.))
+                .text_color(theme::faint())
+                .child(format!("+{}", decos.len() - 1))
+                .into_any_element(),
+        );
     }
     out
 }
@@ -261,7 +274,10 @@ impl Workspace {
                                 this.select_branch(ix, None, cx);
                                 this.record();
                                 this.close_picker(cx);
-                            })),
+                            }))
+                            // A long hover: the branch's card — upstream, ahead / behind, its
+                            // last commit (#53).
+                            .when_some(self.branch_card(ix), |s, card| s.card(card)),
                     )
                     .into_any_element()
             }
@@ -644,7 +660,7 @@ impl Workspace {
                                 |s| s.text_color(theme::muted()),
                             )
                             .children(self.review_box(ix, cx))
-                            .child(change_badge(file.change))
+                            .child(change_badge(file))
                             .child(div().flex_1().min_w_0().truncate().child(name))
                             .children(super::generated_tag(file))
                             .children(super::working::file_tag(diff.tags.get(file.path())))

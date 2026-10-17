@@ -80,10 +80,20 @@ impl Workspace {
             let mark = initials(&tab.title);
             let tint = hue(&tab.title);
             let (drag_mark, drag_hue) = (mark.clone(), tint);
+            // A long hover: the project's name, where it is, its unread count and key (#53).
+            let place = tab
+                .root
+                .as_ref()
+                .map(|r| format!(" · {}", super::format::home_relative(r)))
+                .unwrap_or_default();
+            let unread = match tab.unread {
+                0 => String::new(),
+                n => format!(" · {n} new"),
+            };
             let tip = if ix < 9 {
-                format!("{}  ⌘{}", tab.title, ix + 1)
+                format!("{}{place}{unread}  ⌘{}", tab.title, ix + 1)
             } else {
-                tab.title.clone()
+                format!("{}{place}{unread}", tab.title)
             };
             let info = tab.clone();
             div()
@@ -137,6 +147,7 @@ impl Workspace {
                         .rounded_full()
                         .bg(theme::accent())
                 }))
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(move |_, cx| cx.new(|_| TipOwned(tip.clone().into())).into())
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.with_shell(window, cx, move |s, window, cx| s.select(ix, window, cx))
@@ -182,6 +193,7 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.bg(theme::hover()))
                         .child(icons::icon("open").size(px(16.)).text_color(theme::muted()))
+                        .tooltip_show_delay(crate::ui::hover::LONG)
                         .tooltip(|_, cx| {
                             cx.new(|_| {
                                 TipOwned(

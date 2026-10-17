@@ -209,9 +209,7 @@ impl Workspace {
                         .gap_2()
                         .child(div().text_color(color).child(word))
                         .children((p.updated > 0).then(|| {
-                            div()
-                                .text_color(theme::faint())
-                                .child(format::ago(p.updated))
+                            super::hover::ago("pipeline-ago", p.updated).text_color(theme::faint())
                         }))
                         .into_any_element(),
                 )
@@ -336,11 +334,10 @@ impl Workspace {
                                         .font_family(theme::CODE_FONT)
                                         .child(format!("{} → {}", m.source, m.target)),
                                 )
+                                .child(div().flex_none().text_color(theme::faint()).child("·"))
                                 .child(
-                                    div()
-                                        .flex_none()
-                                        .text_color(theme::faint())
-                                        .child(format!("· updated {}", format::ago(m.updated))),
+                                    super::hover::ago("header-updated", m.updated)
+                                        .text_color(theme::faint()),
                                 ),
                         ),
                 )

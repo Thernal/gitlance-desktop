@@ -102,6 +102,7 @@ impl Workspace {
         (self.wt.count > 0 || selected).then(|| {
             super::commit_chip("working-tree", selected)
                 .child("WT")
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(|_, cx| cx.new(|_| super::Tip("Working tree against HEAD")).into())
                 .child(
                     div()

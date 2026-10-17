@@ -173,8 +173,14 @@ pub fn avatar(name: &str, me: bool, size: f32) -> Div {
         .child(letter)
 }
 
+/// A person's card on a long hover over their avatar and name (#51), and when they wrote.
+pub type Who = (Card, i64);
+/// What builds a card when it shows.
+pub type Card = std::rc::Rc<dyn Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView>;
+
 /// One note: avatar | name, role, time | body below the name. `last` leaves out the timeline line
-/// that joins this avatar to the next.
+/// that joins this avatar to the next. `who`: the author's card and the note's time (#53).
+#[allow(clippy::too_many_arguments)]
 pub fn note(
     author: &str,
     me: bool,
@@ -183,7 +189,38 @@ pub fn note(
     body: AnyElement,
     last: bool,
     action: Option<AnyElement>,
+    who: Option<Who>,
 ) -> Div {
+    use super::hover::Hover;
+    let key = format!("{author}-{time}");
+    let (card, when) = match who {
+        Some((card, when)) => (Some(card), Some(when)),
+        None => (None, None),
+    };
+    let face = {
+        let card = card.clone();
+        div()
+            .id(SharedString::from(format!("who-face-{key}")))
+            .child(avatar(author, me, 28.))
+            .when_some(card, |s, card| s.card(move |w, cx| card(w, cx)))
+    };
+    let name = div()
+        .id(SharedString::from(format!("who-name-{key}")))
+        .flex_none()
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(if me {
+            "You".to_owned()
+        } else {
+            author.to_owned()
+        })
+        .when_some(card, |s, card| s.card(move |w, cx| card(w, cx)));
+    let stamp = div()
+        .id(SharedString::from(format!("who-time-{key}")))
+        .flex_none()
+        .text_size(px(12.))
+        .text_color(theme::muted())
+        .child(format!("· {time}"))
+        .when_some(when, |s, t| s.tip(super::hover::full_date(t)));
     div()
         .relative()
         .flex()
@@ -198,7 +235,7 @@ pub fn note(
                 .w(px(1.))
                 .bg(theme::selected())
         }))
-        .child(avatar(author, me, 28.))
+        .child(face)
         .child(
             div()
                 .flex_1()
@@ -212,16 +249,7 @@ pub fn note(
                         .items_center()
                         .gap(px(6.))
                         .min_w_0()
-                        .child(
-                            div()
-                                .flex_none()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(if me {
-                                    "You".to_owned()
-                                } else {
-                                    author.to_owned()
-                                }),
-                        )
+                        .child(name)
                         .children(role.map(|r| {
                             div()
                                 .flex_none()
@@ -234,13 +262,7 @@ pub fn note(
                                 .text_color(theme::muted())
                                 .child(r)
                         }))
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_size(px(12.))
-                                .text_color(theme::muted())
-                                .child(format!("· {time}")),
-                        )
+                        .child(stamp)
                         .children(action.map(|a| div().ml_auto().flex_none().child(a))),
                 )
                 .child(div().min_w_0().child(body)),

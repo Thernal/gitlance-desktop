@@ -574,6 +574,15 @@ impl Repo {
     }
 
     /// Whether local branch `name` is behind its upstream, and by how much.
+    /// A local branch's upstream and how far apart they are: (upstream, ahead, behind).
+    pub fn tracking(&self, name: &str) -> Option<(String, usize, usize)> {
+        let local = self.inner.find_branch(name, BranchType::Local).ok()?;
+        let upstream = local.upstream().ok()?;
+        let (tip, up) = (local.get().target()?, upstream.get().target()?);
+        let (ahead, behind) = self.inner.graph_ahead_behind(tip, up).ok()?;
+        Some((lossy(upstream.get().shorthand_bytes()), ahead, behind))
+    }
+
     pub fn stale(&self, name: &str) -> Option<Stale> {
         let local = self.inner.find_branch(name, BranchType::Local).ok()?;
         let upstream = local.upstream().ok()?;

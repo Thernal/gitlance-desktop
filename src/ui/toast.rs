@@ -104,6 +104,7 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.bg(theme::hover()))
                         .child(icons::icon("x").size(px(14.)).text_color(theme::muted()))
+                        .tooltip_show_delay(crate::ui::hover::LONG)
                         .tooltip(|_, cx| cx.new(|_| Tip("Dismiss")).into())
                         .on_click(
                             cx.listener(move |this, _: &ClickEvent, _, cx| this.dismiss(id, cx)),

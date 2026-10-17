@@ -649,6 +649,7 @@ impl Workspace {
             discussion::button("edit-cancel", "Cancel", None, Kind::Quiet)
                 .h(px(28.))
                 .px(px(10.))
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(|_, cx| cx.new(|_| super::Tip("Esc")).into())
                 .on_click(move |_, _, cx| {
                     cancel.update(cx, |this, cx| this.cancel_comment(cx)).ok();
@@ -1449,6 +1450,7 @@ impl Workspace {
                 "Rich"
             },
         )
+        .tooltip_show_delay(crate::ui::hover::LONG)
         .tooltip(|_, cx| {
             cx.new(|_| super::Tip("Markdown as written or formatted  ⌥M"))
                 .into()
@@ -1592,6 +1594,7 @@ impl Workspace {
             comment.replies.is_empty(),
             (self.compose.is_none())
                 .then(|| edit_button(("edit-agent", id), None, change, editing)),
+            None,
         );
         let replies = comment.replies.iter().enumerate().map(|(ix, reply)| {
             discussion::note(
@@ -1607,6 +1610,7 @@ impl Workspace {
                     None,
                 ),
                 ix + 1 == comment.replies.len(),
+                None,
                 None,
             )
         });
@@ -1713,6 +1717,7 @@ impl Workspace {
             .when(switchable, |s| {
                 s.cursor_pointer()
                     .child(super::icons::icon("chevron").size(px(12.)).text_color(tone))
+                    .tooltip_show_delay(crate::ui::hover::LONG)
                     .tooltip(|_, cx| cx.new(|_| super::Tip("Who sees it — Tab switches")).into())
                     .on_click(move |_, _, cx| {
                         audience.update(cx, |this, cx| this.toggle_target(cx)).ok();
@@ -1730,6 +1735,7 @@ impl Workspace {
             discussion::button("compose-cancel", "Cancel", None, Kind::Quiet)
                 .h(px(28.))
                 .px(px(10.))
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(|_, cx| cx.new(|_| super::Tip("Esc")).into())
                 .on_click(move |_, _, cx| {
                     cancel.update(cx, |this, cx| this.cancel_comment(cx)).ok();
@@ -1741,6 +1747,7 @@ impl Workspace {
                 discussion::button("compose-review", "Add to review", Some("⇧⌘↵"), Kind::Plain)
                     .h(px(28.))
                     .px(px(10.))
+                    .tooltip_show_delay(crate::ui::hover::LONG)
                     .tooltip(|_, cx| {
                         cx.new(|_| super::Tip("Pending until you submit the review"))
                             .into()
@@ -1767,6 +1774,7 @@ impl Workspace {
                 )
                 .h(px(28.))
                 .px(px(10.))
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(|_, cx| {
                     cx.new(|_| super::Tip("Adds it and sends every draft to your agent's chat"))
                         .into()
@@ -1857,6 +1865,7 @@ impl Workspace {
             discussion::button("reply-cancel", "Cancel", None, Kind::Quiet)
                 .h(px(28.))
                 .px(px(10.))
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(|_, cx| cx.new(|_| super::Tip("Esc")).into())
                 .on_click(move |_, _, cx| {
                     cancel.update(cx, |this, cx| this.cancel_comment(cx)).ok();
@@ -1980,6 +1989,7 @@ impl Workspace {
                         .size(px(15.))
                         .text_color(theme::muted()),
                 )
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(move |_, cx| cx.new(|_| super::Tip(tip)).into())
                 .on_click(move |_, _, cx| {
                     this.update(cx, |this, cx| this.apply_helper(h, cx)).ok();
@@ -2027,6 +2037,7 @@ impl Workspace {
                                 theme::muted()
                             }),
                     )
+                    .tooltip_show_delay(crate::ui::hover::LONG)
                     .tooltip(|_, cx| cx.new(|_| super::Tip("Preview  ⌘⇧P")).into())
                     .on_click(move |_, _, cx| {
                         toggle.update(cx, |this, cx| this.toggle_preview(cx)).ok();

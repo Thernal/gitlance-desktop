@@ -248,6 +248,7 @@ impl Workspace {
                 .when(on, |s| s.bg(theme::selected()))
                 .cursor_pointer()
                 .hover(|s| s.bg(theme::hover()))
+                .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(move |_, cx| cx.new(|_| super::Tip(tip)).into())
                 .child(label)
         };
