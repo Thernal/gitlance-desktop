@@ -1,163 +1,366 @@
-//! One Dark for the window chrome; code colors live in `crate::highlight::palette`.
-//!
-//! Each colour names the token it mirrors in `../Design/tokens.css`, the map themes will be read through.
+//! The colours the window draws with, read from the theme in use (#12, `crate::themes`): each
+//! function names the token it reads from `../Design/tokens.css`'s theme layer. The window theme
+//! gives the chrome; the code theme (the window's, unless Settings → Appearance → Code picks
+//! another) gives the diff's surface, its tints and the syntax colours.
 
-use gpui::{Hsla, Rgba, rgb, rgba};
+use crate::themes::{self, T, TOKENS, Theme};
+use gpui::{Hsla, Rgba, rgba};
+use std::sync::RwLock;
 
 pub const UI_FONT: &str = ".SystemUIFont";
 pub const CODE_FONT: &str = "Menlo";
 
+/// The tokens in use, and the code's own text colour after them.
+type Colors = [u32; TOKENS.len() + 1];
+
+static CURRENT: RwLock<Option<Colors>> = RwLock::new(None);
+
+/// Draws with `window`, its code layer from `code` when given.
+pub fn set(window: &Theme, code: Option<&Theme>) {
+    let code = code.unwrap_or(window);
+    let mut colors = [0u32; TOKENS.len() + 1];
+    for (i, c) in colors.iter_mut().enumerate().take(TOKENS.len()) {
+        *c = if themes::is_code(i) {
+            code.colors[i]
+        } else {
+            window.colors[i]
+        };
+    }
+    colors[TOKENS.len()] = code.get(T::Text1);
+    if let Ok(mut current) = CURRENT.write() {
+        *current = Some(colors);
+    }
+}
+
+fn raw(i: usize) -> u32 {
+    if let Ok(current) = CURRENT.read()
+        && let Some(colors) = current.as_ref()
+    {
+        return colors[i];
+    }
+    // Before a theme is set (tests): One Dark.
+    static ONE_DARK: std::sync::OnceLock<Colors> = std::sync::OnceLock::new();
+    ONE_DARK.get_or_init(|| {
+        let one = &themes::resolve(&[])[0];
+        let mut c = [0u32; TOKENS.len() + 1];
+        c[..TOKENS.len()].copy_from_slice(&one.colors);
+        c[TOKENS.len()] = one.get(T::Text1);
+        c
+    })[i]
+}
+
+fn get(t: T) -> Rgba {
+    rgba(raw(t as usize))
+}
+
+/// Token `t` at `alpha` (0–255) over whatever is under it.
+fn with_alpha(t: T, alpha: u32) -> Rgba {
+    rgba(raw(t as usize) & 0xffffff00 | alpha)
+}
+
+/// The code's own text. `content-01` of the code theme
+pub fn code_text() -> Rgba {
+    rgba(raw(TOKENS.len()))
+}
+
 /// The window behind the islands. `--background-01`
 pub fn base() -> Rgba {
-    rgb(0x17191e)
+    get(T::Bg1)
 }
 
 /// List islands; the diff island uses `editor`. `--background-02`
 pub fn panel() -> Rgba {
-    rgb(0x21252b)
+    get(T::Bg2)
 }
 
 /// `--border-01`
 pub fn island_border() -> Rgba {
-    rgba(0xffffff0a)
+    get(T::Border1)
 }
 
 /// `--background-03`
 pub fn editor() -> Rgba {
-    rgb(crate::highlight::palette::BACKGROUND)
+    get(T::Bg3)
 }
 
 /// `--border-02`
 pub fn border() -> Rgba {
-    rgb(0x181a1f)
+    get(T::Border2)
 }
 
 /// `--background-04`
 pub fn hover() -> Rgba {
-    rgb(0x2c313a)
+    get(T::Bg4)
 }
 
 /// `--interactive-03-hover`
 pub fn selected() -> Rgba {
-    rgb(0x3a3f4b)
+    get(T::FillHover)
 }
 
 /// `--content-01`
 pub fn text() -> Rgba {
-    rgb(crate::highlight::palette::FOREGROUND)
+    get(T::Text1)
 }
 
 /// `--content-02`
 pub fn muted() -> Rgba {
-    rgb(0x9da3ae)
+    get(T::Text2)
 }
 
 /// `--content-03`, 4.5:1 on every surface.
 pub fn faint() -> Rgba {
-    rgb(0x979ea9)
+    get(T::Text3)
 }
 
 /// `--interactive-01`
 pub fn accent() -> Rgba {
-    rgb(crate::highlight::palette::BLUE)
+    get(T::Accent)
 }
 
 /// `--success`
 pub fn added() -> Rgba {
-    rgb(crate::highlight::palette::GREEN)
+    get(T::Success)
 }
 
 /// Red ink — deletions, errors, Request changes. `--danger`: One Dark's red raised to 4.5:1; the
 /// diff's red tints stay One Dark's (`removed_line`, `removed_word`, `removed_gutter`).
 pub fn removed() -> Rgba {
-    rgb(0xec7f87)
+    get(T::Danger)
 }
 
-/// `--brand-yellow-500`
+/// `--code-05`
 pub fn renamed() -> Rgba {
-    rgb(crate::highlight::palette::YELLOW)
+    get(T::Code5)
 }
 
 /// `--attention`
 pub fn warning() -> Rgba {
-    rgb(crate::highlight::palette::ORANGE)
+    get(T::Attention)
 }
 
 /// The tint behind a search match. `--attention-bg`
 pub fn warning_bg() -> Rgba {
-    rgba(0xd19a6633)
+    get(T::AttentionBg)
 }
 
 /// The focus ring of a text field. `--focus-ring`
 pub fn focus() -> Rgba {
-    rgb(crate::highlight::palette::PURPLE)
+    get(T::Focus)
 }
 
 /// Comments for a coding agent, apart from the focus ring and the code's keyword purple. `--agent`
 pub fn agent() -> Rgba {
-    rgb(0xd18ee6)
+    get(T::Agent)
 }
 
 /// The tint behind an agent note's pill.
 pub fn agent_bg() -> Rgba {
-    rgba(0xd18ee62e)
+    with_alpha(T::Agent, 0x2e)
 }
 
 /// The tint behind a "Resolved" chip. `--success-bg`
 pub fn added_bg() -> Rgba {
-    rgba(0x98c37924)
+    get(T::SuccessBg)
 }
 
 /// The tint behind the new-commits pill. `--info-bg`
 pub fn info_bg() -> Rgba {
-    rgba(0x61afef24)
+    get(T::InfoBg)
 }
 
 /// The tint behind selected lines of a diff.
 pub fn selection() -> Rgba {
-    rgba(0x61afef38)
+    with_alpha(T::Accent, 0x38)
 }
 
 /// A pane splitter under the pointer or being dragged.
 pub fn splitter() -> Rgba {
-    rgba(0x61afef99)
+    with_alpha(T::Accent, 0x99)
 }
 
 /// `--diff-added-01`
 pub fn added_line() -> Rgba {
-    rgba(0x98c3791f)
+    get(T::Added1)
 }
 
 /// `--diff-removed-01`
 pub fn removed_line() -> Rgba {
-    rgba(0xe06c751f)
+    get(T::Removed1)
 }
 
 pub fn scrollbar() -> Rgba {
-    rgba(0xabb2bf40)
+    with_alpha(T::Text1, 0x40)
 }
 
 /// A changed token inside an added line. `--diff-added-03`
 pub fn added_word() -> Rgba {
-    rgba(0x98c3792e)
+    get(T::Added3)
 }
 
 /// A changed token inside a removed line. `--diff-removed-03`
 pub fn removed_word() -> Rgba {
-    rgba(0xe06c752e)
+    get(T::Removed3)
 }
 
 /// `--diff-added-02`
 pub fn added_gutter() -> Rgba {
-    rgba(0x98c37933)
+    get(T::Added2)
 }
 
 /// `--diff-removed-02`
 pub fn removed_gutter() -> Rgba {
-    rgba(0xe06c7533)
+    get(T::Removed2)
 }
 
-/// A code colour of `crate::highlight::palette`.
-pub fn code(color: u32) -> Hsla {
-    rgb(color).into()
+/// The colour of code drawn in `role` (`crate::highlight::Span::color`): `code-01` … `code-08`,
+/// 0 the code's text.
+pub fn code(role: u32) -> Hsla {
+    match role {
+        1..=8 => rgba(raw(T::Code1 as usize + role as usize - 1)).into(),
+        _ => code_text().into(),
+    }
+}
+
+/// The tint behind a removed line's pill or a failed check. `--danger-bg`
+pub fn danger_bg() -> Rgba {
+    get(T::DangerBg)
+}
+
+/// Ink on the accent (a filled button). `--content-05`
+pub fn on_accent() -> Rgba {
+    get(T::Text5)
+}
+
+// ---- the themes found and the ones chosen ---------------------------------------------------
+
+/// Which themes are in use (`theme.txt`: the window's id, then the code's or nothing — the code
+/// follows the window).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Choice {
+    pub window: String,
+    pub code: Option<String>,
+}
+
+impl Choice {
+    fn read() -> Self {
+        let text = crate::storage::read("theme.txt");
+        let mut lines = text.lines().map(str::trim);
+        let window = lines
+            .next()
+            .filter(|l| !l.is_empty())
+            .unwrap_or("one-dark")
+            .to_owned();
+        let code = lines.next().filter(|l| !l.is_empty()).map(str::to_owned);
+        Self { window, code }
+    }
+
+    fn save(&self) {
+        crate::storage::save(
+            "theme.txt",
+            format!("{}\n{}\n", self.window, self.code.as_deref().unwrap_or("")),
+        );
+    }
+}
+
+struct Registry {
+    themes: Vec<Theme>,
+    choice: Choice,
+    /// The themes folder as last read.
+    stamp: u128,
+}
+
+static REGISTRY: RwLock<Option<Registry>> = RwLock::new(None);
+
+/// Reads the themes (built in and the folder's) and the choice, and draws with it.
+pub fn load() {
+    let registry = Registry {
+        themes: themes::resolve(&themes::read_folder()),
+        choice: Choice::read(),
+        stamp: themes::folder_stamp(),
+    };
+    apply(&registry, &registry.choice);
+    if let Ok(mut r) = REGISTRY.write() {
+        *r = Some(registry);
+    }
+}
+
+fn with<R>(f: impl FnOnce(&Registry) -> R) -> Option<R> {
+    REGISTRY.read().ok()?.as_ref().map(f)
+}
+
+/// Every theme: the built-in ones, then the user's.
+pub fn all() -> Vec<Theme> {
+    with(|r| r.themes.clone()).unwrap_or_else(|| themes::resolve(&[]))
+}
+
+/// Theme `id`, if there is one.
+pub fn find(id: &str) -> Option<Theme> {
+    all().into_iter().find(|t| t.id == id)
+}
+
+/// The themes chosen (not one being tried).
+pub fn choice() -> Choice {
+    with(|r| r.choice.clone()).unwrap_or_else(|| Choice {
+        window: "one-dark".into(),
+        code: None,
+    })
+}
+
+fn apply(registry: &Registry, choice: &Choice) {
+    let find = |id: &str| registry.themes.iter().find(|t| t.id == id);
+    let window = find(&choice.window).unwrap_or(&registry.themes[0]);
+    let code = choice.code.as_deref().and_then(find);
+    set(window, code);
+}
+
+/// Draws with `choice` and keeps it.
+pub fn choose(choice: Choice) {
+    choice.save();
+    if let Ok(mut r) = REGISTRY.write()
+        && let Some(r) = r.as_mut()
+    {
+        r.choice = choice;
+        apply(r, &r.choice);
+    }
+}
+
+/// Draws with `choice` for now (⌘K → Theme, the editor), without keeping it.
+pub fn preview(choice: &Choice) {
+    with(|r| apply(r, choice));
+}
+
+/// Draws with `theme` itself, as it is being edited.
+pub fn preview_theme(theme: &Theme) {
+    let code = choice().code.and_then(|id| find(&id));
+    set(theme, code.as_ref());
+}
+
+/// Draws with the chosen themes again, after a preview.
+pub fn restore() {
+    with(|r| apply(r, &r.choice));
+}
+
+/// Reads the themes folder again when it changed; true when it did.
+pub fn reload_if_changed() -> bool {
+    let stamp = themes::folder_stamp();
+    if with(|r| r.stamp == stamp).unwrap_or(true) {
+        return false;
+    }
+    reload();
+    true
+}
+
+/// Reads the themes folder again (after the editor saved a theme).
+pub fn reload() {
+    let choice = choice();
+    let registry = Registry {
+        themes: themes::resolve(&themes::read_folder()),
+        choice,
+        stamp: themes::folder_stamp(),
+    };
+    apply(&registry, &registry.choice);
+    if let Ok(mut r) = REGISTRY.write() {
+        *r = Some(registry);
+    }
 }

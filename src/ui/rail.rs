@@ -41,14 +41,12 @@ pub fn initials(name: &str) -> String {
     letters.to_uppercase()
 }
 
-/// A colour of its own per repository name, from the code palette.
+/// A colour of its own per repository name, from the theme's code colours.
 pub fn hue(name: &str) -> Rgba {
-    use crate::highlight::palette::*;
-    let hues = [GREEN, BLUE, KEYWORD, YELLOW, CYAN, ORANGE, MEMBER];
     let sum = name
         .bytes()
         .fold(0usize, |a, b| a.wrapping_mul(31).wrapping_add(b as usize));
-    gpui::rgb(hues[sum % hues.len()])
+    theme::code([3, 2, 1, 5, 8, 4, 7][sum % 7]).into()
 }
 
 /// The rounded square with a project's initials on a tint of its colour.

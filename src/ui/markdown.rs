@@ -4,7 +4,7 @@
 
 use super::px;
 use super::theme;
-use crate::highlight::{self, palette};
+use crate::highlight;
 use crate::markdown::{self, Block, Helper, Inline, Mark};
 use gpui::{
     AnyElement, App, Div, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText,
@@ -548,7 +548,7 @@ fn code_block(lang: &str, text: &str, ctx: &mut Ctx) -> AnyElement {
                 .font_family(theme::CODE_FONT)
                 .text_size(px(11.5))
                 .line_height(px(16.))
-                .text_color(theme::code(palette::FOREGROUND))
+                .text_color(theme::code_text())
                 .children(lines),
         )
         .into_any_element()

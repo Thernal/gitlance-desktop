@@ -399,7 +399,7 @@ fn code(
             to_original(&map.0, &map.1, expanded)
         })
     };
-    let line = div().pl_2();
+    let line = div().pl_2().text_color(theme::code_text());
     let line = if style.wrap {
         line.child(text)
     } else {

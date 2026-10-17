@@ -780,6 +780,10 @@ impl Render for Workspace {
         words::set(self.web.as_ref().is_some_and(|w| w.github));
         markdown::set_me(self.requests.login.as_deref());
         self.take_error(cx);
+        // Settings closed (esc, Done, a place) while a theme was edited: its preview ends too.
+        if !self.settings_open && self.theme_edit.is_some() {
+            self.close_theme_edit(cx);
+        }
         let title = match &self.root {
             Some(root) => format!("GitLance — {}", root.display()),
             None => "GitLance".to_owned(),
@@ -865,6 +869,11 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_unified))
             .on_action(cx.listener(Self::cycle_mode))
             .on_action(cx.listener(|this, _: &ToggleRendered, _, cx| this.toggle_page_source(cx)))
+            .on_action(
+                cx.listener(|this, _: &PickTheme, _, cx| {
+                    this.open_palette(palette::Kind::Theme, cx)
+                }),
+            )
             .on_action(cx.listener(Self::set_lines))
             .on_action(cx.listener(Self::set_words))
             .on_action(cx.listener(Self::set_structural))

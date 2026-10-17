@@ -305,6 +305,7 @@ impl Workspace {
                 },
             ),
             Field::Keys => (&self.keys_filter, input::Look::default()),
+            Field::ThemeValue => (&self.theme_value, input::Look::default()),
         };
         div()
             .id(id)
@@ -355,11 +356,26 @@ impl Workspace {
         let Some(field) = self.field else {
             return false;
         };
+        if field == Field::ThemeValue {
+            match input::edit(
+                &mut self.theme_value,
+                &mut self.field_edit,
+                &event.keystroke,
+                cx,
+            ) {
+                Edit::Changed => self.theme_value_changed(cx),
+                Edit::Enter { .. } | Edit::Escape => self.field = None,
+                Edit::Selected | Edit::Ignored => {}
+            }
+            cx.notify();
+            return true;
+        }
         let text = match field {
             Field::Branches => &mut self.bfilter,
             Field::Files => &mut self.pfilter,
             Field::Token => &mut self.token_input,
             Field::Keys => &mut self.keys_filter,
+            Field::ThemeValue => &mut self.theme_value,
         };
         match input::edit(text, &mut self.field_edit, &event.keystroke, cx) {
             Edit::Escape => {
@@ -390,6 +406,8 @@ pub enum Field {
     Token,
     /// The filter of Settings → Keyboard.
     Keys,
+    /// The value of a token in the theme editor (Settings → Appearance).
+    ThemeValue,
 }
 
 // ---- changed files ----------------------------------------------------------------------

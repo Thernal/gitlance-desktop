@@ -2,6 +2,7 @@
 
 mod agent;
 mod annotate;
+mod appearance;
 mod bookmarks;
 mod comments;
 mod complete;
@@ -110,6 +111,7 @@ actions!(
         ToggleExpandAll,
         ToggleRichComments,
         ToggleRendered,
+        PickTheme,
         LeaveRequest,
         ToggleAllReviewed,
         NextRequest,
@@ -371,6 +373,7 @@ pub fn run(path: Option<PathBuf>) {
         .with_assets(icons::Icons)
         .run(move |cx: &mut App| {
             keymap::install(default_bindings(), cx);
+            theme::load();
             if !cfg!(feature = "snapshot") || std::env::var_os("GITLANCE_SNAPSHOT").is_none() {
                 crate::platform::set_icon();
             }
@@ -571,6 +574,33 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
         if let Ok(view) = std::env::var("GITLANCE_SNAPSHOT_VIEW") {
             ws.update(cx, |this, cx| {
                 for name in view.split(',') {
+                    // Themes (#12), not kept: `theme:paper`, `code-theme:darcula`, `theme-edit:night`.
+                    if let Some(id) = name.trim().strip_prefix("theme:") {
+                        let mut choice = theme::choice();
+                        choice.window = id.to_owned();
+                        theme::preview(&choice);
+                        continue;
+                    }
+                    if let Some(id) = name.trim().strip_prefix("code-theme:") {
+                        let mut choice = theme::choice();
+                        choice.code = Some(id.to_owned());
+                        theme::preview(&choice);
+                        continue;
+                    }
+                    if let Some(id) = name.trim().strip_prefix("theme-edit:") {
+                        this.settings_open = true;
+                        this.settings_section = settings::Section::Appearance;
+                        this.start_theme_edit(id, cx);
+                        continue;
+                    }
+                    if name.trim() == "theme-raise" {
+                        this.raise_all(cx);
+                        continue;
+                    }
+                    if name.trim() == "theme-palette" {
+                        this.open_palette(palette::Kind::Theme, cx);
+                        continue;
+                    }
                     let opt = match name.trim() {
                         "requests" => {
                             this.requests.side = requests::Side::Requests;
@@ -1072,6 +1102,10 @@ pub struct Workspace {
     images: image_view::Images,
     /// How changed documents are read (`md_page.rs`).
     page: md_page::Page,
+    /// The theme open in Settings → Appearance's editor (`appearance.rs`).
+    theme_edit: Option<appearance::ThemeEdit>,
+    /// The value of its selected token, as typed.
+    theme_value: String,
     /// What Settings → Keyboard is filtered by.
     keys_filter: String,
     /// The part of Settings shown.
@@ -1300,6 +1334,8 @@ impl Workspace {
             keys_filter: String::new(),
             images: Default::default(),
             page: Default::default(),
+            theme_edit: None,
+            theme_value: String::new(),
             pending_link: None,
             spot: None,
             window: window.window_handle(),

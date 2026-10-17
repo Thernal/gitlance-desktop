@@ -1,0 +1,585 @@
+//! Themes as data (#12, Design `docs/specs/themes.md`): a theme is the colours of the token layer of
+//! `tokens.css` by name, read from JSON — the five built-in themes ship inside the app
+//! (`assets/themes/`), a user's themes are the `.json` files in the data folder's `themes/`. A
+//! theme `extends` another (One Dark by default) and sets only what differs; what cannot be read is
+//! listed as its problems, and the rest still loads. `ui::theme` draws with the one in use.
+
+use serde_json::{Map, Value};
+use std::path::PathBuf;
+
+/// The tokens a theme sets, in the editor's order: (name, group, what it is for).
+pub const TOKENS: [(&str, &str, &str); 41] = [
+    ("background-01", "Surfaces", "the window"),
+    ("background-02", "Surfaces", "lists, panels"),
+    ("background-03", "Surfaces", "the diff"),
+    ("background-04", "Surfaces", "a hovered row"),
+    ("content-01", "Text", "text, code"),
+    ("content-02", "Text", "secondary text"),
+    ("content-03", "Text", "labels, line numbers"),
+    ("content-05", "Text", "on the accent"),
+    ("interactive-01", "Accent", "links, the accent"),
+    (
+        "interactive-01-hover",
+        "Accent",
+        "the accent under the pointer",
+    ),
+    ("interactive-01-press", "Accent", "the accent pressed"),
+    ("interactive-03", "Accent", "a quiet fill"),
+    ("interactive-03-hover", "Accent", "a selected row"),
+    ("interactive-disabled", "Accent", "a control that is off"),
+    ("border-01", "Borders", "a pane's edge"),
+    ("border-02", "Borders", "between the diff's halves"),
+    ("border-03", "Borders", "an accent edge"),
+    ("success", "Status", "added, passed"),
+    ("danger", "Status", "removed, failed"),
+    ("attention", "Status", "running, a match"),
+    ("info", "Status", "information"),
+    ("success-bg", "Status", "behind success"),
+    ("danger-bg", "Status", "behind danger"),
+    ("attention-bg", "Status", "behind attention"),
+    ("info-bg", "Status", "behind information"),
+    ("focus-ring", "Status", "the focused pane and field"),
+    ("agent", "Status", "comments for an agent"),
+    ("diff-added-01", "Diff", "an added line"),
+    ("diff-added-02", "Diff", "an added line's gutter"),
+    ("diff-added-03", "Diff", "an added word"),
+    ("diff-removed-01", "Diff", "a removed line"),
+    ("diff-removed-02", "Diff", "a removed line's gutter"),
+    ("diff-removed-03", "Diff", "a removed word"),
+    ("code-01", "Code", "keyword"),
+    ("code-02", "Code", "function"),
+    ("code-03", "Code", "string"),
+    ("code-04", "Code", "number, constant"),
+    ("code-05", "Code", "type"),
+    ("code-06", "Code", "comment"),
+    ("code-07", "Code", "member, tag"),
+    ("code-08", "Code", "operator, escape"),
+];
+
+/// A token's place in `TOKENS`. Every token of the layer has one, drawn with or not yet.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+pub enum T {
+    Bg1,
+    Bg2,
+    Bg3,
+    Bg4,
+    Text1,
+    Text2,
+    Text3,
+    Text5,
+    Accent,
+    AccentHover,
+    AccentPress,
+    Fill,
+    FillHover,
+    Disabled,
+    Border1,
+    Border2,
+    Border3,
+    Success,
+    Danger,
+    Attention,
+    Info,
+    SuccessBg,
+    DangerBg,
+    AttentionBg,
+    InfoBg,
+    Focus,
+    Agent,
+    Added1,
+    Added2,
+    Added3,
+    Removed1,
+    Removed2,
+    Removed3,
+    Code1,
+    Code2,
+    Code3,
+    Code4,
+    Code5,
+    Code6,
+    Code7,
+    Code8,
+}
+
+/// The tokens the Code choice brings (#12 D): the syntax colours, the diff's tints and the surface
+/// and text they are drawn on.
+pub fn is_code(i: usize) -> bool {
+    i == T::Bg3 as usize || i >= T::Added1 as usize
+}
+
+/// The tokens that are text, each read on every surface: they need 4.5:1.
+pub const TEXT: [T; 16] = [
+    T::Text1,
+    T::Text2,
+    T::Text3,
+    T::Accent,
+    T::Success,
+    T::Danger,
+    T::Attention,
+    T::Agent,
+    T::Code1,
+    T::Code2,
+    T::Code3,
+    T::Code4,
+    T::Code5,
+    T::Code6,
+    T::Code7,
+    T::Code8,
+];
+
+/// The surfaces text is read on.
+pub const SURFACES: [T; 4] = [T::Bg1, T::Bg2, T::Bg3, T::Bg4];
+
+pub fn index(name: &str) -> Option<usize> {
+    TOKENS.iter().position(|(n, _, _)| *n == name)
+}
+
+/// The built-in themes: (id, file).
+const BUILT_IN: [(&str, &str); 5] = [
+    ("one-dark", include_str!("../assets/themes/one-dark.json")),
+    ("graphite", include_str!("../assets/themes/graphite.json")),
+    ("darcula", include_str!("../assets/themes/darcula.json")),
+    ("night", include_str!("../assets/themes/night.json")),
+    ("paper", include_str!("../assets/themes/paper.json")),
+];
+
+/// A theme ready to draw with: every token, 0xRRGGBBAA.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Theme {
+    /// Its id: the built-in's, or the file's `name`.
+    pub id: String,
+    /// As shown: "One Dark", or the user's name.
+    pub label: String,
+    pub colors: [u32; TOKENS.len()],
+    /// The panes it prefers (`islands`); the setting wins.
+    pub islands: Option<bool>,
+    /// Shipped with the app.
+    pub built_in: bool,
+    /// The theme it extends.
+    pub extends: Option<String>,
+    /// The tokens it sets itself (the rest come from `extends`).
+    pub own: Vec<usize>,
+    /// What could not be read, and text under 4.5:1.
+    pub problems: Vec<String>,
+    /// The file it was read from (a user theme).
+    pub file: Option<PathBuf>,
+}
+
+impl Theme {
+    pub fn get(&self, t: T) -> u32 {
+        self.colors[t as usize]
+    }
+
+    /// Light: its window is lighter than its text.
+    pub fn light(&self) -> bool {
+        luminance(self.get(T::Bg1)) > luminance(self.get(T::Text1))
+    }
+
+    /// The theme as a JSON file: every token when `full`, else the ones it sets itself.
+    pub fn to_json(&self, full: bool) -> String {
+        let mut colors = Map::new();
+        for (i, (name, _, _)) in TOKENS.iter().enumerate() {
+            if full || self.own.contains(&i) {
+                colors.insert((*name).to_owned(), Value::String(hex(self.colors[i])));
+            }
+        }
+        let mut root = Map::new();
+        root.insert("name".into(), Value::String(self.id.clone()));
+        if !full && let Some(e) = &self.extends {
+            root.insert("extends".into(), Value::String(e.clone()));
+        }
+        if let Some(i) = self.islands {
+            root.insert("islands".into(), Value::Bool(i));
+        }
+        root.insert("colors".into(), Value::Object(colors));
+        serde_json::to_string_pretty(&Value::Object(root)).unwrap_or_default() + "\n"
+    }
+
+    /// The text tokens under 4.5:1 on some surface: (token, the lowest ratio, on which surface).
+    pub fn low_contrast(&self) -> Vec<(T, f32, T)> {
+        TEXT.iter()
+            .filter_map(|&t| {
+                let (ratio, on) = SURFACES
+                    .iter()
+                    .map(|&s| (contrast(self.get(t), self.get(s)), s))
+                    .min_by(|a, b| a.0.total_cmp(&b.0))?;
+                (ratio < 4.5).then_some((t, ratio, on))
+            })
+            .collect()
+    }
+}
+
+/// A theme file as read: its fields, before `extends` is followed.
+#[derive(Clone, Debug, Default)]
+struct Raw {
+    id: String,
+    label: String,
+    extends: Option<String>,
+    islands: Option<bool>,
+    colors: Vec<(usize, u32)>,
+    problems: Vec<String>,
+    built_in: bool,
+    file: Option<PathBuf>,
+}
+
+fn label_of(id: &str) -> String {
+    match id {
+        "one-dark" => "One Dark".into(),
+        "graphite" => "Graphite".into(),
+        "darcula" => "Darcula".into(),
+        "night" => "Night".into(),
+        "paper" => "Paper".into(),
+        other => other.to_owned(),
+    }
+}
+
+/// Reads one theme file; `fallback` names it when it has no `name`.
+fn read_raw(text: &str, fallback: &str) -> Raw {
+    let mut raw = Raw {
+        id: fallback.to_owned(),
+        label: label_of(fallback),
+        ..Raw::default()
+    };
+    let value: Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(e) => {
+            raw.problems.push(format!("Not JSON: {e}"));
+            return raw;
+        }
+    };
+    let Some(obj) = value.as_object() else {
+        raw.problems.push("Not a JSON object".into());
+        return raw;
+    };
+    if let Some(name) = obj
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|n| !n.is_empty())
+    {
+        raw.id = name.to_owned();
+        raw.label = label_of(name);
+    }
+    raw.extends = obj
+        .get("extends")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    raw.islands = obj.get("islands").and_then(Value::as_bool);
+    for key in obj.keys() {
+        if !matches!(
+            key.as_str(),
+            "name" | "extends" | "islands" | "colors" | "window" | "code"
+        ) {
+            raw.problems.push(format!("Unknown field “{key}”"));
+        }
+    }
+    if let Some(colors) = obj.get("colors") {
+        let Some(colors) = colors.as_object() else {
+            raw.problems.push("“colors” is not an object".into());
+            return raw;
+        };
+        for (name, value) in colors {
+            // Code roles (`code.parameter`) are known names; they fall back to their code token
+            // until the highlighter draws roles of its own (#13).
+            if name.starts_with("code.") {
+                continue;
+            }
+            let Some(i) = index(name) else {
+                raw.problems.push(format!("No token “{name}”"));
+                continue;
+            };
+            match value.as_str().and_then(parse_hex) {
+                Some(c) => raw.colors.push((i, c)),
+                None => raw.problems.push(format!(
+                    "{name}: “{value}” is not #rgb, #rrggbb or #rrggbbaa"
+                )),
+            }
+        }
+    }
+    raw
+}
+
+/// The built-in themes and the user's (`user`: (file, text)), each with `extends` followed.
+pub fn resolve(user: &[(PathBuf, String)]) -> Vec<Theme> {
+    let mut raws: Vec<Raw> = BUILT_IN
+        .iter()
+        .map(|(id, text)| Raw {
+            built_in: true,
+            ..read_raw(text, id)
+        })
+        .collect();
+    for (file, text) in user {
+        let stem = file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("theme")
+            .to_owned();
+        let mut raw = read_raw(text, &stem);
+        raw.file = Some(file.clone());
+        // A user theme may not take a built-in's name: it would hide it.
+        if BUILT_IN.iter().any(|(id, _)| *id == raw.id) {
+            raw.problems
+                .push(format!("“{}” is a built-in theme's name", raw.id));
+            raw.id = stem.clone();
+            raw.label = stem;
+        }
+        if raws.iter().any(|r| r.id == raw.id) {
+            raw.problems
+                .push(format!("Another theme is called “{}”", raw.id));
+            continue;
+        }
+        raws.push(raw);
+    }
+    let base = |raws: &[Raw]| raws[0].colors.clone();
+    let mut out = Vec::new();
+    for (k, raw) in raws.iter().enumerate() {
+        let mut problems = raw.problems.clone();
+        // The chain of themes it extends, nearest first; One Dark under them all.
+        let mut chain: Vec<&Raw> = vec![raw];
+        let mut next = if k == 0 {
+            None
+        } else {
+            Some(raw.extends.clone().unwrap_or_else(|| "one-dark".into()))
+        };
+        while let Some(id) = next {
+            match raws.iter().find(|r| r.id == id) {
+                Some(r) if chain.iter().any(|c| c.id == r.id) => {
+                    problems.push(format!("“extends” goes round in a circle through “{id}”"));
+                    break;
+                }
+                Some(r) => {
+                    chain.push(r);
+                    next = (r.id != "one-dark")
+                        .then(|| r.extends.clone().unwrap_or_else(|| "one-dark".into()));
+                }
+                None => {
+                    problems.push(format!("“extends”: no theme “{id}”"));
+                    chain.push(&raws[0]);
+                    break;
+                }
+            }
+        }
+        let mut colors = [0u32; TOKENS.len()];
+        for (i, c) in base(&raws) {
+            colors[i] = c;
+        }
+        let mut islands = None;
+        for r in chain.iter().rev() {
+            for &(i, c) in &r.colors {
+                colors[i] = c;
+            }
+            islands = r.islands.or(islands);
+        }
+        let mut theme = Theme {
+            id: raw.id.clone(),
+            label: raw.label.clone(),
+            colors,
+            islands,
+            built_in: raw.built_in,
+            extends: raw.extends.clone(),
+            own: raw.colors.iter().map(|(i, _)| *i).collect(),
+            problems: Vec::new(),
+            file: raw.file.clone(),
+        };
+        for (t, ratio, on) in theme.low_contrast() {
+            problems.push(format!(
+                "{} is {ratio:.1}:1 on {}; text needs 4.5:1",
+                TOKENS[t as usize].0, TOKENS[on as usize].0
+            ));
+        }
+        theme.problems = problems;
+        out.push(theme);
+    }
+    out
+}
+
+/// The folder of the user's themes.
+pub fn folder() -> Option<PathBuf> {
+    Some(crate::platform::data_dir()?.join("themes"))
+}
+
+/// Every `.json` file of the themes folder, by name.
+pub fn read_folder() -> Vec<(PathBuf, String)> {
+    let Some(dir) = folder() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<(PathBuf, String)> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        .filter_map(|p| std::fs::read_to_string(&p).ok().map(|t| (p, t)))
+        .collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files
+}
+
+/// When the themes folder last changed (its files' times, summed), to notice an edit.
+pub fn folder_stamp() -> u128 {
+    let Some(Ok(entries)) = folder().map(std::fs::read_dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter_map(|e| e.metadata().ok()?.modified().ok())
+        .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .fold(1, |a, b| a.wrapping_add(b))
+}
+
+/// `#rgb`, `#rrggbb` or `#rrggbbaa` as 0xRRGGBBAA.
+pub fn parse_hex(s: &str) -> Option<u32> {
+    let h = s.trim().strip_prefix('#')?;
+    if !h.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let v = u32::from_str_radix(h, 16).ok()?;
+    match h.len() {
+        3 => {
+            let (r, g, b) = ((v >> 8) & 0xf, (v >> 4) & 0xf, v & 0xf);
+            Some((r * 0x11) << 24 | (g * 0x11) << 16 | (b * 0x11) << 8 | 0xff)
+        }
+        6 => Some(v << 8 | 0xff),
+        8 => Some(v),
+        _ => None,
+    }
+}
+
+/// 0xRRGGBBAA as `#rrggbb`, or `#rrggbbaa` when not opaque.
+pub fn hex(c: u32) -> String {
+    if c & 0xff == 0xff {
+        format!("#{:06x}", c >> 8)
+    } else {
+        format!("#{c:08x}")
+    }
+}
+
+fn luminance(c: u32) -> f32 {
+    let ch = |shift: u32| {
+        let v = ((c >> shift) & 0xff) as f32 / 255.;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * ch(24) + 0.7152 * ch(16) + 0.0722 * ch(8)
+}
+
+/// `top` laid over `under` (opaque).
+fn over(top: u32, under: u32) -> u32 {
+    let a = (top & 0xff) as f32 / 255.;
+    let mix = |shift: u32| {
+        let t = ((top >> shift) & 0xff) as f32;
+        let u = ((under >> shift) & 0xff) as f32;
+        ((t * a + u * (1. - a)).round() as u32) << shift
+    };
+    mix(24) | mix(16) | mix(8) | 0xff
+}
+
+/// The WCAG contrast of text `ink` on `ground`.
+pub fn contrast(ink: u32, ground: u32) -> f32 {
+    let ink = over(ink, ground);
+    let (a, b) = (luminance(ink), luminance(ground));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// `ink` moved toward the text colour of `ground`'s opposite until it reads at 4.5:1 on every
+/// surface of `theme` — the editor's "Raise to 4.5:1".
+pub fn raise(theme: &Theme, ink: u32) -> u32 {
+    let worst = |c: u32| {
+        SURFACES
+            .iter()
+            .map(|&s| contrast(c, theme.get(s)))
+            .fold(f32::MAX, f32::min)
+    };
+    let target: u32 = if theme.light() {
+        0x000000ff
+    } else {
+        0xffffffff
+    };
+    let mut c = ink | 0xff;
+    for step in 1..=20 {
+        if worst(c) >= 4.5 {
+            break;
+        }
+        let k = step as f32 / 20.;
+        let mix = |shift: u32| {
+            let a = ((ink >> shift) & 0xff) as f32;
+            let b = ((target >> shift) & 0xff) as f32;
+            ((a + (b - a) * k).round() as u32) << shift
+        };
+        c = mix(24) | mix(16) | mix(8) | 0xff;
+    }
+    c
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_built_in_reads_at_four_and_a_half_to_one() {
+        for t in resolve(&[]) {
+            assert!(t.problems.is_empty(), "{}: {:?}", t.id, t.problems);
+        }
+    }
+
+    #[test]
+    fn a_user_theme_extends_and_lists_its_problems() {
+        let text = r##"{ "name": "mine", "extends": "night", "islands": false,
+            "colors": { "interactive-01": "#e5c07b", "nope": "#fff", "code-01": "blue", "code.parameter": "#d19a66" } }"##;
+        let themes = resolve(&[(PathBuf::from("/t/mine.json"), text.into())]);
+        let night = themes.iter().find(|t| t.id == "night").unwrap();
+        let mine = themes.iter().find(|t| t.id == "mine").unwrap();
+        assert_eq!(mine.get(T::Accent), 0xe5c07bff);
+        assert_eq!(mine.get(T::Bg1), night.get(T::Bg1));
+        assert_eq!(mine.islands, Some(false));
+        assert_eq!(mine.problems.len(), 2, "{:?}", mine.problems);
+        assert!(mine.to_json(false).contains("\"extends\": \"night\""));
+    }
+
+    #[test]
+    fn a_broken_file_or_a_circle_is_a_problem_not_a_failure() {
+        let themes = resolve(&[
+            (
+                PathBuf::from("/t/a.json"),
+                r#"{ "name": "a", "extends": "b" }"#.into(),
+            ),
+            (
+                PathBuf::from("/t/b.json"),
+                r#"{ "name": "b", "extends": "a" }"#.into(),
+            ),
+            (PathBuf::from("/t/c.json"), "{ not json".into()),
+        ]);
+        let a = themes.iter().find(|t| t.id == "a").unwrap();
+        assert!(a.problems.iter().any(|p| p.contains("circle")));
+        let c = themes.iter().find(|t| t.id == "c").unwrap();
+        assert!(c.problems[0].starts_with("Not JSON"));
+        assert_eq!(c.colors, themes[0].colors);
+    }
+
+    #[test]
+    fn hex_reads_three_six_and_eight_digits() {
+        assert_eq!(parse_hex("#fff"), Some(0xffffffff));
+        assert_eq!(parse_hex("#61afef"), Some(0x61afefff));
+        assert_eq!(parse_hex("#98c3791f"), Some(0x98c3791f));
+        assert_eq!(parse_hex("61afef"), None);
+        assert_eq!(hex(0x98c3791f), "#98c3791f");
+    }
+
+    #[test]
+    fn raising_a_dim_label_reaches_the_bar() {
+        let one = &resolve(&[])[0];
+        let raised = raise(one, 0x5c6370ff);
+        assert!(
+            SURFACES
+                .iter()
+                .all(|&s| contrast(raised, one.get(s)) >= 4.5)
+        );
+    }
+}

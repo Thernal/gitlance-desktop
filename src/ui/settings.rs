@@ -5,7 +5,7 @@ use super::diff_view::{self, chip};
 use super::px;
 use super::{GAP, ISLAND_RADIUS, Workspace, button, island, theme};
 use crate::editor::{self, Editor};
-use crate::storage::{Appearance, DiffMode, MarkStyle};
+use crate::storage::{DiffMode, MarkStyle};
 use gpui::{ClickEvent, Context, FontWeight, SharedString, div, prelude::*};
 
 impl Workspace {
@@ -162,13 +162,6 @@ impl Workspace {
                 },
             ))
         }));
-        let appearance = diff_view::group().children(Appearance::ALL.map(|a| {
-            chip(a.label(), a.label(), s.appearance == a).on_click(cx.listener(
-                move |this, _: &ClickEvent, _, cx| {
-                    this.change_settings(|this| this.settings.appearance = a, cx)
-                },
-            ))
-        }));
         let projects = diff_view::group().children(crate::storage::Projects::ALL.map(|p| {
             chip(p.label(), p.label(), super::projects() == p).on_click(cx.listener(
                 move |this, _: &ClickEvent, _, cx| {
@@ -309,23 +302,21 @@ impl Workspace {
                     rich,
                 ))
                 .into_any_element(),
-            Section::Appearance => column()
-                .child(item(
+            Section::Appearance => self.render_appearance(
+                item(
                     "Several projects",
                     "How the open repositories are shown: a rail of their marks on the left (⌘1…9 in its order, a right-click moves or closes one, a drag reorders), tabs in the title bar, or listed in the menu of places.",
                     projects,
-                ))
-                .child(item(
+                )
+                .into_any_element(),
+                item(
                     "Panes",
                     "Islands: rounded panes on the window's ground with gaps between them. Flat: square panes side by side, split by hairlines.",
                     panes,
-                ))
-                .child(item(
-                    "Light and dark",
-                    "Follow the system, or stay dark. Only the dark theme exists so far, so both look the same until the themes come.",
-                    appearance,
-                ))
+                )
                 .into_any_element(),
+                cx,
+            ),
             Section::General => column()
                 .child(item(
                     "Open files in",

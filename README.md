@@ -18,7 +18,7 @@ Early: the first milestone below is being built.
   or force-pushed, list its earlier versions and diff any two of them:
   - an unchanged base: a plain tree diff between the two versions;
   - a moved base (rebase): the two patches are compared, so upstream changes do not show up as noise.
-- Code styled in One Dark.
+- Five themes (One Dark, Graphite, Darcula, Night, Paper) and your own as JSON, with an editor that checks contrast; the code can follow the window or use another theme.
 - Diff view options, in the toolbar and the View menu, remembered between runs:
   - **Split / Unified** (⌥U) — side by side, or one column with removals above additions.
   - **Line / Structural** (⌥D) — git's line diff, or [difftastic](https://difftastic.wilfred.me.uk)'s
@@ -51,7 +51,7 @@ Rust end to end.
   pinned to the `gpui-pre` snapshot. [`gpui-component`](https://github.com/longbridge/gpui-component) joins
   when a widget (resizable panes, selects) earns it.
 - **Git:** `git2` (libgit2, vendored), read-only; the rebase-aware version diff merges in memory.
-- **Highlighting:** `syntect` with bat's syntaxes (`two-face`), in One Dark.
+- **Highlighting:** `syntect` with bat's syntaxes (`two-face`), in the theme's code colours.
 - **Structural diff:** difftastic's JSON output (`difft --display json`), optional.
 
 ## Why not an existing app

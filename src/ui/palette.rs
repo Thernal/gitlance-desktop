@@ -25,6 +25,8 @@ pub enum Kind {
     Base,
     /// Picking the second side, the first being `.0`.
     Head((String, Oid)),
+    /// The themes (#12 B): ↑↓ tries each on the whole window, ↵ keeps, esc goes back.
+    Theme,
 }
 
 #[derive(Clone, Copy)]
@@ -44,6 +46,7 @@ pub enum Cmd {
     Unified,
     CycleMode,
     Rendered,
+    Theme,
     Wrap,
     FullContext,
     Whitespace,
@@ -121,6 +124,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
         "M",
         Cmd::Rendered,
     ),
+    ("Theme — try each on the whole window", "", Cmd::Theme),
     ("Toggle wrap", "⌥Z", Cmd::Wrap),
     ("Toggle full file", "⌥E", Cmd::FullContext),
     ("Toggle ignore whitespace", "⌥W", Cmd::Whitespace),
@@ -171,6 +175,7 @@ enum Pick {
     Link(crate::links::Link),
     Command(Cmd),
     Ref(String, Oid),
+    Theme(String),
 }
 
 #[derive(Clone)]
@@ -255,7 +260,15 @@ impl Workspace {
 
     pub(super) fn open_palette(&mut self, kind: Kind, cx: &mut Context<Self>) {
         let refs = match (&kind, &self.root) {
-            (Kind::Jump | Kind::Recent | Kind::Structure | Kind::Bookmarks | Kind::Switch, _)
+            (
+                Kind::Jump
+                | Kind::Recent
+                | Kind::Structure
+                | Kind::Bookmarks
+                | Kind::Switch
+                | Kind::Theme,
+                _,
+            )
             | (_, None) => Vec::new(),
             (_, Some(root)) => Repo::open(root)
                 .and_then(|r| r.compare_refs())
@@ -267,6 +280,7 @@ impl Workspace {
         self.ctx_menu = None;
         self.repo_menu = false;
         self.reset_field_edit();
+        let theme = matches!(kind, Kind::Theme);
         self.palette = Some(Palette {
             kind,
             query: String::new(),
@@ -276,12 +290,39 @@ impl Workspace {
             refs,
         });
         self.refresh_palette();
+        // The themes open on the one in use.
+        if theme && let Some(p) = &mut self.palette {
+            let current = theme::choice().window;
+            p.at = p
+                .items
+                .iter()
+                .position(|i| matches!(&i.pick, Pick::Theme(id) if *id == current))
+                .unwrap_or(0);
+        }
         cx.notify();
     }
 
     pub(super) fn close_palette(&mut self, cx: &mut Context<Self>) {
-        if self.palette.take().is_some() {
+        if let Some(p) = self.palette.take() {
+            // A theme being tried goes back to the chosen one.
+            if matches!(p.kind, Kind::Theme) {
+                theme::restore();
+                cx.refresh_windows();
+            }
             cx.notify();
+        }
+    }
+
+    /// The theme under the selection, drawn on the whole window for now.
+    fn try_theme(&mut self, cx: &mut Context<Self>) {
+        let Some(p) = &self.palette else {
+            return;
+        };
+        if let Some(Pick::Theme(id)) = p.items.get(p.at).map(|i| &i.pick) {
+            let mut choice = theme::choice();
+            choice.window = id.clone();
+            theme::preview(&choice);
+            cx.refresh_windows();
         }
     }
 
@@ -298,6 +339,29 @@ impl Workspace {
 
     fn palette_items(&self, p: &Palette) -> Vec<Item> {
         let query = p.query.trim_start();
+        if matches!(p.kind, Kind::Theme) {
+            let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+            let current = theme::choice().window;
+            return theme::all()
+                .into_iter()
+                .filter(|t| matches(&words, &t.label))
+                .map(|t| Item {
+                    group: if t.built_in { "Themes" } else { "Your themes" },
+                    detail: if t.id == current {
+                        "current".to_owned()
+                    } else if !t.problems.is_empty() {
+                        super::plural(t.problems.len(), "problem")
+                    } else if t.light() {
+                        "light".to_owned()
+                    } else {
+                        String::new()
+                    },
+                    label: t.label,
+                    key: "",
+                    pick: Pick::Theme(t.id),
+                })
+                .collect();
+        }
         if matches!(p.kind, Kind::Bookmarks) {
             let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
             return self
@@ -551,6 +615,9 @@ impl Workspace {
             Edit::Changed => {
                 palette.at = 0;
                 self.refresh_palette();
+                if matches!(self.palette.as_ref().map(|p| &p.kind), Some(Kind::Theme)) {
+                    self.try_theme(cx);
+                }
             }
             Edit::Enter { .. } => {
                 let at = palette.at;
@@ -564,7 +631,7 @@ impl Workspace {
                     palette.query.clear();
                     self.refresh_palette();
                 } else {
-                    self.palette = None;
+                    return self.close_palette(cx);
                 }
             }
             Edit::Selected | Edit::Ignored => {}
@@ -591,6 +658,9 @@ impl Workspace {
             } else {
                 (p.at + n - 1) % n
             };
+            if matches!(p.kind, Kind::Theme) {
+                self.try_theme(cx);
+            }
             cx.notify();
         }
     }
@@ -667,6 +737,12 @@ impl Workspace {
                 cx.notify();
                 window.dispatch_action(command_action(cmd), cx);
             }
+            Pick::Theme(id) => {
+                self.palette = None;
+                let mut choice = theme::choice();
+                choice.window = id;
+                self.choose_theme(choice, cx);
+            }
         }
         cx.notify();
     }
@@ -725,9 +801,15 @@ impl Workspace {
             Kind::Switch => "Switch to a branch or a merge request   ⇥ only not reviewed",
             Kind::Base => "Compare — pick the base: a branch, a tag or a commit",
             Kind::Head(_) => "Compare — pick what to compare with it",
+            Kind::Theme => "Theme — ↑↓ tries it on the whole window, ↵ keeps, esc goes back",
         };
         let title = match &p.kind {
-            Kind::Jump | Kind::Recent | Kind::Structure | Kind::Bookmarks | Kind::Switch => None,
+            Kind::Jump
+            | Kind::Recent
+            | Kind::Structure
+            | Kind::Bookmarks
+            | Kind::Switch
+            | Kind::Theme => None,
             Kind::Base => Some("Compare · step 1 of 2".to_owned()),
             Kind::Head((name, _)) => Some(format!("Compare · {name} … ?")),
         };
@@ -875,6 +957,7 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::ExpandAll => Box::new(ToggleExpandAll),
         Cmd::RichComments => Box::new(ToggleRichComments),
         Cmd::Rendered => Box::new(ToggleRendered),
+        Cmd::Theme => Box::new(PickTheme),
         Cmd::LeaveRequest => Box::new(LeaveRequest),
         Cmd::AllReviewed => Box::new(ToggleAllReviewed),
         Cmd::NextRequest => Box::new(NextRequest),

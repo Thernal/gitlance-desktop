@@ -1,4 +1,6 @@
-//! Whole-file syntax highlighting in One Dark, split into per-line spans.
+//! Whole-file syntax highlighting, split into per-line spans. A span says which of the theme's code
+//! tokens it is drawn in (`code-01` … `code-08`), not a colour: a theme changes without highlighting
+//! again.
 
 use std::ops::Range;
 use std::path::Path;
@@ -14,27 +16,32 @@ const MAX_LINE_BYTES: usize = 4096;
 /// Files larger than this are shown unhighlighted: syntect takes seconds on them.
 const MAX_FILE_BYTES: usize = 1 << 20;
 
-/// One Dark (Atom), as 0xRRGGBB.
+/// The code tokens a span is drawn in (`--code-0N`); 0 is the code's text.
 pub mod palette {
-    pub const BACKGROUND: u32 = 0x282c34;
-    pub const FOREGROUND: u32 = 0xabb2bf;
-    pub const COMMENT: u32 = 0x9da3ae;
-    pub const GREEN: u32 = 0x98c379;
-    pub const YELLOW: u32 = 0xe5c07b;
-    pub const BLUE: u32 = 0x61afef;
-    pub const PURPLE: u32 = 0xc678dd;
-    pub const CYAN: u32 = 0x56b6c2;
-    pub const ORANGE: u32 = 0xd19a66;
-    /// Keywords and storage (`--code-01`): One Dark's purple raised to 4.5:1 on a hovered row.
-    pub const KEYWORD: u32 = 0xc97edf;
-    /// Members, properties, tags, headings (`--code-07`): One Dark's red raised to 4.5:1.
-    pub const MEMBER: u32 = 0xe8838b;
+    pub const FOREGROUND: u32 = 0;
+    /// Keywords, storage.
+    pub const KEYWORD: u32 = 1;
+    /// Functions, links.
+    pub const BLUE: u32 = 2;
+    /// Strings.
+    pub const GREEN: u32 = 3;
+    /// Numbers, constants, attributes.
+    pub const ORANGE: u32 = 4;
+    /// Types, modules.
+    pub const YELLOW: u32 = 5;
+    /// Comments.
+    pub const COMMENT: u32 = 6;
+    /// Members, properties, tags, headings.
+    pub const MEMBER: u32 = 7;
+    /// Operators, escapes.
+    pub const CYAN: u32 = 8;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span {
     /// Byte range within the line, without its line ending.
     pub range: Range<usize>,
+    /// The code token: `palette::KEYWORD` … `palette::CYAN`.
     pub color: u32,
     pub italic: bool,
 }
@@ -121,8 +128,9 @@ fn syntax_for<'a>(set: &'a SyntaxSet, path: &str, first_line: &str) -> &'a Synta
         .unwrap_or_else(|| set.find_syntax_plain_text())
 }
 
+/// The code token a style carries in its red channel (see `color`).
 fn rgb(c: Color) -> u32 {
-    (c.r as u32) << 16 | (c.g as u32) << 8 | c.b as u32
+    c.r as u32
 }
 
 fn theme() -> &'static Theme {
@@ -172,11 +180,10 @@ fn theme() -> &'static Theme {
             ("invalid", MEMBER, false),
         ];
         Theme {
-            name: Some("One Dark".into()),
+            name: Some("GitLance roles".into()),
             author: None,
             settings: ThemeSettings {
                 foreground: Some(color(FOREGROUND)),
-                background: Some(color(BACKGROUND)),
                 ..ThemeSettings::default()
             },
             scopes: rules
@@ -194,11 +201,12 @@ fn theme() -> &'static Theme {
     })
 }
 
-fn color(rgb: u32) -> Color {
+/// A code token passed through syntect as a colour: its number in the red channel.
+fn color(role: u32) -> Color {
     Color {
-        r: (rgb >> 16) as u8,
-        g: (rgb >> 8) as u8,
-        b: rgb as u8,
+        r: role as u8,
+        g: 0,
+        b: 0,
         a: 0xff,
     }
 }
@@ -208,7 +216,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rust_tokens_get_one_dark_colors() {
+    fn rust_tokens_get_their_code_tokens() {
         let lines = highlight("main.rs", "// hi\nfn main() { let s = \"x\"; }\n");
         assert_eq!(lines.len(), 2);
         assert_eq!(

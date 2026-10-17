@@ -24,6 +24,7 @@ mod storage;
 mod structural;
 mod symbols;
 mod textedit;
+mod themes;
 mod ui;
 mod watch;
 mod worddiff;
