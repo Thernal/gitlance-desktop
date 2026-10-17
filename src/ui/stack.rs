@@ -177,7 +177,10 @@ impl Workspace {
     }
 
     fn needs_rows(&self, file: &FileDiff) -> bool {
-        !file.hunks.is_empty() && !self.generated_folded(file) && !self.shows_image(file)
+        !file.hunks.is_empty()
+            && !self.generated_folded(file)
+            && !self.shows_image(file)
+            && !self.shows_page(file)
     }
 
     /// File `ix` folds by default: it is reviewed and View → Fold reviewed files is on.
@@ -660,9 +663,33 @@ impl Workspace {
             self.lay_block(b, &path, data);
             self.stack_changed(b, before);
         }
+        self.remeasure_pages();
         // Files that now fold, or no longer do (Settings → Fold generated files).
         self.sync_stack();
         self.recompute_stack_matches();
+    }
+
+    /// A document drawn as a page is one item of the list: measured again after it changed
+    /// (Split or Unified, a section opened).
+    pub(super) fn remeasure_pages(&mut self) {
+        let (Some(stack), Some(diff)) = (&self.stack, &self.diff) else {
+            return;
+        };
+        let at: Vec<usize> = stack
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(b, block)| {
+                diff.files
+                    .get(block.file)
+                    .is_some_and(|f| self.shows_page(f))
+                    && self.body(*b) == Body::Note
+            })
+            .map(|(b, _)| stack.starts[b] + 1)
+            .collect();
+        for at in at {
+            self.diff_list.splice(at..at + 1, 1);
+        }
     }
 
     // ---- folding all, finding in all ----------------------------------------------------------
@@ -810,7 +837,7 @@ impl Workspace {
         let state = self.review_state(ix);
         let active = ix == self.file;
         let first = self.stack.as_ref().and_then(|s| s.block_of(ix)) == Some(0);
-        let (fold, mark) = (this.clone(), this);
+        let (fold, mark) = (this.clone(), this.clone());
         div()
             .id(("file-header", ix))
             .w_full()
@@ -871,6 +898,7 @@ impl Workspace {
                             })
                             .child(path),
                     )
+                    .children(self.page_switch(file, true, this))
                     .child(
                         div()
                             .flex_none()
@@ -1023,6 +1051,9 @@ impl Workspace {
                 },
             ))
             .into_any_element();
+        }
+        if self.shows_page(file) {
+            return self.card_row(self.render_page(ix, this), ix, true);
         }
         if self.shows_image(file) {
             return line("An image.".to_owned())

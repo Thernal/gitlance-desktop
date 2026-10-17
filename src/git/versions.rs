@@ -212,7 +212,13 @@ pub(super) fn version_diff(
     let mut opts = diff::options(settings);
     opts.reverse(true);
     let changes = repo.diff_tree_to_index(Some(&to_tip), Some(&index), Some(&mut opts))?;
-    let mut files = diff::collect(repo, changes)?;
+    // Reversed: the old side is the rebased index, whose images are not read.
+    let sides = diff::Sides {
+        old: None,
+        new: Some(&to_tip),
+        disk: false,
+    };
+    let mut files = diff::collect(repo, changes, sides)?;
     for file in &mut files {
         if conflicts.iter().any(|c| c == file.path()) {
             file.note.get_or_insert_with(|| {

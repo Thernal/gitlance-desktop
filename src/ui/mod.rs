@@ -22,6 +22,7 @@ mod keymap;
 mod keys;
 mod lists;
 mod markdown;
+mod md_page;
 mod menu;
 mod notifications;
 mod opening;
@@ -108,6 +109,7 @@ actions!(
         ToggleOneFile,
         ToggleExpandAll,
         ToggleRichComments,
+        ToggleRendered,
         LeaveRequest,
         ToggleAllReviewed,
         NextRequest,
@@ -340,6 +342,7 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("left"), PreviousFile, Some("Workspace && !Typing")),
         KeyBinding::new(&k("right"), NextFile, Some("Workspace && !Typing")),
         KeyBinding::new(&k("w"), CycleMode, Some("Workspace && !Typing")),
+        KeyBinding::new(&k("m"), ToggleRendered, Some("Workspace && !Typing")),
         KeyBinding::new(&k("alt-u"), ToggleUnified, Some("Workspace")),
         KeyBinding::new(&k("alt-d"), CycleMode, Some("Workspace")),
         KeyBinding::new(&k("alt-z"), ToggleWrap, Some("Workspace")),
@@ -739,6 +742,12 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.open_agent_pick(cx);
                             continue;
                         }
+                        // A comment on the rendered document's third block (#11).
+                        "page-comment" => {
+                            let ix = this.file;
+                            this.page_block_comment(ix, cx);
+                            continue;
+                        }
                         // A side panel section folded (a snapshot run never saves it).
                         "fold-versions" => {
                             this.layout.fold_versions = true;
@@ -1061,6 +1070,8 @@ pub struct Workspace {
     spot: Option<goto::Spot>,
     /// How changed images are shown (`image_view.rs`).
     images: image_view::Images,
+    /// How changed documents are read (`md_page.rs`).
+    page: md_page::Page,
     /// What Settings → Keyboard is filtered by.
     keys_filter: String,
     /// The part of Settings shown.
@@ -1288,6 +1299,7 @@ impl Workspace {
             settings_section: Default::default(),
             keys_filter: String::new(),
             images: Default::default(),
+            page: Default::default(),
             pending_link: None,
             spot: None,
             window: window.window_handle(),
@@ -3151,6 +3163,13 @@ impl Workspace {
                 .text_color(theme::muted())
                 .child("No changes")
                 .into_any_element(),
+            (Some(file), _) if self.shows_page(file) => div()
+                .id("page")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(self.render_page(self.file, cx.entity().downgrade()))
+                .into_any_element(),
             (Some(file), _) if self.shows_image(file) => self.render_image(file, cx),
             (Some(file), _) if file.hunks.is_empty() => div()
                 .flex_1()
@@ -3201,6 +3220,13 @@ impl Workspace {
                     .children(
                         (self.images.source && image_view::is_svg(f))
                             .then(|| image_view::source_switch(true, cx)),
+                    )
+                    // With every file in one scroll the card's own header has it.
+                    .children(
+                        self.stack
+                            .is_none()
+                            .then(|| self.page_switch(f, false, cx.entity().downgrade()))
+                            .flatten(),
                     )
                     .children(self.render_review_chip(cx))
                     .children(

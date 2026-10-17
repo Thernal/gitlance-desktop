@@ -1,6 +1,7 @@
 //! Markdown in comments: GitLab writes discussions in it, and a comment written here may use it too.
 //! `parse` turns a body into blocks the UI draws; `apply` and `newline` are the composer's helpers,
-//! which put the markers in for the writer at the caret or around the selection.
+//! which put the markers in for the writer at the caret or around the selection. A changed `.md`
+//! file is read with `parse_lines` (each block with its source lines) and marked by `mddiff`.
 
 use crate::textedit::TextEdit;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
@@ -35,6 +36,8 @@ pub struct Item {
     /// `Some(done)` for a task list item.
     pub task: Option<bool>,
     pub blocks: Vec<Block>,
+    /// In a changed document: the item was added or removed (#11).
+    pub mark: Option<Mark>,
 }
 
 /// A run of text with its styled ranges.
@@ -42,6 +45,15 @@ pub struct Item {
 pub struct Inline {
     pub text: String,
     pub spans: Vec<Span>,
+    /// In a changed document: the words added and removed (#11).
+    pub marks: Vec<(Range<usize>, Mark)>,
+}
+
+/// What a changed document's diff says of a piece of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    Added,
+    Removed,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -58,6 +70,8 @@ pub struct Style {
     pub italic: bool,
     pub strike: bool,
     pub code: bool,
+    /// An image's alt text; its `link` is the image.
+    pub image: bool,
 }
 
 impl Inline {
@@ -107,6 +121,7 @@ struct Builder {
     bold: u32,
     italic: u32,
     strike: u32,
+    image: u32,
     links: Vec<String>,
 }
 
@@ -117,6 +132,7 @@ impl Builder {
             italic: self.italic > 0,
             strike: self.strike > 0,
             code,
+            image: self.image > 0,
         }
     }
 
@@ -193,6 +209,7 @@ impl Builder {
             Tag::Link { dest_url, .. } => self.links.push(dest_url.into_string()),
             Tag::Image { dest_url, .. } => {
                 self.links.push(dest_url.into_string());
+                self.image += 1;
                 self.text("🖼 ", false);
             }
             _ => {}
@@ -261,9 +278,51 @@ impl Builder {
             TagEnd::Emphasis => self.italic = self.italic.saturating_sub(1),
             TagEnd::Strong => self.bold = self.bold.saturating_sub(1),
             TagEnd::Strikethrough => self.strike = self.strike.saturating_sub(1),
-            TagEnd::Link | TagEnd::Image => {
+            TagEnd::Link => {
                 self.links.pop();
             }
+            TagEnd::Image => {
+                self.links.pop();
+                self.image = self.image.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+}
+
+const OPTIONS: Options = Options::ENABLE_TABLES
+    .union(Options::ENABLE_STRIKETHROUGH)
+    .union(Options::ENABLE_TASKLISTS)
+    .union(Options::ENABLE_GFM);
+
+impl Builder {
+    fn event(&mut self, event: Event<'_>) {
+        match event {
+            Event::Start(tag) => self.start(tag),
+            Event::End(tag) => self.end(tag),
+            Event::Text(t) => self.text(&t, false),
+            Event::Code(t) => self.text(&t, true),
+            Event::Html(t) => self.text(&t, false),
+            Event::InlineHtml(t) => {
+                let tag = t.trim().to_ascii_lowercase();
+                if matches!(tag.as_str(), "<br>" | "<br/>" | "<br />") {
+                    self.text("\n", false)
+                } else {
+                    self.text(&t, true)
+                }
+            }
+            Event::SoftBreak => self.text(" ", false),
+            Event::HardBreak => self.text("\n", false),
+            Event::Rule => {
+                self.close_loose();
+                self.block(Block::Rule);
+            }
+            Event::TaskListMarker(done) => {
+                if let Some(Frame::Item(item)) = self.frames.last_mut() {
+                    item.task = Some(done);
+                }
+            }
+            Event::FootnoteReference(t) => self.text(&format!("[^{t}]"), false),
             _ => {}
         }
     }
@@ -271,43 +330,93 @@ impl Builder {
 
 /// The blocks of a markdown body, GitLab-flavoured: tables, task lists and strikethrough included.
 pub fn parse(source: &str) -> Vec<Block> {
-    let options = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_GFM;
     let mut b = Builder::default();
-    for event in Parser::new_ext(source, options) {
-        match event {
-            Event::Start(tag) => b.start(tag),
-            Event::End(tag) => b.end(tag),
-            Event::Text(t) => b.text(&t, false),
-            Event::Code(t) => b.text(&t, true),
-            Event::Html(t) => b.text(&t, false),
-            Event::InlineHtml(t) => {
-                let tag = t.trim().to_ascii_lowercase();
-                if matches!(tag.as_str(), "<br>" | "<br/>" | "<br />") {
-                    b.text("\n", false)
-                } else {
-                    b.text(&t, true)
-                }
-            }
-            Event::SoftBreak => b.text(" ", false),
-            Event::HardBreak => b.text("\n", false),
-            Event::Rule => {
-                b.close_loose();
-                b.block(Block::Rule);
-            }
-            Event::TaskListMarker(done) => {
-                if let Some(Frame::Item(item)) = b.frames.last_mut() {
-                    item.task = Some(done);
-                }
-            }
-            Event::FootnoteReference(t) => b.text(&format!("[^{t}]"), false),
-            _ => {}
-        }
+    for event in Parser::new_ext(source, OPTIONS) {
+        b.event(event);
     }
     b.close_loose();
     b.root
+}
+
+/// The top-level blocks of a document, each with the source lines it takes (1-based, first and
+/// last): a changed `.md` file is compared block by block and commented on at a block's line.
+pub fn parse_lines(source: &str) -> Vec<(Block, (u32, u32))> {
+    let mut b = Builder::default();
+    let mut ranges: Vec<Range<usize>> = Vec::new();
+    let (mut depth, mut start) = (0usize, 0usize);
+    for (event, range) in Parser::new_ext(source, OPTIONS).into_offset_iter() {
+        if depth == 0 {
+            start = range.start;
+        }
+        match &event {
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        let before = b.root.len();
+        b.event(event);
+        ranges.extend((before..b.root.len()).map(|_| start..range.end));
+    }
+    let before = b.root.len();
+    b.close_loose();
+    ranges.extend((before..b.root.len()).map(|_| start..source.len()));
+    let line = |at: usize| source[..at.min(source.len())].matches('\n').count() as u32 + 1;
+    b.root
+        .into_iter()
+        .zip(ranges)
+        .map(|(block, r)| {
+            // A list's range takes the blank line after it.
+            let end = r.start + source[r.clone()].trim_end().len();
+            let first = line(r.start);
+            (block, (first, line(end.saturating_sub(1)).max(first)))
+        })
+        .collect()
+}
+
+/// A file read as a document: `.md` and `.markdown` (#11).
+pub fn is_document(path: &str) -> bool {
+    path.rsplit_once('.')
+        .is_some_and(|(_, ext)| matches!(ext.to_ascii_lowercase().as_str(), "md" | "markdown"))
+}
+
+/// Where the images of a document point, as written.
+pub fn images(source: &str) -> Vec<String> {
+    Parser::new_ext(source, OPTIONS)
+        .filter_map(|e| match e {
+            Event::Start(Tag::Image { dest_url, .. }) => Some(dest_url.into_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The repository path an image link `src` of document `doc` names: relative to the document's
+/// folder, or to the root when it starts with `/`. None for a web address or a path out of the
+/// repository.
+pub fn local_path(doc: &str, src: &str) -> Option<String> {
+    let src = src.split(['?', '#']).next().unwrap_or_default().trim();
+    if src.is_empty() || src.contains("://") || src.starts_with("//") || src.contains(':') {
+        return None;
+    }
+    let src = src.replace("%20", " ");
+    let mut parts: Vec<&str> = Vec::new();
+    if !src.starts_with('/') {
+        parts.extend(
+            doc.rsplit_once('/')
+                .map(|(dir, _)| dir.split('/'))
+                .into_iter()
+                .flatten(),
+        );
+    }
+    for part in src.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            p => parts.push(p),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 /// Does `body` use markdown beyond plain paragraphs? Plain text needs no Rich/Raw switch.
@@ -628,6 +737,35 @@ mod tests {
             matches!(&blocks[4], Block::Table { head, rows } if head.len() == 2 && rows.len() == 1)
         );
         assert_eq!(blocks[5], Block::Rule);
+    }
+
+    #[test]
+    fn blocks_know_their_lines() {
+        let src = "# Title\n\nOne\ntwo\n\n- a\n- b\n\n---\n";
+        let lines: Vec<(u32, u32)> = parse_lines(src).into_iter().map(|(_, l)| l).collect();
+        assert_eq!(lines, [(1, 1), (3, 4), (6, 7), (9, 9)]);
+    }
+
+    #[test]
+    fn an_image_path_is_read_from_the_document_folder() {
+        assert_eq!(
+            local_path("docs/a.md", "img/x.png").as_deref(),
+            Some("docs/img/x.png")
+        );
+        assert_eq!(
+            local_path("docs/a.md", "../logo.svg").as_deref(),
+            Some("logo.svg")
+        );
+        assert_eq!(
+            local_path("docs/a.md", "/assets/b.png?raw=1").as_deref(),
+            Some("assets/b.png")
+        );
+        assert_eq!(local_path("README.md", "../up.png"), None);
+        assert_eq!(local_path("README.md", "https://x.y/a.png"), None);
+        assert_eq!(
+            images("![logo](docs/logo.png) and ![](b.gif)"),
+            ["docs/logo.png", "b.gif"]
+        );
     }
 
     #[test]

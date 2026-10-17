@@ -5,15 +5,20 @@
 use super::px;
 use super::theme;
 use crate::highlight::{self, palette};
-use crate::markdown::{self, Block, Helper, Inline};
+use crate::markdown::{self, Block, Helper, Inline, Mark};
 use gpui::{
     AnyElement, App, Div, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText,
     MouseButton, SharedString, StrikethroughStyle, StyledText, TextLayout, UnderlineStyle, div,
     prelude::*,
 };
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
+
+/// The images a document draws, by the path it writes: the decoded image and its size.
+pub type Pictures = HashMap<String, (Arc<gpui::Image>, Option<(u32, u32)>)>;
 
 /// A selection in the text of one comment. The comment's text blocks (paragraphs, headings, list
 /// items, lines of code) are numbered in reading order; an end is (block, byte in it).
@@ -125,6 +130,7 @@ pub fn body(
         sel,
         blocks: 0,
         texts: Rc::default(),
+        doc: None,
     };
     let blocks = rich.then(|| markdown::parse(text));
     match blocks.filter(|b| markdown::is_rich(b)) {
@@ -135,6 +141,25 @@ pub fn body(
             text_block(styled.into_any_element(), layout, text, &mut ctx)
         }
     }
+}
+
+/// One block of a changed document (#11), drawn at a page's sizes: headings as a README has them,
+/// images from `pictures`, the diff's marks on words and list items.
+pub fn doc_block(
+    block: &Block,
+    key: impl Into<SharedString>,
+    pictures: Rc<Pictures>,
+) -> AnyElement {
+    let mut ctx = Ctx {
+        key: key.into(),
+        next: 0,
+        base: None,
+        sel: None,
+        blocks: 0,
+        texts: Rc::default(),
+        doc: Some(pictures),
+    };
+    self::block(block, &mut ctx)
 }
 
 /// Does `text` look different as markdown? Only then is the Rich/Raw switch worth showing.
@@ -150,6 +175,8 @@ struct Ctx {
     /// Text blocks drawn so far: the next one's number.
     blocks: usize,
     texts: Rc<RefCell<Vec<String>>>,
+    /// Drawn as a page (a changed document), with its images.
+    doc: Option<Rc<Pictures>>,
 }
 
 /// A block of text that can be selected: numbered, its selection painted under it, the mouse
@@ -263,13 +290,84 @@ fn blocks_of(blocks: &[Block], ctx: &mut Ctx) -> Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(6.))
+        .gap(px(if ctx.doc.is_some() { 10. } else { 6. }))
         .children(blocks.iter().map(|b| block(b, ctx)))
 }
 
+/// A paragraph of nothing but images, in a document: the images drawn, at most a column wide.
+fn pictures(i: &Inline, ctx: &Ctx) -> Option<AnyElement> {
+    let pictures = ctx.doc.as_ref()?;
+    let images: Vec<&markdown::Span> = i.spans.iter().filter(|s| s.style.image).collect();
+    let covered = |at: usize| images.iter().any(|s| s.range.contains(&at));
+    if images.is_empty()
+        || i.text
+            .char_indices()
+            .any(|(at, c)| !c.is_whitespace() && !covered(at))
+    {
+        return None;
+    }
+    Some(
+        div()
+            .flex()
+            .flex_wrap()
+            .gap(px(8.))
+            .children(images.into_iter().map(|s| {
+                let src = s.link.clone().unwrap_or_default();
+                let alt = i.text[s.range.clone()].trim().to_owned();
+                match pictures.get(&src) {
+                    Some((image, size)) => {
+                        let (w, h) = size.map_or((480., 270.), |(w, h)| {
+                            let (w, h) = (w.max(1) as f32, h.max(1) as f32);
+                            let k = (560. / w).min(320. / h).min(1.);
+                            (w * k, h * k)
+                        });
+                        gpui::img(image.clone())
+                            .w(px(w))
+                            .h(px(h))
+                            .rounded(px(4.))
+                            .into_any_element()
+                    }
+                    // A web address or a file not in the repository: its name, not fetched.
+                    None => div()
+                        .px(px(8.))
+                        .py(px(4.))
+                        .rounded(px(4.))
+                        .border_1()
+                        .border_color(theme::island_border())
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child(format!("{alt} · {src}"))
+                        .into_any_element(),
+                }
+            }))
+            .into_any_element(),
+    )
+}
+
 fn block(block: &Block, ctx: &mut Ctx) -> AnyElement {
+    let doc = ctx.doc.is_some();
     match block {
-        Block::Paragraph(i) => inline(i, ctx),
+        Block::Paragraph(i) => pictures(i, ctx).unwrap_or_else(|| inline(i, ctx)),
+        Block::Heading(level, i) if doc => div()
+            .font_weight(FontWeight::BOLD)
+            .text_size(px(match level {
+                1 => 24.,
+                2 => 18.,
+                3 => 15.,
+                _ => 14.,
+            }))
+            .line_height(px(match level {
+                1 => 30.,
+                2 => 24.,
+                _ => 20.,
+            }))
+            .when(*level <= 2, |s| {
+                s.pb(px(4.))
+                    .border_b_1()
+                    .border_color(theme::island_border())
+            })
+            .child(inline(i, ctx))
+            .into_any_element(),
         Block::Heading(level, i) => div()
             .font_weight(FontWeight::BOLD)
             .text_size(px(match level {
@@ -305,6 +403,15 @@ fn block(block: &Block, ctx: &mut Ctx) -> AnyElement {
                 div()
                     .flex()
                     .gap(px(6.))
+                    .when(item.mark == Some(Mark::Added), |s| {
+                        s.bg(theme::added_line()).rounded(px(3.))
+                    })
+                    .when(item.mark == Some(Mark::Removed), |s| {
+                        s.bg(theme::removed_line())
+                            .rounded(px(3.))
+                            .opacity(0.7)
+                            .line_through()
+                    })
                     .child(
                         div()
                             .flex_none()
@@ -513,6 +620,43 @@ fn inline(i: &Inline, ctx: &mut Ctx) -> AnyElement {
                 ..Default::default()
             },
         ));
+    }
+    // A changed document's words: added on the added tint, removed struck on the removed one. They
+    // take the place of any style over the same text.
+    if !i.marks.is_empty() {
+        let mut cut: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+        for (r, h) in highlights {
+            let mut pieces = vec![r];
+            for (m, _) in &i.marks {
+                pieces = pieces
+                    .into_iter()
+                    .flat_map(|p| {
+                        [p.start..p.end.min(m.start), p.start.max(m.end)..p.end]
+                            .into_iter()
+                            .filter(|q| q.start < q.end)
+                    })
+                    .collect();
+            }
+            cut.extend(pieces.into_iter().map(|p| (p, h)));
+        }
+        for (r, mark) in &i.marks {
+            let (bg, strike) = match mark {
+                Mark::Added => (theme::added_word(), false),
+                Mark::Removed => (theme::removed_word(), true),
+            };
+            cut.push((
+                r.clone(),
+                HighlightStyle {
+                    background_color: Some(bg.into()),
+                    strikethrough: strike.then_some(StrikethroughStyle {
+                        thickness: px(1.),
+                        color: Some(theme::removed().into()),
+                    }),
+                    ..Default::default()
+                },
+            ));
+        }
+        highlights = cut;
     }
     highlights.sort_by_key(|(r, _)| r.start);
     let fonts: Vec<_> = i

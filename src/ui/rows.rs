@@ -633,6 +633,7 @@ mod tests {
             note: None,
             old_image: None,
             new_image: None,
+            pictures: Vec::new(),
         }
     }
 
@@ -724,6 +725,7 @@ mod tests {
             note: None,
             old_image: None,
             new_image: None,
+            pictures: Vec::new(),
         };
         for mode in DiffMode::ALL {
             let data = FileData::build(&file, mode);
@@ -759,6 +761,7 @@ mod tests {
             note: None,
             old_image: None,
             new_image: None,
+            pictures: Vec::new(),
         };
         let lines = FileData::build(&file, DiffMode::Lines);
         assert!(lines.old.marks.is_empty() && lines.new.marks.is_empty());
@@ -871,6 +874,7 @@ mod tests {
             note: None,
             old_image: None,
             new_image: None,
+            pictures: Vec::new(),
         };
         let data = FileData::build(&file, DiffMode::Lines);
         let rows = layout(&data, &ViewOptions::default(), &HashSet::new());

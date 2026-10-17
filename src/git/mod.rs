@@ -421,11 +421,18 @@ impl Repo {
                 .show_untracked_content(true);
             o
         };
-        let unstaged = diff::collect_from(
+        // The images a document links to are read from HEAD on the old side, the index's
+        // version aside.
+        let sides = diff::Sides {
+            old: head.as_ref(),
+            new: None,
+            disk: true,
+        };
+        let unstaged = diff::collect(
             &self.inner,
             self.inner
                 .diff_index_to_workdir(None, Some(&mut opts(settings)))?,
-            true,
+            sides,
         )?;
         let staged = self.inner.diff_tree_to_index(
             head.as_ref(),
@@ -472,11 +479,11 @@ impl Repo {
         let files = if only_unstaged {
             unstaged
         } else {
-            diff::collect_from(
+            diff::collect(
                 &self.inner,
                 self.inner
                     .diff_tree_to_workdir_with_index(head.as_ref(), Some(&mut opts(settings)))?,
-                true,
+                sides,
             )?
         };
         Ok(WorkingTree { files, tags })

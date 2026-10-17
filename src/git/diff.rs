@@ -157,6 +157,27 @@ pub struct FileDiff {
     /// The two sides of a changed image (`None` for a side it does not have).
     pub old_image: Option<ImageSide>,
     pub new_image: Option<ImageSide>,
+    /// The local images a changed markdown file shows, as each side has them (#11).
+    pub pictures: Vec<Picture>,
+}
+
+/// An image a markdown file links to by a path in the repository, read at that side's version.
+#[derive(Clone, Debug)]
+pub struct Picture {
+    /// Of the old side.
+    pub old: bool,
+    /// As the document writes it.
+    pub src: String,
+    pub image: ImageSide,
+}
+
+/// The versions a diff compares, to read the images a markdown file links to: the trees, and
+/// whether the new side is the files on disk.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Sides<'a> {
+    pub old: Option<&'a Tree<'a>>,
+    pub new: Option<&'a Tree<'a>>,
+    pub disk: bool,
 }
 
 impl FileDiff {
@@ -217,19 +238,24 @@ pub(super) fn tree_to_tree(
     settings: DiffSettings,
 ) -> Result<Vec<FileDiff>> {
     let diff = repo.diff_tree_to_tree(old, new, Some(&mut options(settings)))?;
-    collect(repo, diff)
+    collect(
+        repo,
+        diff,
+        Sides {
+            old,
+            new,
+            disk: false,
+        },
+    )
 }
 
-pub(super) fn collect(repo: &Repository, diff: Diff<'_>) -> Result<Vec<FileDiff>> {
-    collect_from(repo, diff, false)
-}
-
-/// `workdir`: the new side may be a file on disk that has no blob yet.
-pub(super) fn collect_from(
+/// `sides.disk`: the new side may be a file on disk that has no blob yet.
+pub(super) fn collect(
     repo: &Repository,
     mut diff: Diff<'_>,
-    workdir: bool,
+    sides: Sides<'_>,
 ) -> Result<Vec<FileDiff>> {
+    let workdir = sides.disk;
     diff.find_similar(Some(DiffFindOptions::new().renames(true)))?;
     let mut files = Vec::with_capacity(diff.deltas().len());
     for idx in 0..diff.deltas().len() {
@@ -294,6 +320,13 @@ pub(super) fn collect_from(
         };
         let old_image = image(delta.old_file(), &old_path, false);
         let new_image = image(delta.new_file(), &new_path, workdir);
+        let mut pictures = Vec::new();
+        if let (Some(p), Content::Text(text)) = (&old_path, &old) {
+            pictures.extend(read_pictures(repo, p, text, sides.old, false, true));
+        }
+        if let (Some(p), Content::Text(text)) = (&new_path, &new) {
+            pictures.extend(read_pictures(repo, p, text, sides.new, sides.disk, false));
+        }
         files.push(FileDiff {
             old_path,
             new_path,
@@ -306,9 +339,56 @@ pub(super) fn collect_from(
             note,
             old_image,
             new_image,
+            pictures,
         });
     }
     Ok(files)
+}
+
+/// The images markdown file `path` links to by a repository path, read from `tree` (or the disk);
+/// at most a few dozen, none for another kind of file.
+fn read_pictures(
+    repo: &Repository,
+    path: &str,
+    text: &str,
+    tree: Option<&Tree<'_>>,
+    disk: bool,
+    old: bool,
+) -> Vec<Picture> {
+    if !crate::markdown::is_document(path) {
+        return Vec::new();
+    }
+    let mut out: Vec<Picture> = Vec::new();
+    for src in crate::markdown::images(text).into_iter().take(32) {
+        if out.iter().any(|p| p.src == src) {
+            continue;
+        }
+        let Some(at) = crate::markdown::local_path(path, &src) else {
+            continue;
+        };
+        let Some(kind) = ImageKind::of(&at) else {
+            continue;
+        };
+        let bytes = if disk {
+            repo.workdir()
+                .map(|w| w.join(&at))
+                .filter(|f| std::fs::metadata(f).is_ok_and(|m| m.len() as usize <= MAX_IMAGE_BYTES))
+                .and_then(|f| std::fs::read(f).ok())
+        } else {
+            tree.and_then(|t| t.get_path(std::path::Path::new(&at)).ok())
+                .and_then(|e| repo.find_blob(e.id()).ok())
+                .filter(|b| b.size() <= MAX_IMAGE_BYTES)
+                .map(|b| b.content().to_vec())
+        };
+        if let Some(bytes) = bytes {
+            out.push(Picture {
+                old,
+                src,
+                image: ImageSide::new(kind, bytes),
+            });
+        }
+    }
+    out
 }
 
 #[derive(Clone)]
@@ -432,6 +512,7 @@ mod tests {
             note: None,
             old_image: None,
             new_image: None,
+            pictures: Vec::new(),
         };
         let pos = |old, line| file.position(old, line).map(|p| (p.old_line, p.new_line));
         assert_eq!(pos(false, 5), Some((Some(7), Some(5))));

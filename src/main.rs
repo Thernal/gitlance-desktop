@@ -14,6 +14,7 @@ mod highlight;
 mod links;
 mod markdown;
 mod mcp;
+mod mddiff;
 mod mr;
 mod platform;
 mod rank;

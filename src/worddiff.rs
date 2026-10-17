@@ -38,6 +38,101 @@ pub fn marks(old: &str, new: &str) -> Option<LineMarks> {
     Some((changed(old, &a, &keep_a), changed(new, &b, &keep_b)))
 }
 
+/// One piece of two texts read together: the same in both, or a change — what the old text had
+/// there and what the new one has (either may be empty). The ranges follow each other in each text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Piece {
+    Same(Range<usize>, Range<usize>),
+    Change(Range<usize>, Range<usize>),
+}
+
+/// `old` and `new` cut into what stayed and what changed, a phrase at a time: a space or a lone
+/// short word between two changes goes into the change, so a rewritten clause reads as one
+/// removal and one addition. `None` as for `marks`.
+pub fn pieces(old: &str, new: &str) -> Option<Vec<Piece>> {
+    marks(old, new)?;
+    let (a, b) = (words(old), words(new));
+    let (keep_a, keep_b) = common(old, &a, new, &b);
+    // Word by word: Some((i, j)) for a pair in the common part, else one side's word.
+    enum Op {
+        Same(usize, usize),
+        Old(usize),
+        New(usize),
+    }
+    let mut ops = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() || j < b.len() {
+        if i < a.len() && !keep_a[i] {
+            ops.push(Op::Old(i));
+            i += 1;
+        } else if j < b.len() && !keep_b[j] {
+            ops.push(Op::New(j));
+            j += 1;
+        } else {
+            ops.push(Op::Same(i, j));
+            i += 1;
+            j += 1;
+        }
+    }
+    let small = |i: usize| {
+        let w = old[a[i].clone()].trim();
+        w.chars().count() <= 3
+    };
+    let is_change = |k: usize| !matches!(ops[k], Op::Same(..));
+    let mut out: Vec<Piece> = Vec::new();
+    let (mut at_a, mut at_b) = (0, 0);
+    let mut k = 0;
+    while k < ops.len() {
+        if !is_change(k) {
+            let Op::Same(i, j) = ops[k] else {
+                unreachable!()
+            };
+            match out.last_mut() {
+                Some(Piece::Same(x, y)) => {
+                    x.end = a[i].end;
+                    y.end = b[j].end;
+                }
+                _ => out.push(Piece::Same(a[i].clone(), b[j].clone())),
+            }
+            at_a = a[i].end;
+            at_b = b[j].end;
+            k += 1;
+            continue;
+        }
+        // A change, and whatever small same words lie between it and the next change.
+        let mut end = k;
+        loop {
+            while end < ops.len() && is_change(end) {
+                end += 1;
+            }
+            let mut gap = end;
+            while gap < ops.len() && matches!(ops[gap], Op::Same(i, _) if small(i)) && gap - end < 3
+            {
+                gap += 1;
+            }
+            if gap > end && gap < ops.len() && is_change(gap) {
+                end = gap;
+            } else {
+                break;
+            }
+        }
+        let (start_a, start_b) = (at_a, at_b);
+        for op in &ops[k..end] {
+            match *op {
+                Op::Same(i, j) => {
+                    at_a = a[i].end;
+                    at_b = b[j].end;
+                }
+                Op::Old(i) => at_a = a[i].end,
+                Op::New(j) => at_b = b[j].end,
+            }
+        }
+        out.push(Piece::Change(start_a..at_a, start_b..at_b));
+        k = end;
+    }
+    Some(out)
+}
+
 /// Runs of word characters, runs of whitespace, runs of operator characters and single others.
 pub fn words(text: &str) -> Vec<Range<usize>> {
     #[derive(PartialEq)]
@@ -160,6 +255,31 @@ mod tests {
         let (a, b) = marks(old, new).expect("an edit");
         assert!(a.is_empty());
         assert_eq!(texts(new, &b), ["a, b,"]);
+    }
+
+    #[test]
+    fn a_rewritten_clause_is_one_change() {
+        let (old, new) = (
+            "Retry repeats the last request, whatever happened.",
+            "Retry repeats the last form after a failure, whatever happened.",
+        );
+        let pieces = pieces(old, new).expect("an edit");
+        let changes: Vec<(&str, &str)> = pieces
+            .iter()
+            .filter_map(|p| match p {
+                Piece::Change(x, y) => Some((&old[x.clone()], &new[y.clone()])),
+                Piece::Same(..) => None,
+            })
+            .collect();
+        assert_eq!(changes, [("request", "form after a failure")]);
+        // Read together, the pieces are the two texts.
+        let (mut a, mut b) = (String::new(), String::new());
+        for p in &pieces {
+            let (Piece::Same(x, y) | Piece::Change(x, y)) = p;
+            a.push_str(&old[x.clone()]);
+            b.push_str(&new[y.clone()]);
+        }
+        assert_eq!((a.as_str(), b.as_str()), (old, new));
     }
 
     #[test]

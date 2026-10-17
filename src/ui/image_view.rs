@@ -65,7 +65,7 @@ impl Default for Images {
 
 impl Images {
     /// The image of one side, decoded once per set of bytes.
-    fn image(&self, side: &ImageSide) -> Arc<gpui::Image> {
+    pub(super) fn image(&self, side: &ImageSide) -> Arc<gpui::Image> {
         let key = Arc::as_ptr(&side.bytes) as *const u8 as usize;
         let mut cache = self.cache.borrow_mut();
         if cache.len() > 24 {

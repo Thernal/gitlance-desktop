@@ -208,6 +208,7 @@ mod tests {
             note: None,
             old_image: None,
             new_image: None,
+            pictures: Vec::new(),
         }
     }
 

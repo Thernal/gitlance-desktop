@@ -2207,6 +2207,8 @@ impl Workspace {
                 cx.notify();
             }
         }
+        // A comment asked for on a rendered document's block (#11).
+        self.page_comment(cx);
         let Some(id) = self.jump.take() else {
             return;
         };
