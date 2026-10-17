@@ -1,16 +1,85 @@
-//! Rebindable keys. The defaults are the bindings written in `ui::run`; `keymap.txt` in the app
-//! support folder replaces the keys of an action, one line each: `NextFile = ] | l` (keys split by
-//! ` | `, nothing after `=` leaves the action without a key). Settings → Keyboard writes it.
+//! Rebindable keys. The defaults are the bindings written in `ui::run`; a preset (#52: GitLance,
+//! Android Studio, VS Code) changes some of them, and `keymap.txt` in the app support folder
+//! replaces the keys of an action on top, one line each: `NextFile = ] | l` (keys split by ` | `,
+//! nothing after `=` leaves the action without a key; `Preset = vscode` names the preset).
+//! Settings → Keyboard writes it.
 
 use crate::storage;
 use gpui::{App, DummyKeyboardMapper, Global, KeyBinding};
 use std::collections::{BTreeMap, HashSet};
 
-/// The keys as written in code, and the user's changes.
+/// The keys as written in code, the preset over them, and the user's changes.
 pub struct Keymap {
     defaults: Vec<KeyBinding>,
+    preset: Preset,
     /// Action name (`NextFile`) → its keys (`cmd-]`, `l`).
     overrides: BTreeMap<String, Vec<String>>,
+}
+
+/// Keys to start from, as another tool has them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Preset {
+    #[default]
+    GitLance,
+    AndroidStudio,
+    VsCode,
+}
+
+impl Preset {
+    pub const ALL: [Preset; 3] = [Preset::GitLance, Preset::AndroidStudio, Preset::VsCode];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Preset::GitLance => "GitLance",
+            Preset::AndroidStudio => "Android Studio",
+            Preset::VsCode => "VS Code",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Preset::GitLance => "gitlance",
+            Preset::AndroidStudio => "android-studio",
+            Preset::VsCode => "vscode",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.key() == key)
+    }
+
+    /// What it changes from the shipped keys, written for macOS (`platform::keys` puts them in
+    /// this OS's terms).
+    fn changes(self) -> &'static [(&'static str, &'static [&'static str])] {
+        match self {
+            Preset::GitLance => &[],
+            // Go to File ⌘⇧O, Find Action ⌘⇧A, File Structure ⌘F12.
+            Preset::AndroidStudio => &[
+                ("SearchFiles", &["cmd-shift-o"]),
+                ("SearchActions", &["cmd-shift-a"]),
+                ("ShowStructure", &["cmd-f12"]),
+                ("SendToAgent", &["cmd-alt-a"]),
+            ],
+            // Toggle Side Bar ⌘B, Open Recent ⌃R; branches are switched from the palette.
+            Preset::VsCode => &[
+                ("ToggleSidebar", &["cmd-b"]),
+                ("SwitchTo", &[]),
+                ("OpenRecent", &["ctrl-r"]),
+            ],
+        }
+    }
+
+    fn map(self) -> BTreeMap<String, Vec<String>> {
+        self.changes()
+            .iter()
+            .map(|(name, keys)| {
+                (
+                    (*name).to_owned(),
+                    keys.iter().map(|k| crate::platform::keys(k)).collect(),
+                )
+            })
+            .collect()
+    }
 }
 
 impl Global for Keymap {}
@@ -23,17 +92,53 @@ pub struct Entry {
     /// Its keys, as GPUI writes them (`cmd-shift-enter`).
     pub keys: Vec<String>,
     pub changed: bool,
+    /// For a changed one, the keys it had before: the preset's or the shipped ones.
+    pub was: Vec<String>,
     /// Another action on one of its keys where both apply: (key, the other action's label).
     pub clash: Option<(String, String)>,
 }
 
 /// Binds the defaults with the user's changes on top.
 pub fn install(defaults: Vec<KeyBinding>, cx: &mut App) {
-    let overrides = parse(&storage::read("keymap.txt"));
+    let (preset, overrides) = read(&storage::read("keymap.txt"));
     cx.set_global(Keymap {
         defaults,
+        preset,
         overrides,
     });
+    apply(cx);
+}
+
+/// The preset and the changes in `keymap.txt`.
+fn read(text: &str) -> (Preset, BTreeMap<String, Vec<String>>) {
+    let mut overrides = parse(text);
+    let preset = overrides
+        .remove("Preset")
+        .and_then(|keys| keys.first().and_then(|k| Preset::from_key(k)))
+        .unwrap_or_default();
+    (preset, overrides)
+}
+
+fn write(map: &Keymap) {
+    let mut text = String::new();
+    if map.preset != Preset::GitLance {
+        text.push_str(&format!("Preset = {}\n", map.preset.key()));
+    }
+    text.push_str(&render(&map.overrides));
+    storage::save("keymap.txt", text);
+}
+
+/// Starts from `preset`; the user's changes stay on top.
+pub fn set_preset(preset: Preset, cx: &mut App) {
+    cx.global_mut::<Keymap>().preset = preset;
+    write(cx.global::<Keymap>());
+    apply(cx);
+}
+
+/// Drops every change: the preset's keys again.
+pub fn reset(cx: &mut App) {
+    cx.global_mut::<Keymap>().overrides.clear();
+    write(cx.global::<Keymap>());
     apply(cx);
 }
 
@@ -48,7 +153,7 @@ pub fn set(name: &str, keys: Option<Vec<String>>, cx: &mut App) {
             map.overrides.remove(name);
         }
     }
-    storage::save("keymap.txt", render(&map.overrides));
+    write(cx.global::<Keymap>());
     apply(cx);
 }
 
@@ -64,6 +169,31 @@ fn short(name: &'static str) -> &'static str {
 }
 
 impl Keymap {
+    pub fn preset(&self) -> Preset {
+        self.preset
+    }
+
+    /// How many actions the user changed.
+    pub fn changed_count(&self) -> usize {
+        self.overrides.len()
+    }
+
+    /// The preset's changes with the user's on top: action → keys.
+    fn layer(&self) -> BTreeMap<String, Vec<String>> {
+        let mut layer = self.preset.map();
+        layer.extend(self.overrides.clone());
+        layer
+    }
+
+    /// Every action's keys as they are now, in `keymap.txt`'s form (Export).
+    pub fn export(&self) -> String {
+        let mut text = format!("# GitLance keys · preset {}\n", self.preset.label());
+        for e in self.entries() {
+            text.push_str(&format!("{} = {}\n", e.name, e.keys.join(" | ")));
+        }
+        text
+    }
+
     /// The bindings in force: an action with changed keys gets them, in the context of its first
     /// default binding. The changed ones come last, so where a key is also shipped for another
     /// action (a clash the Keyboard page shows), the user's choice is the one that acts.
@@ -71,9 +201,10 @@ impl Keymap {
         let mut out = Vec::new();
         let mut changed = Vec::new();
         let mut replaced = HashSet::new();
+        let layer = self.layer();
         for b in &self.defaults {
             let name = short(b.action().name());
-            let Some(keys) = self.overrides.get(name) else {
+            let Some(keys) = layer.get(name) else {
                 out.push(b.clone());
                 continue;
             };
@@ -119,11 +250,24 @@ impl Keymap {
                             .find(|o| keystrokes(o) == key && overlap(e, o))
                             .map(|o| (key.clone(), label(short(o.action().name()))))
                     });
+                    let changed = self.overrides.contains_key(name);
+                    let was = if changed {
+                        self.preset.map().remove(name).unwrap_or_else(|| {
+                            self.defaults
+                                .iter()
+                                .filter(|d| short(d.action().name()) == name)
+                                .map(keystrokes)
+                                .collect()
+                        })
+                    } else {
+                        Vec::new()
+                    };
                     Entry {
                         name,
                         label: label(name),
                         keys,
-                        changed: self.overrides.contains_key(name),
+                        changed,
+                        was,
                         clash,
                     }
                 })
@@ -136,7 +280,7 @@ impl Keymap {
     /// The key to show for `action` when the user changed it (`""` when it has none now); `None`
     /// keeps the shipped one.
     pub fn shown(&self, action: &dyn gpui::Action) -> Option<String> {
-        self.overrides
+        self.layer()
             .get(short(action.name()))
             .map(|keys| keys.first().map(|k| symbols(k)).unwrap_or_default())
     }
@@ -265,6 +409,7 @@ mod tests {
 
     fn map(overrides: &str) -> Keymap {
         Keymap {
+            preset: Preset::GitLance,
             defaults: vec![
                 KeyBinding::new("l", NextFile, Some("Workspace && !Typing")),
                 KeyBinding::new("]", NextFile, Some("Workspace && !Typing")),
@@ -322,6 +467,7 @@ mod tests {
     fn the_shipped_keys_do_not_clash() {
         let shipped = Keymap {
             defaults: super::super::default_bindings(),
+            preset: Preset::GitLance,
             overrides: BTreeMap::new(),
         };
         let clashes: Vec<_> = shipped
@@ -336,6 +482,7 @@ mod tests {
     fn the_shipped_keys_do_not_clash_on_windows_and_linux() {
         let shipped = Keymap {
             defaults: super::super::bindings(crate::platform::pc_keys),
+            preset: Preset::GitLance,
             overrides: BTreeMap::new(),
         };
         let clashes: Vec<_> = shipped
@@ -344,6 +491,47 @@ mod tests {
             .filter_map(|e| e.clash.map(|c| (e.label, c)))
             .collect();
         assert!(clashes.is_empty(), "{clashes:?}");
+    }
+
+    #[test]
+    fn no_preset_clashes_and_each_names_real_actions() {
+        for preset in Preset::ALL {
+            let map = Keymap {
+                defaults: super::super::default_bindings(),
+                preset,
+                overrides: BTreeMap::new(),
+            };
+            let entries = map.entries();
+            for (name, _) in preset.changes() {
+                assert!(
+                    entries.iter().any(|e| e.name == *name),
+                    "{preset:?}: no {name}"
+                );
+            }
+            let clashes: Vec<_> = entries
+                .into_iter()
+                .filter_map(|e| e.clash.map(|c| (e.label, c)))
+                .collect();
+            assert!(clashes.is_empty(), "{preset:?}: {clashes:?}");
+        }
+    }
+
+    #[test]
+    fn a_change_says_what_the_preset_had() {
+        let (preset, overrides) = read("Preset = android-studio\nSearchFiles = cmd-p\n");
+        assert_eq!(preset, Preset::AndroidStudio);
+        let map = Keymap {
+            defaults: super::super::default_bindings(),
+            preset,
+            overrides,
+        };
+        let files = map
+            .entries()
+            .into_iter()
+            .find(|e| e.name == "SearchFiles")
+            .unwrap();
+        assert_eq!(files.keys, ["cmd-p"]);
+        assert_eq!(files.was, ["cmd-shift-o"]);
     }
 
     #[test]

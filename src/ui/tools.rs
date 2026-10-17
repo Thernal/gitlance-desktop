@@ -49,7 +49,7 @@ impl Tool {
     fn tip(self) -> &'static str {
         match self {
             Tool::Details => "Request details  ⌘I",
-            Tool::Discussions => "Discussions  ⌘⇧R",
+            Tool::Discussions => "Discussions  ⌘⇧D",
             Tool::Agents => "Agents",
             Tool::Notifications => "Notifications  ⌘⇧N",
         }

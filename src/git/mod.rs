@@ -219,6 +219,26 @@ impl Repo {
         commits.into_iter().find(|c| c.id == id)
     }
 
+    /// Every file of `HEAD`'s tree, by path (at most `limit`): search everywhere's Files tab.
+    pub fn all_files(&self, limit: usize) -> Vec<String> {
+        let Ok(tree) = self.inner.head().and_then(|h| h.peel_to_tree()) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let _ = tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+            if out.len() >= limit {
+                return git2::TreeWalkResult::Abort;
+            }
+            if entry.kind() == Some(git2::ObjectType::Blob)
+                && let Ok(name) = entry.name()
+            {
+                out.push(format!("{dir}{name}"));
+            }
+            git2::TreeWalkResult::Ok
+        });
+        out
+    }
+
     /// The names of the files directly in folder `dir` of commit `rev`.
     pub fn files_at(&self, rev: Oid, dir: &str) -> Vec<String> {
         let names = || -> Option<Vec<String>> {

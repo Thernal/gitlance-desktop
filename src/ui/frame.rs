@@ -1027,6 +1027,21 @@ impl Render for Workspace {
                 this.with_shell(window, cx, |s, window, cx| s.select(8, window, cx))
             }))
             .on_action(cx.listener(Self::open_palette_action))
+            .on_action(
+                cx.listener(|this, _: &SearchFiles, _, cx| this.search(palette::Scope::Files, cx)),
+            )
+            .on_action(cx.listener(|this, _: &SearchCommits, _, cx| {
+                this.search(palette::Scope::Commits, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SearchBranches, _, cx| {
+                this.search(palette::Scope::Branches, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SearchRequests, _, cx| {
+                this.search(palette::Scope::Requests, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SearchActions, _, cx| {
+                this.search(palette::Scope::Actions, cx)
+            }))
             .on_action(cx.listener(Self::compare_action))
             .on_action(cx.listener(Self::palette_up))
             .on_action(cx.listener(Self::palette_down))

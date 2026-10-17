@@ -1,18 +1,91 @@
-//! The ⌘K palette: one field that jumps to a commit, a file, a branch or a command, and the same
-//! overlay as the picker for comparing any two refs (⌘⇧C).
+//! Search everywhere (#52, Design `docs/specs/command-palette.md`): one window with a tab per
+//! scope — All ⌘K, Files ⌘P, Commits ⌘⇧C, Branches ⌘⇧B, Requests ⌘⇧R, Actions ⌘⇧P —, each
+//! named with what it found; ⇥ ⇧⇥ move between them keeping the text, `>` typed moves to Actions.
+//! The same overlay picks the refs of a comparison (⌥⌘C), a theme, a recent place, a bookmark.
 
 use super::input::{self, Edit};
 use super::px;
-use super::{Diff, Header, ISLAND_RADIUS, Selection, Workspace, format, island_label, theme};
+use super::{
+    Diff, Header, ISLAND_RADIUS, ROW_RADIUS, Selection, Workspace, format, island_label, theme,
+};
 use crate::git::{NamedRef, Repo};
 use git2::Oid;
 use gpui::{Action, Context, KeyDownEvent, MouseButton, Window, div, prelude::*};
 use std::sync::Arc;
 
 /// What the palette is for.
+/// A tab of search everywhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    All,
+    Files,
+    Commits,
+    Branches,
+    Requests,
+    Actions,
+}
+
+impl Scope {
+    pub const ALL: [Scope; 6] = [
+        Scope::All,
+        Scope::Files,
+        Scope::Commits,
+        Scope::Branches,
+        Scope::Requests,
+        Scope::Actions,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Scope::All => "All",
+            Scope::Files => "Files",
+            Scope::Commits => "Commits",
+            Scope::Branches => "Branches",
+            Scope::Requests => "Requests",
+            Scope::Actions => "Actions",
+        }
+    }
+
+    fn action(self) -> Box<dyn Action> {
+        use super::*;
+        match self {
+            Scope::All => Box::new(SearchEverywhere),
+            Scope::Files => Box::new(SearchFiles),
+            Scope::Commits => Box::new(SearchCommits),
+            Scope::Branches => Box::new(SearchBranches),
+            Scope::Requests => Box::new(SearchRequests),
+            Scope::Actions => Box::new(SearchActions),
+        }
+    }
+
+    /// Its key as shipped, for the footer when the keymap does not say another.
+    fn key(self) -> &'static str {
+        match self {
+            Scope::All => "⌘K",
+            Scope::Files => "⌘P",
+            Scope::Commits => "⌘⇧C",
+            Scope::Branches => "⌘⇧B",
+            Scope::Requests => "⌘⇧R",
+            Scope::Actions => "⌘⇧P",
+        }
+    }
+
+    fn placeholder(self) -> &'static str {
+        match self {
+            Scope::All => "Search everywhere — files, commits, branches, requests, actions",
+            Scope::Files => "Files — this diff's first, then the repository's",
+            Scope::Commits => "Commits — by words of the message, the author or the id",
+            Scope::Branches => "Branches",
+            Scope::Requests => "Merge requests — by title or number",
+            Scope::Actions => "Actions — everything the app does, with its key",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum Kind {
-    Jump,
+    /// Search everywhere, on one tab.
+    Search(Scope),
     /// The places opened lately, newest first (⌘E).
     Recent,
     /// The functions and types the open file changes (⌘⇧O).
@@ -83,7 +156,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
         "⌘⇧N",
         Cmd::Notifications,
     ),
-    ("Compare two refs…", "⌘⇧C", Cmd::Compare),
+    ("Compare two refs…", "⌥⌘C", Cmd::Compare),
     ("Create merge request…", "⌥⌘M", Cmd::CreateRequest),
     (
         "Send the comments to an agent's chat…",
@@ -91,7 +164,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
         Cmd::SendToAgent,
     ),
     ("Keyboard shortcuts", "?", Cmd::Shortcuts),
-    ("Show or hide the Discussions window", "⌘⇧R", Cmd::Comments),
+    ("Show or hide the Discussions window", "⌘⇧D", Cmd::Comments),
     ("Show or hide the request's details", "⌘I", Cmd::Details),
     ("Find in the diff", "⌘F", Cmd::FindInDiff),
     ("Search in all files of the diff", "⌘⌥F", Cmd::FindInFiles),
@@ -112,7 +185,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
         Cmd::Structure,
     ),
     ("Search commits", "⌘⇧F", Cmd::FindCommits),
-    ("Filter files by path", "⌘P", Cmd::FilterFiles),
+    ("Filter files by path", "⌥⌘P", Cmd::FilterFiles),
     ("Refresh", "⌘R", Cmd::Refresh),
     ("Open a repository…", "⌘O", Cmd::Open),
     ("Back", "⌘[", Cmd::Back),
@@ -165,13 +238,21 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
 
 #[derive(Clone)]
 enum Pick {
-    Mark { path: String, line: u32 },
-    Symbol { old: bool, line: u32 },
+    Mark {
+        path: String,
+        line: u32,
+    },
+    Symbol {
+        old: bool,
+        line: u32,
+    },
     Recent(super::recents::Key),
     Commit(Oid),
     File(usize),
     Branch(usize),
     Request(u64),
+    /// A file of the repository the diff does not change.
+    RepoFile(String),
     Link(crate::links::Link),
     Command(Cmd),
     Ref(String, Oid),
@@ -189,6 +270,12 @@ struct Item {
 
 pub struct Palette {
     kind: Kind,
+    /// The tab `>` moved away from: ⌫ in the empty field goes back to it.
+    from: Option<Scope>,
+    /// What each tab found for the text, in `Scope::ALL`'s order (with text typed).
+    counts: Option<[usize; 6]>,
+    /// The repository's files, read when search everywhere opened.
+    files: Arc<Vec<String>>,
     query: String,
     at: usize,
     /// ⌘B: only what is not reviewed yet (⇥ switches).
@@ -261,7 +348,7 @@ impl Workspace {
     pub(super) fn open_palette(&mut self, kind: Kind, cx: &mut Context<Self>) {
         let refs = match (&kind, &self.root) {
             (
-                Kind::Jump
+                Kind::Search(_)
                 | Kind::Recent
                 | Kind::Structure
                 | Kind::Bookmarks
@@ -281,8 +368,19 @@ impl Workspace {
         self.repo_menu = false;
         self.reset_field_edit();
         let theme = matches!(kind, Kind::Theme);
+        let files = match (&kind, &self.root) {
+            (Kind::Search(_), Some(root)) => Arc::new(
+                Repo::open(root)
+                    .map(|r| r.all_files(200_000))
+                    .unwrap_or_default(),
+            ),
+            _ => Arc::default(),
+        };
         self.palette = Some(Palette {
             kind,
+            from: None,
+            counts: None,
+            files,
             query: String::new(),
             at: 0,
             open_only: false,
@@ -331,9 +429,176 @@ impl Workspace {
             return;
         };
         let items = self.palette_items(palette);
+        // Every tab's count, while something is typed.
+        let counts = match palette.kind {
+            Kind::Search(_) if !palette.query.trim().is_empty() => {
+                let mut counts = [0; 6];
+                for (i, scope) in Scope::ALL.into_iter().enumerate() {
+                    counts[i] = self.scope_items(scope, palette).len();
+                }
+                Some(counts)
+            }
+            _ => None,
+        };
         if let Some(p) = &mut self.palette {
             p.at = p.at.min(items.len().saturating_sub(1));
             p.items = items;
+            p.counts = counts;
+        }
+    }
+
+    /// Opens search everywhere on `scope`, or moves to that tab when it is open (the text stays);
+    /// the same key again closes it.
+    pub(super) fn search(&mut self, scope: Scope, cx: &mut Context<Self>) {
+        match self.palette.as_mut() {
+            Some(p) if matches!(p.kind, Kind::Search(s) if s == scope) => self.close_palette(cx),
+            Some(p) if matches!(p.kind, Kind::Search(_)) => {
+                p.kind = Kind::Search(scope);
+                p.from = None;
+                p.at = 0;
+                self.refresh_palette();
+                cx.notify();
+            }
+            _ => self.open_palette(Kind::Search(scope), cx),
+        }
+    }
+
+    /// The next tab (or the one before), the text kept.
+    fn step_scope(&mut self, back: bool, cx: &mut Context<Self>) {
+        let Some(p) = &mut self.palette else {
+            return;
+        };
+        let Kind::Search(scope) = p.kind else {
+            return;
+        };
+        let at = Scope::ALL.iter().position(|s| *s == scope).unwrap_or(0);
+        let n = Scope::ALL.len();
+        p.kind = Kind::Search(Scope::ALL[if back { (at + n - 1) % n } else { (at + 1) % n }]);
+        p.from = None;
+        p.at = 0;
+        self.refresh_palette();
+        cx.notify();
+    }
+
+    /// What tab `scope` lists for the palette's text.
+    fn scope_items(&self, scope: Scope, p: &Palette) -> Vec<Item> {
+        let query = p.query.trim();
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        match scope {
+            Scope::All => self.all_items(query),
+            Scope::Actions => COMMANDS
+                .iter()
+                .filter(|(label, ..)| matches(&words, label))
+                .map(|&(label, key, cmd)| Item {
+                    group: "Actions",
+                    label: label.to_owned(),
+                    detail: String::new(),
+                    key,
+                    pick: Pick::Command(cmd),
+                })
+                .collect(),
+            Scope::Branches => {
+                crate::rank::rank(self.branches.iter().enumerate(), query, |(_, b)| &b.name)
+                    .into_iter()
+                    .take(60)
+                    .map(|(ix, b)| Item {
+                        group: "Branches",
+                        label: b.name.clone(),
+                        detail: format::short(b.tip),
+                        key: "",
+                        pick: Pick::Branch(ix),
+                    })
+                    .collect()
+            }
+            Scope::Commits => self
+                .commits
+                .iter()
+                .filter(|c| {
+                    words.is_empty()
+                        || matches(&words, &c.summary)
+                        || matches(&words, &c.author)
+                        || c.id.to_string().starts_with(&words[0])
+                })
+                .take(60)
+                .map(|c| Item {
+                    group: "Commits",
+                    label: c.summary.clone(),
+                    detail: format!("{} · {}", format::short(c.id), c.author),
+                    key: "",
+                    pick: Pick::Commit(c.id),
+                })
+                .collect(),
+            Scope::Requests => {
+                let number = query.trim_start_matches(['!', '#']);
+                self.requests
+                    .list
+                    .iter()
+                    .filter(|m| {
+                        words.is_empty()
+                            || matches(&words, &m.title)
+                            || matches(&words, &m.author)
+                            || m.iid.to_string() == number
+                    })
+                    .take(60)
+                    .map(|m| Item {
+                        group: "Merge requests",
+                        label: format!("{} {}", super::words::number(m.iid), m.title),
+                        detail: m.author.clone(),
+                        key: "",
+                        pick: Pick::Request(m.iid),
+                    })
+                    .collect()
+            }
+            Scope::Files => {
+                let name = |path: &str| path.rsplit('/').next().unwrap_or_default().to_owned();
+                let mut items: Vec<Item> = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+                if let Some(diff) = &self.diff {
+                    for (ix, f) in
+                        crate::rank::rank(diff.files.iter().enumerate(), query, |(_, f)| {
+                            f.path().rsplit('/').next().unwrap_or_default()
+                        })
+                        .into_iter()
+                        .chain(diff.files.iter().enumerate().filter(|(_, f)| {
+                            !words.is_empty()
+                                && matches(&words, f.path())
+                                && crate::rank::score(query, &name(f.path())).is_none()
+                        }))
+                    {
+                        if seen.insert(f.path().to_owned()) {
+                            items.push(Item {
+                                group: "In this diff",
+                                label: f.path().to_owned(),
+                                detail: String::new(),
+                                key: "",
+                                pick: Pick::File(ix),
+                            });
+                        }
+                    }
+                }
+                if !words.is_empty() {
+                    let ranked = crate::rank::rank(p.files.iter(), query, |f| {
+                        f.rsplit('/').next().unwrap_or_default()
+                    });
+                    items.extend(
+                        ranked
+                            .into_iter()
+                            .chain(p.files.iter().filter(|f| {
+                                matches(&words, f) && crate::rank::score(query, &name(f)).is_none()
+                            }))
+                            .filter(|f| seen.insert((*f).clone()))
+                            .take(60)
+                            .map(|f| Item {
+                                group: "In the repository",
+                                label: f.clone(),
+                                detail: String::new(),
+                                key: "",
+                                pick: Pick::RepoFile(f.clone()),
+                            }),
+                    );
+                }
+                items
+            }
         }
     }
 
@@ -430,12 +695,15 @@ impl Workspace {
                 })
                 .collect();
         }
-        if !matches!(p.kind, Kind::Jump) {
-            let group = if matches!(p.kind, Kind::Base) {
-                "Base"
-            } else {
-                "Compare with"
-            };
+        if let Kind::Search(scope) = p.kind {
+            return self.scope_items(scope, p);
+        }
+        let group = if matches!(p.kind, Kind::Base) {
+            "Base"
+        } else {
+            "Compare with"
+        };
+        {
             let mut ranked = crate::rank::rank(&p.refs, query, |r| &r.name);
             // A stale local branch comes after its upstream: that is the one meant.
             for i in 0..ranked.len() {
@@ -488,9 +756,12 @@ impl Workspace {
                     },
                 );
             }
-            return items;
+            items
         }
+    }
 
+    /// The All tab: a few of every kind, a pasted link as one place, `#` `@` narrowing.
+    fn all_items(&self, query: &str) -> Vec<Item> {
         // A pasted GitLab link is one place to go.
         if let Some(link) = crate::links::parse(query) {
             return vec![Item {
@@ -585,6 +856,21 @@ impl Workspace {
                         pick: Pick::Commit(c.id),
                     }),
             );
+            let number = rest.trim_start_matches(['!', '#']);
+            items.extend(
+                self.requests
+                    .list
+                    .iter()
+                    .filter(|m| matches(&words, &m.title) || m.iid.to_string() == number)
+                    .take(3)
+                    .map(|m| Item {
+                        group: "Merge requests",
+                        label: format!("{} {}", super::words::number(m.iid), m.title),
+                        detail: m.author.clone(),
+                        key: "",
+                        pick: Pick::Request(m.iid),
+                    }),
+            );
             // Jumping to what was typed beats the commands when something real matched.
             items.sort_by_key(|i| (i.group == "Commands") as u8);
         }
@@ -600,6 +886,18 @@ impl Workspace {
         let Some(palette) = &mut self.palette else {
             return;
         };
+        if event.keystroke.key == "tab" && matches!(palette.kind, Kind::Search(_)) {
+            return self.step_scope(event.keystroke.modifiers.shift, cx);
+        }
+        // ⌫ in the empty field goes back from Actions to the tab ">" left.
+        if event.keystroke.key == "backspace"
+            && palette.query.is_empty()
+            && let Some(from) = palette.from.take()
+        {
+            palette.kind = Kind::Search(from);
+            self.refresh_palette();
+            return cx.notify();
+        }
         if event.keystroke.key == "tab" && matches!(palette.kind, Kind::Switch) {
             palette.open_only = !palette.open_only;
             palette.at = 0;
@@ -614,6 +912,16 @@ impl Workspace {
         ) {
             Edit::Changed => {
                 palette.at = 0;
+                // ">" typed first moves to Actions, shown as a chip in the field.
+                if let Kind::Search(scope) = palette.kind
+                    && scope != Scope::Actions
+                    && palette.query.starts_with('>')
+                {
+                    palette.query = palette.query[1..].trim_start().to_owned();
+                    palette.kind = Kind::Search(Scope::Actions);
+                    palette.from = Some(scope);
+                    self.reset_field_edit();
+                }
                 self.refresh_palette();
                 if matches!(self.palette.as_ref().map(|p| &p.kind), Some(Kind::Theme)) {
                     self.try_theme(cx);
@@ -728,6 +1036,20 @@ impl Workspace {
                 self.palette = None;
                 self.select_request(iid, cx);
             }
+            Pick::RepoFile(path) => {
+                self.palette = None;
+                // Not changed here: it opens in the editor, when there is one.
+                if crate::editor::pick(self.settings.editor).is_some() {
+                    self.run_act(super::menu::Act::OpenEditor { path, line: 1 }, cx);
+                } else {
+                    self.error = Some(
+                        format!(
+                            "{path} is not changed here, and no editor is set to open it (Settings → General)."
+                        )
+                        .into(),
+                    );
+                }
+            }
             Pick::Link(link) => {
                 self.palette = None;
                 self.open_link(link, cx);
@@ -793,7 +1115,7 @@ impl Workspace {
     ) -> Option<impl IntoElement + use<>> {
         let p = self.palette.as_ref()?;
         let placeholder = match &p.kind {
-            Kind::Jump => "Search commits, files, branches, commands   > # @",
+            Kind::Search(scope) => scope.placeholder(),
             Kind::Recent => "Recent places — files, commits, merge requests",
             Kind::Structure => "Functions and types this file changes",
             Kind::Bookmarks => "Bookmarks — lines marked with F3",
@@ -804,7 +1126,7 @@ impl Workspace {
             Kind::Theme => "Theme — ↑↓ tries it on the whole window, ↵ keeps, esc goes back",
         };
         let title = match &p.kind {
-            Kind::Jump
+            Kind::Search(_)
             | Kind::Recent
             | Kind::Structure
             | Kind::Bookmarks
@@ -876,8 +1198,8 @@ impl Workspace {
                     Kind::Recent => "Nothing opened yet.",
                     Kind::Bookmarks => "No bookmarks yet: click a line and press F3.",
                     Kind::Structure => "No function or type of this file is changed (or the language is not known).",
-                    Kind::Jump if p.query.is_empty() => "Type to search.",
-                    Kind::Jump => "Nothing matches.",
+                    Kind::Search(_) if p.query.is_empty() => "Type to search.",
+                    Kind::Search(_) => "Nothing matches.",
                     Kind::Switch if p.open_only => "Nothing left to review here.",
                     Kind::Switch => "No branch or merge request by that name.",
                     _ => "No branch, tag or commit by that name.",
@@ -909,12 +1231,27 @@ impl Workspace {
                         .shadow_lg()
                         .overflow_hidden()
                         .children(title.map(island_label))
+                        .children(self.render_scopes(p, cx))
                         .child(
                             div()
                                 .h(px(44.))
                                 .px(px(14.))
                                 .flex()
                                 .items_center()
+                                .gap_2()
+                                .children(p.from.is_some().then(|| {
+                                    div()
+                                        .flex_none()
+                                        .px(px(8.))
+                                        .h(px(22.))
+                                        .flex()
+                                        .items_center()
+                                        .rounded(px(ROW_RADIUS))
+                                        .bg(theme::info_bg())
+                                        .text_size(px(12.))
+                                        .text_color(theme::accent())
+                                        .child("> Actions")
+                                }))
                                 .child(self.field_text(&p.query, true, placeholder, cx)),
                         )
                         .child(div().h(px(1.)).bg(theme::island_border()))
@@ -927,8 +1264,99 @@ impl Workspace {
                                 .px(px(6.))
                                 .children(rows)
                                 .children(empty),
-                        ),
+                        )
+                        .children(self.render_search_foot(p, cx)),
                 ),
+        )
+    }
+
+    /// The tabs of search everywhere: names, and what each found in a badge; one that found
+    /// nothing fades.
+    fn render_scopes(&self, p: &Palette, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let Kind::Search(on) = p.kind else {
+            return None;
+        };
+        Some(
+            div()
+                .flex()
+                .gap(px(2.))
+                .px(px(10.))
+                .border_b_1()
+                .border_color(theme::island_border())
+                .children(Scope::ALL.into_iter().enumerate().map(|(i, scope)| {
+                    let count = p.counts.map(|c| c[i]);
+                    let none = count == Some(0);
+                    let lit = scope == on;
+                    div()
+                        .id(("search-scope", i))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .px(px(10.))
+                        .pt(px(10.))
+                        .pb(px(8.))
+                        .border_b_2()
+                        .border_color(if lit {
+                            theme::accent()
+                        } else {
+                            gpui::transparent_black().into()
+                        })
+                        .text_size(px(13.))
+                        .text_color(if lit { theme::text() } else { theme::muted() })
+                        .when(lit, |s| s.font_weight(gpui::FontWeight::SEMIBOLD))
+                        .when(none && !lit, |s| s.opacity(0.6))
+                        .cursor_pointer()
+                        .child(super::words::say(scope.label()).into_owned())
+                        .children(count.map(|n| {
+                            div()
+                                .min_w(px(18.))
+                                .px(px(5.))
+                                .rounded_full()
+                                .flex()
+                                .justify_center()
+                                .text_size(px(11.))
+                                .bg(if lit {
+                                    theme::info_bg()
+                                } else {
+                                    theme::hover()
+                                })
+                                .text_color(if lit { theme::accent() } else { theme::faint() })
+                                .child(n.to_string())
+                        }))
+                        .on_click(cx.listener(move |this, _, _, cx| this.search(scope, cx)))
+                })),
+        )
+        .map(|d| d.into_any_element())
+    }
+
+    /// The tab on with its key, and how to move.
+    fn render_search_foot(&self, p: &Palette, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let Kind::Search(on) = p.kind else {
+            return None;
+        };
+        let key = cx
+            .global::<super::keymap::Keymap>()
+            .shown(on.action().as_ref())
+            .unwrap_or_else(|| on.key().to_owned());
+        Some(
+            div()
+                .flex()
+                .gap(px(14.))
+                .px(px(14.))
+                .py(px(8.))
+                .border_t_1()
+                .border_color(theme::island_border())
+                .text_size(px(11.))
+                .text_color(theme::muted())
+                .child(format!(
+                    "{} · {}",
+                    super::words::say(on.label()),
+                    super::keys::text(&key)
+                ))
+                .child("⇥ next tab · > actions")
+                .child(div().flex_1())
+                .child("↵ open · esc")
+                .into_any_element(),
         )
     }
 }

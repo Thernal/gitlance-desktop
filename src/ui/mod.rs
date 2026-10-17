@@ -170,7 +170,12 @@ actions!(
         Tab7,
         Tab8,
         Tab9,
-        OpenPalette,
+        SearchEverywhere,
+        SearchFiles,
+        SearchCommits,
+        SearchBranches,
+        SearchRequests,
+        SearchActions,
         Compare,
         PaletteUp,
         PaletteDown,
@@ -233,7 +238,7 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("cmd-,"), OpenSettings, None),
         KeyBinding::new(&k("cmd-f"), Find, Some("Workspace")),
         KeyBinding::new(&k("cmd-shift-f"), FindCommits, Some("Workspace")),
-        KeyBinding::new(&k("cmd-p"), FilterFiles, Some("Workspace")),
+        KeyBinding::new(&k("cmd-alt-p"), FilterFiles, Some("Workspace")),
         KeyBinding::new(&k("cmd-["), GoBack, Some("Workspace")),
         KeyBinding::new(&k("cmd-]"), GoForward, Some("Workspace")),
         KeyBinding::new(&k("cmd-alt-1"), ToggleSidebar, Some("Workspace")),
@@ -261,7 +266,7 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("e"), EditComment, Some("Workspace && !Typing")),
         KeyBinding::new(&k("o"), ToggleThread, Some("Workspace && !Typing")),
         KeyBinding::new(
-            &k("cmd-shift-r"),
+            &k("cmd-shift-d"),
             ToggleComments,
             Some("Workspace && !Typing"),
         ),
@@ -336,8 +341,19 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         ),
         KeyBinding::new(&k("up"), PaletteUp, Some("Palette")),
         KeyBinding::new(&k("down"), PaletteDown, Some("Palette")),
-        KeyBinding::new(&k("cmd-k"), OpenPalette, Some("Workspace")),
-        KeyBinding::new(&k("cmd-shift-c"), Compare, Some("Workspace")),
+        // Search everywhere (#52): one window, a tab per scope.
+        KeyBinding::new(&k("cmd-k"), SearchEverywhere, Some("Workspace")),
+        KeyBinding::new(&k("cmd-p"), SearchFiles, Some("Workspace")),
+        KeyBinding::new(&k("cmd-shift-c"), SearchCommits, Some("Workspace")),
+        KeyBinding::new(&k("cmd-shift-b"), SearchBranches, Some("Workspace")),
+        KeyBinding::new(&k("cmd-shift-r"), SearchRequests, Some("Workspace")),
+        // In a comment box ⌘⇧P previews the markdown.
+        KeyBinding::new(
+            &k("cmd-shift-p"),
+            SearchActions,
+            Some("Workspace && !Caret"),
+        ),
+        KeyBinding::new(&k("cmd-alt-c"), Compare, Some("Workspace")),
         // Bare letters and arrows are typing while the search field is active.
         KeyBinding::new(&k("k"), PreviousCommit, Some("Workspace && !Typing")),
         KeyBinding::new(&k("j"), NextCommit, Some("Workspace && !Typing")),
@@ -900,7 +916,7 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                 let kind = if query.starts_with("compare:") {
                     palette::Kind::Base
                 } else {
-                    palette::Kind::Jump
+                    palette::Kind::Search(palette::Scope::All)
                 };
                 this.open_palette(kind, cx);
                 this.type_in_palette(query.trim_start_matches("compare:"));
@@ -1108,6 +1124,8 @@ pub struct Workspace {
     theme_value: String,
     /// What Settings → Keyboard is filtered by.
     keys_filter: String,
+    /// Settings → Keyboard lists only the keys the user changed.
+    keys_changed_only: bool,
     /// The part of Settings shown.
     settings_section: settings::Section,
     /// A selection in the text of a comment (`markdown::TextSel`).
@@ -1332,6 +1350,7 @@ impl Workspace {
             note_sel: None,
             settings_section: Default::default(),
             keys_filter: String::new(),
+            keys_changed_only: false,
             images: Default::default(),
             page: Default::default(),
             theme_edit: None,
@@ -1981,7 +2000,7 @@ impl Workspace {
                     Entry::new("Fold the menu to icons", Act::FoldPlaces)
                         .checked(self.places_folded()),
                     Entry::new("Discussions", Act::Tool(tools::Tool::Discussions))
-                        .key("⌘⇧R")
+                        .key("⌘⇧D")
                         .checked(tool == Some(tools::Tool::Discussions)),
                     Entry::new("Agents", Act::Tool(tools::Tool::Agents))
                         .checked(tool == Some(tools::Tool::Agents)),
@@ -2461,12 +2480,13 @@ impl Workspace {
         self.open_settings(cx);
     }
 
-    fn open_palette_action(&mut self, _: &OpenPalette, _: &mut Window, cx: &mut Context<Self>) {
-        if self.palette.is_some() {
-            self.close_palette(cx);
-        } else {
-            self.open_palette(palette::Kind::Jump, cx);
-        }
+    fn open_palette_action(
+        &mut self,
+        _: &SearchEverywhere,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.search(palette::Scope::All, cx);
     }
 
     fn compare_action(&mut self, _: &Compare, _: &mut Window, cx: &mut Context<Self>) {

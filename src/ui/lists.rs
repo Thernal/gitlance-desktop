@@ -598,7 +598,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .children(self.render_review_progress(cx))
-            .child(self.render_field("file-filter", Field::Files, "Filter by path  ⌘P", cx))
+            .child(self.render_field("file-filter", Field::Files, "Filter by path  ⌥⌘P", cx))
             .child(if count == 0 {
                 div()
                     .flex_1()

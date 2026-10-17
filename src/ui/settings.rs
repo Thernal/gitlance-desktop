@@ -565,15 +565,108 @@ impl Workspace {
         use super::keymap::{self, Keymap};
         use super::keys::{self, On};
         let query = self.keys_filter.trim().to_lowercase();
-        let entries: Vec<_> = cx
-            .global::<Keymap>()
+        let changed_only = self.keys_changed_only;
+        let map = cx.global::<Keymap>();
+        let (preset, changed_count) = (map.preset(), map.changed_count());
+        let entries: Vec<_> = map
             .entries()
             .into_iter()
             .filter(|e| matches_keys(e, &query))
+            .filter(|e| !changed_only || e.changed)
             .collect();
+        let presets = div().flex().flex_wrap().gap(px(6.)).pb(px(12.)).children(
+            keymap::Preset::ALL.into_iter().enumerate().map(|(i, p)| {
+                let on = p == preset;
+                div()
+                    .id(("key-preset", i))
+                    .px(px(12.))
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(if on {
+                        theme::accent()
+                    } else {
+                        theme::island_border()
+                    })
+                    .when(on, |s| s.bg(theme::info_bg()))
+                    .text_size(px(12.))
+                    .text_color(if on { theme::text() } else { theme::muted() })
+                    .cursor_pointer()
+                    .child(if on && changed_count > 0 {
+                        format!("{} · {changed_count} changed", p.label())
+                    } else {
+                        p.label().to_owned()
+                    })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        keymap::set_preset(p, cx);
+                        this.refresh_menus(cx);
+                        cx.notify();
+                    }))
+            }),
+        );
+        let tools = div()
+            .flex()
+            .gap(px(6.))
+            .pb(px(8.))
+            .child(
+                button(
+                    "keys-changed-only",
+                    "Changed only",
+                    None,
+                    if changed_only {
+                        Kind::Primary(theme::accent())
+                    } else {
+                        Kind::Plain
+                    },
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.keys_changed_only = !this.keys_changed_only;
+                    cx.notify();
+                })),
+            )
+            .child(div().flex_1())
+            .child(
+                button("keys-export", "Export", None, Kind::Plain).on_click(cx.listener(
+                    |_, _: &ClickEvent, _, cx| {
+                        let text = cx.global::<Keymap>().export();
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                    },
+                )),
+            )
+            .children((changed_count > 0).then(|| {
+                button(
+                    "keys-reset-all",
+                    format!("Reset to {}", preset.label()),
+                    None,
+                    Kind::Plain,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    keymap::reset(cx);
+                    this.refresh_menus(cx);
+                    cx.notify();
+                }))
+            }));
         let count = entries.len();
         let rows = entries.into_iter().enumerate().map(|(ix, e)| {
             let name = e.name;
+            let was = e
+                .was
+                .iter()
+                .map(|k| {
+                    // A letter key as the caps write it: ⇧⌘O.
+                    let mut s = keymap::symbols(k);
+                    let last = s.chars().last().filter(char::is_ascii_lowercase);
+                    let alone = s.chars().rev().nth(1).is_none_or(|c| !c.is_alphanumeric());
+                    if let (Some(c), true) = (last, alone) {
+                        s.pop();
+                        s.push(c.to_ascii_uppercase());
+                    }
+                    s
+                })
+                .collect::<Vec<_>>()
+                .join(" · ");
             let waiting = self.recording == Some(name);
             let clash = e.clash.clone();
             let keys = e.keys.iter().map(|k| {
@@ -634,6 +727,15 @@ impl Workspace {
                                     .child("Press a key…"),
                             )
                         })
+                        .when(!waiting && e.changed && !was.is_empty(), |s| {
+                            s.child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(theme::faint())
+                                    .line_through()
+                                    .child(keys::text(&was).into_owned()),
+                            )
+                        })
                         .when(!waiting, |s| s.children(keys))
                         .when(!waiting && e.keys.is_empty(), |s| {
                             s.child(
@@ -684,8 +786,10 @@ impl Workspace {
                     .pb(px(12.))
                     .text_size(px(12.))
                     .text_color(theme::muted())
-                    .child("Change gives an action one new key in place of its keys; esc cancels, ⌫ leaves it without one. The changes are kept in keymap.txt in GitLance’s data folder; Reset brings the shipped keys back."),
+                    .child("Start from a preset — GitLance’s keys, Android Studio’s or VS Code’s — and change any key on top: Change gives an action one new key in place of its keys; esc cancels, ⌫ leaves it without one. A changed key shows what it was; the changes are kept in keymap.txt in GitLance’s data folder."),
             )
+            .child(presets)
+            .child(tools)
             .child(
                 div()
                     .pb(px(8.))
