@@ -22,6 +22,9 @@ pub struct Comment {
     pub body: String,
     /// Where it was written: a commit or a version range, for the reader of the export.
     pub at: String,
+    /// The commit its line was read from, so the line can be followed when it changes (#46).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
     /// Where it is in its life with an agent.
     #[serde(default)]
     pub state: State,

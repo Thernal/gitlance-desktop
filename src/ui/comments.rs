@@ -131,7 +131,7 @@ impl Workspace {
             }),
         };
         for c in &self.comments {
-            if let Some(Place::Line(n)) = data.and_then(|data| place_in(c, path, data)) {
+            if let Some(Place::Line(n)) = data.and_then(|data| self.place_in_file(c, path, data)) {
                 add(c.old, n, NoteTone::Agent);
             }
         }
@@ -200,7 +200,72 @@ impl Workspace {
 
     /// Where `comment` sits in the open file now (`None` when it belongs to another file).
     fn place_in_open_file(&self, comment: &Comment) -> Option<Place> {
-        place_in(comment, &self.current_path()?, self.data.as_ref()?)
+        self.place_in_file(comment, &self.current_path()?, self.data.as_ref()?)
+    }
+
+    /// Where `comment` sits in file `path` built as `data`: by its line's text, else, its line
+    /// changed since, where that line went (`agent_lines`).
+    fn place_in_file(&self, comment: &Comment, path: &str, data: &FileData) -> Option<Place> {
+        match place_in(comment, path, data)? {
+            Place::Outdated => Some(
+                self.agent_lines
+                    .get(&comment.id)
+                    .map_or(Place::Outdated, |&n| Place::Line(n)),
+            ),
+            found => Some(found),
+        }
+    }
+
+    /// Follows the line of every agent comment whose text no longer matches, from the commit it
+    /// was written on to the diff shown, in the background (#46).
+    pub(super) fn map_agent_comments(&mut self, cx: &mut Context<Self>) {
+        self.agent_lines.clear();
+        let (Some(root), Some(head), Some(diff)) =
+            (self.root.clone(), self.shown_head(), self.diff.as_ref())
+        else {
+            return;
+        };
+        let paths: Vec<String> = diff.files.iter().map(|f| f.path().to_owned()).collect();
+        let asks: Vec<(u64, String, String, u32)> = self
+            .comments
+            .iter()
+            .filter(|c| !c.old && paths.contains(&c.path))
+            .filter_map(|c| {
+                let commit = c.commit.clone()?;
+                (!head.to_string().starts_with(&commit))
+                    .then(|| (c.id, commit, c.path.clone(), c.line))
+            })
+            .collect();
+        if asks.is_empty() {
+            return;
+        }
+        self.agent_task = Some(cx.spawn(async move |this, cx| {
+            let found = cx
+                .background_executor()
+                .spawn(async move {
+                    let Ok(repo) = crate::git::Repo::open(&root) else {
+                        return std::collections::HashMap::new();
+                    };
+                    asks.into_iter()
+                        .filter_map(|(id, commit, path, line)| {
+                            let from = git2::Oid::from_str(&commit).ok()?;
+                            match repo.follow_line(from, head, &path, line) {
+                                crate::git::Fate::Same(n) | crate::git::Fate::Changed(n, _) => {
+                                    Some((id, n))
+                                }
+                                crate::git::Fate::Gone => None,
+                            }
+                        })
+                        .collect()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.agent_lines = found;
+                this.refresh_rows();
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     /// The rows with each comment's thread, and the composer, put under their lines.
@@ -223,7 +288,7 @@ impl Workspace {
         let here: Vec<(u64, bool, u32)> = self
             .comments
             .iter()
-            .filter_map(|c| match place_in(c, path, data)? {
+            .filter_map(|c| match self.place_in_file(c, path, data)? {
                 Place::Line(n) => Some((c.id, c.old, n)),
                 Place::Outdated => None,
             })
@@ -232,7 +297,7 @@ impl Workspace {
         let theirs = if self.showing_request() {
             self.request_threads_in(path)
         } else {
-            Vec::new()
+            self.since_thread_in(path)
         };
         let drafts = if self.showing_request() {
             self.drafts_in(path)
@@ -828,6 +893,7 @@ impl Workspace {
             above,
             body: compose.edit.text().trim().to_owned(),
             at: compose.at,
+            commit: self.shown_head().map(|id| id.to_string()),
             ..Default::default()
         });
         self.save_comments();
@@ -2280,6 +2346,9 @@ impl Workspace {
     pub(super) fn apply_jump(&mut self, cx: &mut Context<Self>) {
         if let Some((line, old)) = self.jump_line.take() {
             self.reveal_line(line, old);
+            if std::mem::take(&mut self.jump_whole) {
+                self.reveal_function(line, old);
+            }
             if let Some(at) = self.row_of_line(line, old) {
                 let under = self.rows[at + 1..]
                     .iter()

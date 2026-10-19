@@ -82,6 +82,49 @@ pub fn declaration(line: &str) -> Option<(&'static str, String)> {
     (!name.is_empty()).then_some((kind, name))
 }
 
+/// The function (or other declaration) around 1-based line `line` of a file whose lines are
+/// `line_of(1..=count)`: from its declaration to the line that closes it — the first line after it
+/// indented no deeper, taken in when it only closes (`}`, `)`, `end`) at the same depth. `None` outside any, or for
+/// one longer than `MOST` lines (a class, not a function).
+pub fn enclosing<'a>(
+    count: u32,
+    line: u32,
+    line_of: impl Fn(u32) -> &'a str,
+) -> Option<(u32, u32)> {
+    const MOST: u32 = 400;
+    let indent = |text: &str| text.len() - text.trim_start().len();
+    let blank = |text: &str| text.trim().is_empty();
+    // The nearest declaration above that reaches the line: a line between two functions belongs
+    // to what holds them.
+    let reach = |start: u32| {
+        let depth = indent(line_of(start));
+        let mut end = start;
+        for n in start + 1..=count.min(start + MOST) {
+            let text = line_of(n);
+            if blank(text) {
+                continue;
+            }
+            if indent(text) <= depth {
+                let t = text.trim_start();
+                let closes =
+                    t.starts_with('}') || t.starts_with(')') || t.starts_with(']') || t == "end";
+                // Its own closing line, not the one of what holds it.
+                if closes && indent(text) == depth {
+                    end = n;
+                }
+                break;
+            }
+            end = n;
+        }
+        end
+    };
+    (line.saturating_sub(MOST).max(1)..=line.min(count))
+        .rev()
+        .filter(|&n| declaration(line_of(n)).is_some())
+        .map(|start| (start, reach(start)))
+        .find(|&(_, end)| end >= line)
+}
+
 /// The symbols of `file` the diff touches, in file order, removed ones last.
 pub fn changed(file: &FileDiff) -> Vec<Symbol> {
     let new_text = file.new_text.as_deref().unwrap_or_default();
@@ -153,6 +196,22 @@ pub fn changed(file: &FileDiff) -> Vec<Symbol> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_function_around_a_line_ends_where_it_closes() {
+        let text = "class A {\n    fun one() {\n        a()\n\n        b()\n    }\n\n    fun two() = c()\n}\n";
+        let lines: Vec<&str> = text.lines().collect();
+        let at = |n: u32| lines[n as usize - 1];
+        let count = lines.len() as u32;
+        assert_eq!(enclosing(count, 5, at), Some((2, 6)));
+        assert_eq!(enclosing(count, 2, at), Some((2, 6)));
+        assert_eq!(enclosing(count, 8, at), Some((8, 8)));
+        // Between the two, the class is what holds it.
+        assert_eq!(enclosing(count, 7, at), Some((1, 9)));
+        let py = ["def f():", "    x = 1", "    return x", "", "y = 2"];
+        assert_eq!(enclosing(5, 3, |n| py[n as usize - 1]), Some((1, 3)));
+        assert_eq!(enclosing(5, 5, |n| py[n as usize - 1]), None);
+    }
 
     #[test]
     fn declarations_are_read_by_keyword() {

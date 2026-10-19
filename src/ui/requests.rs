@@ -1489,11 +1489,8 @@ impl Workspace {
                         super::tools::tool_button(("old-show", ix), "Show").on_click(cx.listener(
                             move |this, _: &ClickEvent, _, cx| match line_now {
                                 Some(line) => this.jump_to_line(&path, line, false, cx),
-                                None => {
-                                    if let Some(w) = written {
-                                        this.compare_since_written(w, cx)
-                                    }
-                                }
+                                None if written.is_some() => this.compare_since(ix, cx),
+                                None => {}
                             },
                         )),
                     )

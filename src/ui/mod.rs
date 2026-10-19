@@ -1273,6 +1273,17 @@ pub struct Workspace {
     /// The diff row the `c` marker stands on.
     goline_row: Option<usize>,
     jump_line: Option<(u32, bool)>,
+    /// The jump shows the whole function around its line (#46 C).
+    jump_whole: bool,
+    /// A comparison opened from an outdated discussion, with the versions that changed its line.
+    since: Option<outdated::Since>,
+    /// A notification opened on a comment: once its line's history is in, an outdated one opens
+    /// on the diff since it (request, note).
+    since_on_open: Option<(u64, u64)>,
+    /// Agent comments whose line changed since they were written: where their line is in the diff
+    /// shown (#46).
+    agent_lines: std::collections::HashMap<u64, u32>,
+    agent_task: Option<Task<()>>,
     tabs: shell::TabModel,
     diff: Option<Diff>,
     file: usize,
@@ -1459,6 +1470,11 @@ impl Workspace {
             goline: None,
             goline_row: None,
             jump_line: None,
+            jump_whole: false,
+            since: None,
+            since_on_open: None,
+            agent_lines: Default::default(),
+            agent_task: None,
             tabs: Default::default(),
             diff: None,
             file: 0,
@@ -1795,6 +1811,17 @@ impl Workspace {
         }
     }
 
+    /// The commit the shown diff's new side is: what a comment written now is read from.
+    pub(super) fn shown_head(&self) -> Option<git2::Oid> {
+        match &self.diff.as_ref()?.header {
+            Header::Commit(c) => Some(c.id),
+            Header::Versions { to, .. } => Some(to.tip),
+            Header::Compare { head, .. } => Some(head.1),
+            Header::Interdiff { new, .. } => Some(new.id),
+            Header::WorkingTree { .. } => None,
+        }
+    }
+
     fn load_diff(
         &mut self,
         keep: Option<String>,
@@ -1812,6 +1839,7 @@ impl Workspace {
                         this.diff = Some(diff);
                         // The files of the diff it replaces are gone.
                         this.stack = None;
+                        this.map_agent_comments(cx);
                         this.index_review();
                         // The first file as the island lists it (a tree sorts folders first), so
                         // → walks on from the top.
@@ -3301,6 +3329,7 @@ impl Workspace {
                 cx.listener(|this, _, _, cx| this.set_zone(zones::Zone::Diff, cx)),
             )
             .children(self.render_create_switch(cx))
+            .children(self.render_since_bar(cx))
             .child(self.render_diff_toolbar(diff, cx))
             .children(file.map(|f| {
                 let path = match (&f.old_path, &f.new_path) {

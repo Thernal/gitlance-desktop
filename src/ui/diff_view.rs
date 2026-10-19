@@ -514,7 +514,7 @@ fn tints(kind: LineKind) -> (Option<Rgba>, Option<Rgba>) {
 
 /// A small toggle in the diff toolbar.
 pub fn chip(
-    id: &'static str,
+    id: impl Into<gpui::ElementId>,
     label: impl Into<SharedString>,
     active: bool,
 ) -> gpui::Stateful<gpui::Div> {

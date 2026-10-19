@@ -450,6 +450,8 @@ impl Workspace {
         if self.notices.read.insert(n.key.clone()) {
             self.notices.save_read();
         }
+        // On an outdated comment it opens on the diff since it, once that is known (#46).
+        self.since_on_open = n.note.map(|note| (n.iid, note));
         // The window stays; the keyboard goes to what was opened.
         self.set_zone(super::zones::Zone::Diff, cx);
         self.go_to(
