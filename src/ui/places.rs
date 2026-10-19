@@ -1,5 +1,5 @@
-//! The menu of places on the left (Design `design/shell/` `nav()`, #49): Inbox, Review requests and
-//! My requests, then the repository's Commits, Branches and Working tree, Settings at the foot. It
+//! The menu of places on the left (Design `design/shell/` `nav()`, #49): Inbox, Merge requests (every
+//! open one, #57), Review requests and My requests, then the repository's Commits, Branches and Working tree, Settings at the foot. It
 //! folds to icons (the title bar's first button), and is drawn folded while a merge request is
 //! reviewed unless opened there. The Inbox is a place of its own: the notifications listed, the
 //! selected one previewed (Design flow 05 step 1, flow 06 step 3).
@@ -16,6 +16,7 @@ const ICONS: f32 = 52.;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Place {
     Inbox,
+    Requests,
     ReviewRequests,
     MyRequests,
     Commits,
@@ -52,8 +53,9 @@ impl Workspace {
             Place::Inbox
         } else if self.picker_open && self.requests.side == Side::Requests {
             match self.requests.scope {
+                Scope::All => Place::Requests,
+                Scope::ReviewMe => Place::ReviewRequests,
                 Scope::Mine => Place::MyRequests,
-                _ => Place::ReviewRequests,
             }
         } else if self.picker_open {
             Place::Branches
@@ -92,7 +94,7 @@ impl Workspace {
         }
         if !matches!(
             place,
-            Place::ReviewRequests | Place::MyRequests | Place::Branches
+            Place::Requests | Place::ReviewRequests | Place::MyRequests | Place::Branches
         ) {
             self.close_picker(cx);
         }
@@ -102,11 +104,11 @@ impl Workspace {
                 self.notices.at = self.inbox_rows().first().copied().unwrap_or(0);
                 self.refresh_notices(cx);
             }
-            Place::ReviewRequests | Place::MyRequests => {
-                self.requests.scope = if place == Place::MyRequests {
-                    Scope::Mine
-                } else {
-                    Scope::ReviewMe
+            Place::Requests | Place::ReviewRequests | Place::MyRequests => {
+                self.requests.scope = match place {
+                    Place::MyRequests => Scope::Mine,
+                    Place::ReviewRequests => Scope::ReviewMe,
+                    _ => Scope::All,
                 };
                 self.open_picker(true, cx);
             }
@@ -143,6 +145,7 @@ impl Workspace {
             let on = here == place;
             let id = match place {
                 Place::Inbox => "place-inbox",
+                Place::Requests => "place-requests",
                 Place::ReviewRequests => "place-review",
                 Place::MyRequests => "place-mine",
                 Place::Commits => "place-commits",
@@ -150,7 +153,8 @@ impl Workspace {
                 Place::WorkingTree => "place-work",
                 Place::Settings => "place-settings",
             };
-            let n = n.filter(|&n| n > 0);
+            // Folded, a badge says something waits for you; an open request does not.
+            let n = n.filter(|&n| n > 0 && !(folded && place == Place::Requests));
             div()
                 .id(id)
                 .relative()
@@ -251,10 +255,18 @@ impl Workspace {
                     requests
                         .then(|| item(Place::Inbox, "inbox", "Inbox", Some(self.notices.unread()))),
                 )
+                .children(requests.then(|| {
+                    item(
+                        Place::Requests,
+                        "pull-request",
+                        "Merge requests",
+                        Some(count(Scope::All)),
+                    )
+                }))
                 .children((requests && me).then(|| {
                     item(
                         Place::ReviewRequests,
-                        "pull-request",
+                        "user-check",
                         "Review requests",
                         Some(count(Scope::ReviewMe)),
                     )

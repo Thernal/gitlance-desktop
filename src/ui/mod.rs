@@ -834,6 +834,10 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.go_place(places::Place::Inbox, cx);
                             continue;
                         }
+                        "all-requests" => {
+                            this.go_place(places::Place::Requests, cx);
+                            continue;
+                        }
                         "review-requests" => {
                             this.go_place(places::Place::ReviewRequests, cx);
                             continue;

@@ -180,6 +180,14 @@ const ICONS: &[(&str, &str)] = &[
         ),
     ),
     (
+        "user-check",
+        lucide!(
+            r#"<path d="m16 11 2 2 4-4"/>"#
+            r#"<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>"#
+            r#"<circle cx="9" cy="7" r="4"/>"#
+        ),
+    ),
+    (
         "bookmark",
         lucide!(r#"<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>"#),
     ),
