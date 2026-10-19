@@ -126,6 +126,7 @@ actions!(
         NextDraft,
         PreviousDraft,
         CreateRequest,
+        QuickCreateRequest,
         SendToAgent,
         ShowShortcuts,
         ToggleThread,
@@ -838,6 +839,10 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                         // The new request for the open branch, and one of its lists open.
                         "create" => {
                             this.open_create(None, cx);
+                            continue;
+                        }
+                        "create-quick" => {
+                            this.open_create_quick(cx);
                             continue;
                         }
                         menu if menu.starts_with("create-") => {
@@ -2633,7 +2638,7 @@ impl Workspace {
 
     fn render_diff(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // A new merge request is written in the diff's place; Changes shows the diff again.
-        if self.newreq.is_some() && !self.create_shows_changes() {
+        if self.create_in_place() && !self.create_shows_changes() {
             return island()
                 .flex_1()
                 .min_w_0()

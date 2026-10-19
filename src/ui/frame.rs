@@ -931,6 +931,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &NextDraft, _, cx| this.step_draft(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousDraft, _, cx| this.step_draft(false, cx)))
             .on_action(cx.listener(|this, _: &CreateRequest, _, cx| this.open_create(None, cx)))
+            .on_action(
+                cx.listener(|this, _: &QuickCreateRequest, _, cx| this.open_create_quick(cx)),
+            )
             .on_action(cx.listener(|this, _: &SendToAgent, _, cx| this.open_agent_pick(cx)))
             .on_action(cx.listener(|this, _: &ShowShortcuts, _, cx| this.toggle_shortcuts(cx)))
             .on_action(cx.listener(|this, _: &NextThread, _, cx| this.step_thread(true, cx)))
@@ -1221,6 +1224,7 @@ impl Render for Workspace {
             .children(self.render_find_files(cx))
             .children(self.render_open_ask(cx))
             .children(self.render_agent_pick(cx))
+            .children(self.render_create_quick(cx))
             .children(self.render_shortcuts(cx))
             .children(self.render_palette(cx))
     }

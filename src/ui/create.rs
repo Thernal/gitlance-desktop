@@ -4,7 +4,9 @@
 //! template on the target, else the project's template setting, else a single commit's body, and
 //! Templates ▾ offers the others; whether the pair merges cleanly is worked out in memory; the code
 //! owners of the changed files start as the reviewers; labels and a milestone are picked from the
-//! project's lists; Request | Changes (⌃⇥) shows the diff and keeps the draft. The one outward
+//! project's lists; Request | Changes (⌃⇥) shows the diff and keeps the draft. From ⌘K it opens
+//! the quick way (D): the same request asked one question at a time over the branch view — Into,
+//! Title, Description — ↵ next, ⇧⇥ back, ⇥ the whole form, ⌘↵ create. The one outward
 //! action besides posting comments; it never pushes, so a branch only on this Mac is told to be
 //! pushed first.
 
@@ -73,6 +75,8 @@ pub struct NewRequest {
     preview: bool,
     /// Request | Changes: the diff of the pair is shown, the draft kept.
     changes: bool,
+    /// Asked one question at a time over the branch view (⌘K, D) instead of in the diff's place.
+    quick: bool,
     error: Option<String>,
     posting: bool,
 }
@@ -213,6 +217,7 @@ impl Workspace {
             reviewers: Vec::new(),
             preview: false,
             changes: false,
+            quick: false,
             error: None,
             posting: false,
         });
@@ -320,6 +325,22 @@ impl Workspace {
             n.menu = (n.menu != Some(menu)).then_some(menu);
         }
         cx.notify();
+    }
+
+    /// ⌘K → Create merge request: the quick way, starting at Into.
+    pub(super) fn open_create_quick(&mut self, cx: &mut Context<Self>) {
+        self.open_create(None, cx);
+        if let Some(n) = self.newreq.as_mut() {
+            n.quick = true;
+            n.focus = Focus::Target;
+            self.reset_field_edit();
+        }
+        cx.notify();
+    }
+
+    /// The request is written in the diff's place (not asked over it, D).
+    pub(super) fn create_in_place(&self) -> bool {
+        self.newreq.as_ref().is_some_and(|n| !n.quick)
     }
 
     /// The tip of `name` on origin (`origin/name`).
@@ -487,8 +508,21 @@ impl Workspace {
         if key.key == "enter" && key.modifiers.secondary() {
             return self.submit_create(cx);
         }
+        // The quick way: ⇥ opens the whole form where it stands, ⇧⇥ goes a question back.
+        if n.quick && key.key == "tab" {
+            if key.modifiers.shift {
+                n.focus = match n.focus {
+                    Focus::Description => Focus::Title,
+                    _ => Focus::Target,
+                };
+            } else {
+                n.quick = false;
+            }
+            self.reset_field_edit();
+            return cx.notify();
+        }
         // ⌃⇥: Request | Changes, the draft kept.
-        if key.key == "tab" && key.modifiers.control {
+        if key.key == "tab" && key.modifiers.control && !n.quick {
             n.changes = !n.changes;
             return cx.notify();
         }
@@ -657,7 +691,7 @@ impl Workspace {
 
     /// The header row while a request is being written: its name, the pair, totals, Create.
     pub(super) fn render_create_header(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let n = self.newreq.as_ref()?;
+        let n = self.newreq.as_ref().filter(|n| !n.quick)?;
         let blocked = n.local_only || n.posting;
         let go = if n.posting {
             "Creating…".to_owned()
@@ -769,7 +803,7 @@ impl Workspace {
 
     /// The Request | Changes switch at the top of the pane.
     pub(super) fn render_create_switch(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let n = self.newreq.as_ref()?;
+        let n = self.newreq.as_ref().filter(|n| !n.quick)?;
         let files = self.diff.as_ref().map_or(0, |d| d.files.len());
         let set = |changes: bool| {
             cx.listener(move |this: &mut Self, _: &ClickEvent, _, cx| {
@@ -1548,6 +1582,304 @@ impl Workspace {
                         .text_color(theme::removed())
                         .child(e)
                 }))
+                .into_any_element(),
+        )
+    }
+
+    /// The quick way (D): a card over the branch view asking one thing at a time.
+    pub(super) fn render_create_quick(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let n = self.newreq.as_ref().filter(|n| n.quick)?;
+        let steps = ["Into", "Title", "Description", "Create"];
+        let at = match n.focus {
+            Focus::Target => 0,
+            Focus::Title => 1,
+            Focus::Description => 2,
+        };
+        let at = if n.posting { 3 } else { at };
+        let pills = div().flex().gap(px(4.)).px(px(14.)).pt(px(10.)).children(
+            steps.iter().enumerate().map(|(i, step)| {
+                div()
+                    .h(px(22.))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .rounded_full()
+                    .text_size(px(11.))
+                    .when(i == at, |s| {
+                        s.bg(theme::selected()).text_color(theme::text())
+                    })
+                    .when(i < at, |s| s.text_color(theme::muted()))
+                    .when(i > at, |s| s.text_color(theme::faint()))
+                    .child(if i < at {
+                        format!("✓ {step}")
+                    } else {
+                        format!("{} {step}", i + 1)
+                    })
+            }),
+        );
+        let (field, ask): (AnyElement, &str) = match n.focus {
+            Focus::Target => (
+                div()
+                    .font_family(theme::CODE_FONT)
+                    .child(self.field_text(&n.target, true, "main", cx))
+                    .into_any_element(),
+                "Into which branch?",
+            ),
+            Focus::Title => (
+                self.field_look(
+                    &n.title,
+                    true,
+                    "Title",
+                    input::Look {
+                        wrap: true,
+                        ..Default::default()
+                    },
+                    cx.entity().downgrade(),
+                )
+                .into_any_element(),
+                "Title",
+            ),
+            Focus::Description => (
+                div()
+                    .text_size(px(13.))
+                    .text_color(theme::muted())
+                    .child(n.title.clone())
+                    .into_any_element(),
+                "",
+            ),
+        };
+        let question = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .px(px(14.))
+            .py(px(12.))
+            .border_b_1()
+            .border_color(theme::island_border())
+            .text_size(px(15.))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(12.))
+                    .text_color(theme::muted())
+                    .child(format!("{} ›", super::words::say("New merge request"))),
+            )
+            .child(div().flex_1().min_w_0().child(field))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(12.))
+                    .text_color(theme::faint())
+                    .child(ask),
+            );
+        let body: Option<AnyElement> = match n.focus {
+            Focus::Target => {
+                let choices = self.target_choices();
+                Some(
+                    div()
+                        .id("quick-targets")
+                        .max_h(px(260.))
+                        .overflow_y_scroll()
+                        .p(px(4.))
+                        .children(choices.into_iter().enumerate().map(|(i, (name, local))| {
+                            let pick = name.clone();
+                            let default = ["main", "master"].contains(&name.as_str());
+                            div()
+                                .id(("quick-target", i))
+                                .px(px(10.))
+                                .h(px(28.))
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .rounded(px(ROW_RADIUS))
+                                .cursor_pointer()
+                                .when(i == n.target_at, |s| s.bg(theme::selected()))
+                                .hover(|s| s.bg(theme::hover()))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .font_family(theme::CODE_FONT)
+                                        .child(mid(&name, 56)),
+                                )
+                                .children(default.then(|| {
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(theme::faint())
+                                        .child("default")
+                                }))
+                                .children(local.then(|| {
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(theme::faint())
+                                        .child("not on origin")
+                                }))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.pick_target(pick.clone(), cx)
+                                }))
+                        }))
+                        .into_any_element(),
+                )
+            }
+            Focus::Title => None,
+            Focus::Description => Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .px(px(14.))
+                    .py(px(12.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_size(px(12.))
+                            .text_color(theme::muted())
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_family(theme::CODE_FONT)
+                                    .child(format!("{} → {}", mid(&n.source, 44), n.target)),
+                            )
+                            .children(self.render_create_totals()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(px(12.))
+                                    .text_color(theme::muted())
+                                    .child("Description"),
+                            )
+                            .children(n.started_from.clone().map(|from| {
+                                div()
+                                    .px(px(8.))
+                                    .h(px(22.))
+                                    .flex()
+                                    .items_center()
+                                    .rounded_full()
+                                    .bg(theme::info_bg())
+                                    .text_size(px(11.))
+                                    .text_color(theme::muted())
+                                    .child(from)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("quick-description")
+                            .min_h(px(150.))
+                            .max_h(px(260.))
+                            .overflow_y_scroll()
+                            .px_2()
+                            .py(px(5.))
+                            .rounded(px(ROW_RADIUS))
+                            .border_2()
+                            .border_color(theme::focus())
+                            .bg(theme::base())
+                            .child(self.field_look(
+                                &n.description,
+                                true,
+                                "What it changes and why",
+                                input::Look {
+                                    wrap: true,
+                                    ..Default::default()
+                                },
+                                cx.entity().downgrade(),
+                            )),
+                    )
+                    .into_any_element(),
+            ),
+        };
+        // What stops it, or what went wrong.
+        let note = if n.local_only {
+            Some(
+                super::words::say(&format!(
+                    "{} is only on this Mac. Push it first: git push -u origin {}",
+                    n.source, n.source
+                ))
+                .into_owned(),
+            )
+        } else if let Some(iid) = n.existing {
+            Some(format!(
+                "{} already exists for this pair. ⌘↵ opens it.",
+                super::words::number(iid)
+            ))
+        } else {
+            n.error.clone()
+        };
+        let hint = |keys: &'static str, what: &'static str| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .child(super::keys::caps(keys, super::keys::On::Plain))
+                .child(what)
+        };
+        let foot = div()
+            .flex()
+            .items_center()
+            .gap_4()
+            .px(px(14.))
+            .py(px(8.))
+            .border_t_1()
+            .border_color(theme::island_border())
+            .text_size(px(12.))
+            .text_color(theme::muted())
+            .child(div().flex_1().min_w_0().truncate().child(match n.focus {
+                Focus::Target => format!("From {}", mid(&n.source, 34)),
+                _ => "⇥ reviewers, draft, labels…".to_owned(),
+            }))
+            .children((n.focus != Focus::Target).then(|| hint("⇧⇥", "back")))
+            .children((n.focus != Focus::Description).then(|| hint("↵", "next")))
+            .child(hint("⌘↵", "create"))
+            .child(hint("esc", "cancel"));
+        Some(
+            div()
+                .id("quick-create-backdrop")
+                .absolute()
+                .size_full()
+                .flex()
+                .justify_center()
+                .items_start()
+                .pt(px(72.))
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, _, _, cx| this.close_create(cx)),
+                )
+                .child(
+                    div()
+                        .occlude()
+                        .w(px(680.))
+                        .flex()
+                        .flex_col()
+                        .rounded(px(super::ISLAND_RADIUS))
+                        .border_1()
+                        .border_color(theme::island_border())
+                        .bg(theme::panel())
+                        .shadow_lg()
+                        .overflow_hidden()
+                        .text_size(px(13.))
+                        .child(pills)
+                        .child(question)
+                        .children(body)
+                        .children(note.map(|text| {
+                            div()
+                                .px(px(14.))
+                                .py(px(8.))
+                                .text_size(px(12.))
+                                .text_color(theme::warning())
+                                .child(text)
+                        }))
+                        .child(foot),
+                )
                 .into_any_element(),
         )
     }

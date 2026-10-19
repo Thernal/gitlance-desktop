@@ -1392,7 +1392,8 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::PreviousRequest => Box::new(PreviousRequest),
         Cmd::Compare => Box::new(Compare),
         Cmd::NewTab => Box::new(NewTab),
-        Cmd::CreateRequest => Box::new(CreateRequest),
+        // From ⌘K, the quick way: one question at a time (#47 D).
+        Cmd::CreateRequest => Box::new(super::QuickCreateRequest),
         Cmd::SendToAgent => Box::new(super::SendToAgent),
         Cmd::Shortcuts => Box::new(ShowShortcuts),
         Cmd::Comments => Box::new(ToggleComments),
