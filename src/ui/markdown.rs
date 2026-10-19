@@ -297,26 +297,57 @@ fn blocks_of(blocks: &[Block], ctx: &mut Ctx) -> Div {
         .children(blocks.iter().map(|b| block(b, ctx)))
 }
 
-/// A paragraph of nothing but images, in a document: the images drawn, at most a column wide.
-fn pictures(i: &Inline, ctx: &Ctx) -> Option<AnyElement> {
-    let pictures = ctx.doc.as_ref()?;
-    let images: Vec<&markdown::Span> = i.spans.iter().filter(|s| s.style.image).collect();
-    let covered = |at: usize| images.iter().any(|s| s.range.contains(&at));
-    if images.is_empty()
-        || i.text
-            .char_indices()
-            .any(|(at, c)| !c.is_whitespace() && !covered(at))
-    {
+/// A paragraph with images, in a document: the images drawn, at most a column wide — alone, or
+/// under the paragraph's words when it has some.
+fn pictures(i: &Inline, ctx: &mut Ctx) -> Option<AnyElement> {
+    ctx.doc.as_ref()?;
+    let images: Vec<(String, String)> = i
+        .spans
+        .iter()
+        .filter(|s| s.style.image)
+        .map(|s| {
+            (
+                s.link.clone().unwrap_or_default(),
+                i.text[s.range.clone()].trim().to_owned(),
+            )
+        })
+        .collect();
+    if images.is_empty() {
         return None;
     }
+    let covered = |at: usize| {
+        i.spans
+            .iter()
+            .any(|s| s.style.image && s.range.contains(&at))
+    };
+    let words = i
+        .text
+        .char_indices()
+        .any(|(at, c)| !c.is_whitespace() && !covered(at));
+    let row = picture_row(&images, ctx)?;
+    Some(if words {
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(inline(i, ctx))
+            .child(row)
+            .into_any_element()
+    } else {
+        row
+    })
+}
+
+/// Images by (src, alt), drawn from the document's pictures; one not in the repository is named.
+fn picture_row(images: &[(String, String)], ctx: &Ctx) -> Option<AnyElement> {
+    let pictures = ctx.doc.as_ref()?;
     Some(
         div()
             .flex()
             .flex_wrap()
             .gap(px(8.))
-            .children(images.into_iter().map(|s| {
-                let src = s.link.clone().unwrap_or_default();
-                let alt = i.text[s.range.clone()].trim().to_owned();
+            .children(images.iter().map(|(src, alt)| {
+                let (src, alt) = (src.clone(), alt.clone());
                 match pictures.get(&src) {
                     Some((image, size)) => {
                         let (w, h) = size.map_or((480., 270.), |(w, h)| {
@@ -385,7 +416,7 @@ fn block(block: &Block, ctx: &mut Ctx) -> AnyElement {
             }))
             .child(inline(i, ctx))
             .into_any_element(),
-        Block::Code { lang, text } => code_block(lang, text, ctx),
+        Block::Code { lang, text, marks } => code_block(lang, text, marks, ctx),
         Block::Quote(blocks) => blocks_of(blocks, ctx)
             .pl(px(10.))
             .border_l_2()
@@ -478,6 +509,20 @@ fn block(block: &Block, ctx: &mut Ctx) -> AnyElement {
             .my(px(2.))
             .bg(theme::island_border())
             .into_any_element(),
+        // In a document, HTML reads as what it shows: its words and its images (#11).
+        Block::Html(text) if ctx.doc.is_some() => {
+            let images = markdown::html_images(text);
+            let words = markdown::html_text(text);
+            let centred = text.to_ascii_lowercase().contains("align=\"center\"");
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .when(centred, |s| s.items_center())
+                .children((!words.is_empty()).then(|| div().child(words)))
+                .children(picture_row(&images, ctx))
+                .into_any_element()
+        }
         Block::Html(text) => div()
             .font_family(theme::CODE_FONT)
             .text_size(px(11.))
@@ -489,7 +534,7 @@ fn block(block: &Block, ctx: &mut Ctx) -> AnyElement {
 
 /// A fenced block: highlighted by its language; GitLab's `suggestion` blocks as the lines they
 /// would put in.
-fn code_block(lang: &str, text: &str, ctx: &mut Ctx) -> AnyElement {
+fn code_block(lang: &str, text: &str, marks: &[(usize, Mark)], ctx: &mut Ctx) -> AnyElement {
     let suggestion = lang.starts_with("suggestion");
     let spans = if suggestion {
         vec![Vec::new(); text.lines().count()]
@@ -521,9 +566,15 @@ fn code_block(lang: &str, text: &str, ctx: &mut Ctx) -> AnyElement {
                     }),
             );
             let layout = styled.layout().clone();
+            // In a changed document, a line added or removed (#11).
+            let mark = marks.iter().find(|(at, _)| *at == n).map(|(_, m)| *m);
             div()
                 .px(px(8.))
                 .when(suggestion, |s| s.bg(theme::added_line()))
+                .when(mark == Some(Mark::Added), |s| s.bg(theme::added_line()))
+                .when(mark == Some(Mark::Removed), |s| {
+                    s.bg(theme::removed_line()).opacity(0.7).line_through()
+                })
                 .child(text_block(styled.into_any_element(), layout, line, ctx))
         })
         .collect();

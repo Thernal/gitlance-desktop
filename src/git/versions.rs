@@ -212,11 +212,12 @@ pub(super) fn version_diff(
     let mut opts = diff::options(settings);
     opts.reverse(true);
     let changes = repo.diff_tree_to_index(Some(&to_tip), Some(&index), Some(&mut opts))?;
-    // Reversed: the old side is the rebased index, whose images are not read.
+    // Reversed: the old side is the replayed index, its images read from it (in memory).
     let sides = diff::Sides {
         old: None,
         new: Some(&to_tip),
         disk: false,
+        old_index: Some(&index),
     };
     let mut files = diff::collect(repo, changes, sides)?;
     for file in &mut files {

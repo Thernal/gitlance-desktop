@@ -15,6 +15,8 @@ pub enum Block {
     Code {
         lang: String,
         text: String,
+        /// In a changed document: the lines (0-based) added and removed (#11).
+        marks: Vec<(usize, Mark)>,
     },
     Quote(Vec<Block>),
     List {
@@ -233,7 +235,11 @@ impl Builder {
             TagEnd::CodeBlock => {
                 if let Some((lang, text)) = self.code.take() {
                     let text = text.strip_suffix('\n').unwrap_or(&text).to_owned();
-                    self.block(Block::Code { lang, text });
+                    self.block(Block::Code {
+                        lang,
+                        text,
+                        marks: Vec::new(),
+                    });
                 }
             }
             TagEnd::HtmlBlock => {
@@ -379,14 +385,86 @@ pub fn is_document(path: &str) -> bool {
         .is_some_and(|(_, ext)| matches!(ext.to_ascii_lowercase().as_str(), "md" | "markdown"))
 }
 
-/// Where the images of a document point, as written.
+/// Where the images of a document point, as written: markdown images and HTML `<img>` tags.
 pub fn images(source: &str) -> Vec<String> {
     Parser::new_ext(source, OPTIONS)
-        .filter_map(|e| match e {
-            Event::Start(Tag::Image { dest_url, .. }) => Some(dest_url.into_string()),
-            _ => None,
+        .flat_map(|e| match e {
+            Event::Start(Tag::Image { dest_url, .. }) => vec![dest_url.into_string()],
+            Event::Html(t) | Event::InlineHtml(t) => {
+                html_images(&t).into_iter().map(|(src, _)| src).collect()
+            }
+            _ => Vec::new(),
         })
         .collect()
+}
+
+/// The `<img>` tags of some HTML: each one's `src` and `alt`.
+pub fn html_images(html: &str) -> Vec<(String, String)> {
+    let lower = html.to_ascii_lowercase();
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(at) = lower[from..].find("<img").map(|i| from + i) {
+        let end = lower[at..].find('>').map_or(html.len(), |i| at + i);
+        let tag = &html[at..end];
+        if let Some(src) = attribute(tag, "src") {
+            out.push((src, attribute(tag, "alt").unwrap_or_default()));
+        }
+        from = end;
+    }
+    out
+}
+
+/// The value of attribute `name` in tag `tag`, quoted or not.
+fn attribute(tag: &str, name: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(at) = lower[from..].find(name).map(|i| from + i) {
+        from = at + name.len();
+        // The whole name, not the end of another one (`data-src`).
+        let before = lower[..at].chars().next_back();
+        if before.is_some_and(|c| !c.is_whitespace()) {
+            continue;
+        }
+        let rest = tag[from..].trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let value = match rest.chars().next() {
+            Some(q @ ('"' | '\'')) => rest[1..].split(q).next().unwrap_or_default(),
+            _ => rest
+                .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
+                .next()
+                .unwrap_or_default(),
+        };
+        return Some(value.to_owned());
+    }
+    None
+}
+
+/// The words of some HTML: its tags and comments left out, the common entities read.
+pub fn html_text(html: &str) -> String {
+    let mut out = String::new();
+    let mut rest = html;
+    while !rest.is_empty() {
+        if let Some(comment) = rest.strip_prefix("<!--") {
+            rest = comment.split_once("-->").map_or("", |(_, r)| r);
+        } else if rest.starts_with('<') {
+            rest = rest.split_once('>').map_or("", |(_, r)| r);
+            out.push(' ');
+        } else {
+            let end = rest.find('<').unwrap_or(rest.len());
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+        }
+    }
+    let out = out
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&amp;", "&");
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The repository path an image link `src` of document `doc` names: relative to the document's
@@ -678,6 +756,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn html_images_and_words_are_read() {
+        let html = "<p align=\"center\">\n  <img src=\"docs/logo.png\" alt='Logo' width=200>\n  <img data-src=\"x.png\" src=diagram.svg>\n</p>\n<!-- a note -->";
+        assert_eq!(
+            html_images(html),
+            [
+                ("docs/logo.png".to_owned(), "Logo".to_owned()),
+                ("diagram.svg".to_owned(), String::new())
+            ]
+        );
+        assert_eq!(html_text(html), "");
+        assert_eq!(html_text("<p>Tom &amp; Jerry<br>go</p>"), "Tom & Jerry go");
+        assert!(images("Text <img src=\"a.png\"> and ![b](b.png)\n").contains(&"a.png".to_owned()));
+    }
+
+    #[test]
     fn mentions_are_names_after_an_at_that_starts_a_word() {
         let text = "@juniper can you check, cc @ember.lind. mail a@b.io (@kestrel)";
         let found: Vec<&str> = mentions(text).into_iter().map(|r| &text[r]).collect();
@@ -730,7 +823,8 @@ mod tests {
             blocks[3],
             Block::Code {
                 lang: "suggestion:-0+0".into(),
-                text: "let x = 1;".into()
+                text: "let x = 1;".into(),
+                marks: Vec::new()
             }
         );
         assert!(

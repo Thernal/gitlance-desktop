@@ -193,6 +193,9 @@ impl Workspace {
 
     /// PageUp, PageDown, Space: a screen of the diff.
     pub(super) fn page(&mut self, down: bool, cx: &mut Context<Self>) {
+        if self.scroll_page(down, cx) {
+            return;
+        }
         self.diff_list
             .scroll_by(px(if down { PAGE } else { -PAGE }));
         cx.notify();

@@ -799,6 +799,12 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.page_block_comment(ix, cx);
                             continue;
                         }
+                        // The comments of the rendered document's third block, opened.
+                        "page-notes" => {
+                            let ix = this.file;
+                            this.page_block_notes(ix, cx);
+                            continue;
+                        }
                         // A side panel section folded (a snapshot run never saves it).
                         "fold-versions" => {
                             this.layout.fold_versions = true;
@@ -1604,6 +1610,8 @@ impl Workspace {
                         this.start_working_poll(cx);
                         this.start_fetching(cx);
                         this.load_requests(cx);
+                        // The documents this repository reads as Source (#11).
+                        this.page.load(&crate::review::key(&root));
                         this.root = Some(root);
                         this.branches = branches;
                         let (refname, commit) = keep.unzip();
@@ -1646,6 +1654,7 @@ impl Workspace {
 
     fn clear_file(&mut self) {
         self.stack = None;
+        self.page.leave();
         self.annotations.clear();
         self.data = None;
         self.view_task = None;
@@ -3306,13 +3315,9 @@ impl Workspace {
                 .text_color(theme::muted())
                 .child("No changes")
                 .into_any_element(),
-            (Some(file), _) if self.shows_page(file) => div()
-                .id("page")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .child(self.render_page(self.file, cx.entity().downgrade()))
-                .into_any_element(),
+            (Some(file), _) if self.shows_page(file) => {
+                self.render_page_alone(self.file, cx.entity().downgrade())
+            }
             (Some(file), _) if self.shows_image(file) => self.render_image(file, cx),
             (Some(file), _) if file.hunks.is_empty() => div()
                 .flex_1()
@@ -3334,6 +3339,8 @@ impl Workspace {
             .relative()
             .flex_1()
             .min_w_0()
+            // Never taller than the window: a page scrolls inside it (#11).
+            .min_h_0()
             .bg(theme::editor())
             .border_2()
             .border_color(self.zone_border(zones::Zone::Diff))

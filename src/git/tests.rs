@@ -445,6 +445,32 @@ fn range_pairs_tell_unchanged_modified_new_and_dropped_commits() {
 }
 
 #[test]
+fn a_lines_two_counters_follow_the_hunks_above_it() {
+    let mut fx = Fixture::new();
+    let old: String = (1..=20).map(|n| format!("line {n}\n")).collect();
+    let new = old
+        .replace("line 3\n", "line 3\nadded a\nadded b\n")
+        .replace("line 15\n", "");
+    let a = fx.commit("refs/heads/main", &[], &[("f.txt", &old)], "root");
+    let b = fx.commit(
+        "refs/heads/main",
+        &[a],
+        &[("f.txt", &new)],
+        "commit: change",
+    );
+    let files = fx.open().commit_diff(b, DiffSettings::default()).unwrap();
+    let f = &files[0];
+    // In a hunk: an added line has the new counter only, a context line both.
+    assert_eq!(f.line_pair(false, 4), (None, Some(4)));
+    assert_eq!(f.line_pair(false, 3), (Some(3), Some(3)));
+    // Between the hunks, two lines down; past the removed one, one.
+    assert_eq!(f.line_pair(false, 12), (Some(10), Some(12)));
+    assert_eq!(f.line_pair(true, 10), (Some(10), Some(12)));
+    assert_eq!(f.line_pair(false, 21), (Some(20), Some(21)));
+    assert_eq!(f.line_pair(true, 15), (Some(15), None));
+}
+
+#[test]
 fn conflicts_name_the_files_both_sides_changed() {
     let mut fx = Fixture::new();
     let root = fx.commit("refs/heads/main", &[], &[("a.txt", "1\n2\n3\n")], "root");
@@ -546,6 +572,45 @@ fn the_working_tree_reads_staged_unstaged_and_untracked_changes() {
     assert_eq!(count, 3);
     fs::write(dir.join("a.txt"), "three!\n").unwrap();
     assert_ne!(repo.working_summary().unwrap().1, before);
+}
+
+#[test]
+fn a_documents_old_images_come_from_what_it_is_compared_with() {
+    use std::fs;
+    let fx = Fixture::new();
+    let dir = fx.repo.workdir().unwrap().to_owned();
+    fs::write(dir.join("doc.md"), "![plan](p.png)\n").unwrap();
+    fs::write(dir.join("p.png"), "head").unwrap();
+    let mut index = fx.repo.index().unwrap();
+    index.add_path(std::path::Path::new("doc.md")).unwrap();
+    index.add_path(std::path::Path::new("p.png")).unwrap();
+    index.write().unwrap();
+    let tree = fx.repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let sig = Signature::new("Test", "t@example.com", &Time::new(1, 0)).unwrap();
+    fx.repo
+        .commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+        .unwrap();
+    // The image staged, the document edited and not.
+    fs::write(dir.join("p.png"), "staged").unwrap();
+    index.add_path(std::path::Path::new("p.png")).unwrap();
+    index.write().unwrap();
+    fs::write(dir.join("doc.md"), "![plan](p.png)\n\nMore.\n").unwrap();
+
+    let old_image = |only_unstaged: bool| {
+        let tree = fx
+            .open()
+            .working_tree(DiffSettings::default(), only_unstaged)
+            .unwrap();
+        let doc = tree
+            .files
+            .into_iter()
+            .find(|f| f.path() == "doc.md")
+            .unwrap();
+        let old = doc.pictures.into_iter().find(|p| p.old).unwrap();
+        old.image.bytes.to_vec()
+    };
+    assert_eq!(old_image(false), b"head");
+    assert_eq!(old_image(true), b"staged");
 }
 
 #[test]

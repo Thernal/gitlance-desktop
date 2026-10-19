@@ -83,6 +83,9 @@ pub struct Compose {
     /// The completion list's selected row, and where a list was closed with esc (#51, #9).
     pick: usize,
     closed: Option<usize>,
+    /// Written on a document read as a page: its file in the diff, the composer under the block
+    /// (#11).
+    page: Option<usize>,
 }
 
 impl Workspace {
@@ -385,6 +388,80 @@ impl Workspace {
         self.start_comment_on(old, None, line, cx);
     }
 
+    /// Where a comment is written, for the reader of the export: a commit or a version range.
+    fn comment_at(&self) -> String {
+        match self.selection {
+            Selection::Commit(ix) => self
+                .commits
+                .get(ix)
+                .map(|c| format::short(c.id))
+                .unwrap_or_default(),
+            Selection::Versions { from, to } => {
+                match (self.versions.get(from), self.versions.get(to)) {
+                    (Some(a), Some(b)) => format!("v{}→v{}", a.number, b.number),
+                    _ => String::new(),
+                }
+            }
+            Selection::WorkingTree => "working tree".to_owned(),
+            Selection::None => String::new(),
+        }
+    }
+
+    /// Who a new comment is for: a run of comments to one merge request does not have to pick it
+    /// every time.
+    fn comment_target(&self) -> Target {
+        match self.request_target() {
+            Some(iid) if self.last_request_target == Some(iid) => Target::Request(iid),
+            _ => Target::Agent,
+        }
+    }
+
+    /// A comment on a block of the document file `ix` read as a page: on the source line `line`
+    /// the block starts on, written under the block (#11).
+    pub(super) fn start_page_comment(
+        &mut self,
+        ix: usize,
+        old: bool,
+        line: u32,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(file) = self.diff.as_ref().and_then(|d| d.files.get(ix)) else {
+            return;
+        };
+        let text = if old { &file.old_text } else { &file.new_text };
+        let code = text
+            .as_deref()
+            .and_then(|t| t.lines().nth(line as usize - 1))
+            .unwrap_or_default()
+            .to_owned();
+        let path = file.path().to_owned();
+        self.compose = Some(Compose {
+            path,
+            old,
+            first: None,
+            line,
+            code,
+            edit: TextEdit::default(),
+            at: self.comment_at(),
+            target: self.comment_target(),
+            error: None,
+            posting: false,
+            preview: false,
+            pick: 0,
+            closed: None,
+            page: Some(ix),
+        });
+        self.reset_field_edit();
+        self.remeasure_pages();
+        cx.notify();
+    }
+
+    /// The composer written on a page: its file, side and line.
+    pub(super) fn page_compose(&self) -> Option<(usize, bool, u32)> {
+        let c = self.compose.as_ref()?;
+        Some((c.page?, c.old, c.line))
+    }
+
     /// The lines selected in the diff, first and last, on their side; a selection that ends at the
     /// start of a line does not take that line.
     fn selected_lines(&self) -> Option<(bool, u32, u32)> {
@@ -410,26 +487,7 @@ impl Workspace {
             return;
         };
         let code = data.side(old).line(line).0.to_owned();
-        let at = match self.selection {
-            Selection::Commit(ix) => self
-                .commits
-                .get(ix)
-                .map(|c| format::short(c.id))
-                .unwrap_or_default(),
-            Selection::Versions { from, to } => {
-                match (self.versions.get(from), self.versions.get(to)) {
-                    (Some(a), Some(b)) => format!("v{}→v{}", a.number, b.number),
-                    _ => String::new(),
-                }
-            }
-            Selection::WorkingTree => "working tree".to_owned(),
-            Selection::None => String::new(),
-        };
-        // A run of comments to one merge request does not have to pick it every time.
-        let target = match self.request_target() {
-            Some(iid) if self.last_request_target == Some(iid) => Target::Request(iid),
-            _ => Target::Agent,
-        };
+        let (at, target) = (self.comment_at(), self.comment_target());
         self.compose = Some(Compose {
             path,
             old,
@@ -444,6 +502,7 @@ impl Workspace {
             preview: false,
             pick: 0,
             closed: None,
+            page: None,
         });
         self.refresh_rows();
         cx.notify();
@@ -519,6 +578,7 @@ impl Workspace {
             preview: false,
             pick: 0,
             closed: None,
+            page: None,
         });
         self.reset_field_edit();
         self.refresh_rows();
@@ -640,6 +700,7 @@ impl Workspace {
             preview: false,
             pick: 0,
             closed: None,
+            page: None,
         });
         self.reset_field_edit();
         self.thread_at = Some(ix);
@@ -682,6 +743,7 @@ impl Workspace {
             preview: false,
             pick: 0,
             closed: None,
+            page: None,
         });
         self.reset_field_edit();
         self.inbox_view.reply = Some((iid, discussion));
@@ -756,6 +818,7 @@ impl Workspace {
             preview: false,
             pick: 0,
             closed: None,
+            page: None,
         });
         self.reset_field_edit();
         self.refresh_rows();
@@ -923,6 +986,7 @@ impl Workspace {
     pub(super) fn cancel_comment(&mut self, cx: &mut Context<Self>) {
         if self.compose.take().is_some() {
             self.refresh_rows();
+            self.remeasure_pages();
             cx.notify();
         }
     }
@@ -968,6 +1032,7 @@ impl Workspace {
         self.save_comments();
         self.copied = false;
         self.refresh_rows();
+        self.remeasure_pages();
         cx.notify();
     }
 
@@ -982,11 +1047,13 @@ impl Workspace {
             Some(super::Header::Compare { head, .. }) => head.1.to_string(),
             _ => return,
         };
-        let file = self
-            .diff
-            .as_ref()
-            .and_then(|d| d.files.get(self.file))
-            .map(|f| (f.new_path.clone(), f.old_path.clone()));
+        // On a page the file is the page's, and its counters come from its hunks (#11).
+        let at_file = compose.page.unwrap_or(self.file);
+        let file = self.diff.as_ref().and_then(|d| d.files.get(at_file));
+        let pair = file
+            .filter(|_| compose.page.is_some())
+            .map(|f| f.line_pair(compose.old, compose.line));
+        let file = file.map(|f| (f.new_path.clone(), f.old_path.clone()));
         if body.is_empty() || compose.posting {
             return;
         }
@@ -994,7 +1061,8 @@ impl Workspace {
             return;
         };
         self.last_request_target = Some(iid);
-        let (old_line, new_line) = self.line_pair(compose.line, compose.old);
+        let (old_line, new_line) =
+            pair.unwrap_or_else(|| self.line_pair(compose.line, compose.old));
         let range = compose.first.and_then(|first| {
             Some((
                 self.diff_line(first, compose.old)?,
@@ -1062,6 +1130,7 @@ impl Workspace {
                     Ok(()) => {
                         this.compose = None;
                         this.refresh_rows();
+                        this.remeasure_pages();
                         match this.inbox_view.reply.take() {
                             Some((iid, _)) if inbox => this.inbox_posted(iid, cx),
                             _ => this.reload_threads(cx),
@@ -2447,8 +2516,6 @@ impl Workspace {
                 cx.notify();
             }
         }
-        // A comment asked for on a rendered document's block (#11).
-        self.page_comment(cx);
         let Some(id) = self.jump.take() else {
             return;
         };

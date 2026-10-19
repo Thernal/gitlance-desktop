@@ -1149,6 +1149,7 @@ impl Render for Workspace {
                         div()
                             .flex_1()
                             .min_w_0()
+                            .min_h_0()
                             .flex()
                             .flex_col()
                             .children(self.inbox.then(|| {
@@ -1209,6 +1210,7 @@ impl Render for Workspace {
                                         div()
                                             .flex_1()
                                             .min_w_0()
+                                            .min_h_0()
                                             .flex()
                                             .flex_col()
                                             .child(if self.choosing_request() {

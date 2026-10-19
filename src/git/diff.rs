@@ -178,6 +178,9 @@ pub(super) struct Sides<'a> {
     pub old: Option<&'a Tree<'a>>,
     pub new: Option<&'a Tree<'a>>,
     pub disk: bool,
+    /// The old side is an index (the working tree's not staged changes, a rebased version's
+    /// replay): a document's images are read from it instead of `old`.
+    pub old_index: Option<&'a git2::Index>,
 }
 
 impl FileDiff {
@@ -191,6 +194,50 @@ impl FileDiff {
     /// Line `line` of a side (`old`) as GitLab counts it: its kind and both counters — for an
     /// added line, the old line that comes next; for a removed one, the new line that comes next.
     /// `None` when the line is in no hunk.
+    /// GitLab's two counters for `line` of one side: both for an unchanged line (in a hunk, or
+    /// between hunks, shifted by what the hunks above it added and removed), one for an added or
+    /// removed line.
+    pub fn line_pair(&self, old: bool, line: u32) -> (Option<u32>, Option<u32>) {
+        let side = |l: &DiffLine| if old { l.old_line } else { l.new_line };
+        for hunk in &self.hunks {
+            if let Some(l) = hunk.lines.iter().find(|l| side(l) == Some(line)) {
+                return match l.kind {
+                    LineKind::Context => (l.old_line, l.new_line),
+                    LineKind::Added => (None, l.new_line),
+                    LineKind::Removed => (l.old_line, None),
+                };
+            }
+        }
+        let shift: i64 = self
+            .hunks
+            .iter()
+            .filter(|h| {
+                h.lines
+                    .iter()
+                    .filter_map(side)
+                    .max()
+                    .is_some_and(|l| l < line)
+            })
+            .flat_map(|h| &h.lines)
+            .map(|l| match l.kind {
+                LineKind::Added => 1,
+                LineKind::Removed => -1,
+                LineKind::Context => 0,
+            })
+            .sum();
+        let other = if old {
+            i64::from(line) + shift
+        } else {
+            i64::from(line) - shift
+        };
+        let other = u32::try_from(other).ok().filter(|&n| n >= 1);
+        if old {
+            (Some(line), other)
+        } else {
+            (other, Some(line))
+        }
+    }
+
     pub fn position(&self, old: bool, line: u32) -> Option<DiffLine> {
         let side = |l: &DiffLine| if old { l.old_line } else { l.new_line };
         for hunk in &self.hunks {
@@ -245,6 +292,7 @@ pub(super) fn tree_to_tree(
             old,
             new,
             disk: false,
+            old_index: None,
         },
     )
 }
@@ -322,10 +370,19 @@ pub(super) fn collect(
         let new_image = image(delta.new_file(), &new_path, workdir);
         let mut pictures = Vec::new();
         if let (Some(p), Content::Text(text)) = (&old_path, &old) {
-            pictures.extend(read_pictures(repo, p, text, sides.old, false, true));
+            let from = match sides.old_index {
+                Some(index) => Pictured::Index(index),
+                None => Pictured::Tree(sides.old),
+            };
+            pictures.extend(read_pictures(repo, p, text, from, true));
         }
         if let (Some(p), Content::Text(text)) = (&new_path, &new) {
-            pictures.extend(read_pictures(repo, p, text, sides.new, sides.disk, false));
+            let from = if sides.disk {
+                Pictured::Disk
+            } else {
+                Pictured::Tree(sides.new)
+            };
+            pictures.extend(read_pictures(repo, p, text, from, false));
         }
         files.push(FileDiff {
             old_path,
@@ -345,14 +402,20 @@ pub(super) fn collect(
     Ok(files)
 }
 
-/// The images markdown file `path` links to by a repository path, read from `tree` (or the disk);
-/// at most a few dozen, none for another kind of file.
+/// Where a side's images are read.
+enum Pictured<'a> {
+    Tree(Option<&'a Tree<'a>>),
+    Index(&'a git2::Index),
+    Disk,
+}
+
+/// The images markdown file `path` links to by a repository path, read from `from`; at most a
+/// few dozen, none for another kind of file.
 fn read_pictures(
     repo: &Repository,
     path: &str,
     text: &str,
-    tree: Option<&Tree<'_>>,
-    disk: bool,
+    from: Pictured<'_>,
     old: bool,
 ) -> Vec<Picture> {
     if !crate::markdown::is_document(path) {
@@ -369,16 +432,24 @@ fn read_pictures(
         let Some(kind) = ImageKind::of(&at) else {
             continue;
         };
-        let bytes = if disk {
-            repo.workdir()
-                .map(|w| w.join(&at))
-                .filter(|f| std::fs::metadata(f).is_ok_and(|m| m.len() as usize <= MAX_IMAGE_BYTES))
-                .and_then(|f| std::fs::read(f).ok())
-        } else {
-            tree.and_then(|t| t.get_path(std::path::Path::new(&at)).ok())
-                .and_then(|e| repo.find_blob(e.id()).ok())
+        let blob = |id: git2::Oid| {
+            repo.find_blob(id)
+                .ok()
                 .filter(|b| b.size() <= MAX_IMAGE_BYTES)
                 .map(|b| b.content().to_vec())
+        };
+        let bytes = match &from {
+            Pictured::Disk => repo
+                .workdir()
+                .map(|w| w.join(&at))
+                .filter(|f| std::fs::metadata(f).is_ok_and(|m| m.len() as usize <= MAX_IMAGE_BYTES))
+                .and_then(|f| std::fs::read(f).ok()),
+            Pictured::Tree(tree) => tree
+                .and_then(|t| t.get_path(std::path::Path::new(&at)).ok())
+                .and_then(|e| blob(e.id())),
+            Pictured::Index(index) => index
+                .get_path(std::path::Path::new(&at), 0)
+                .and_then(|e| blob(e.id)),
         };
         if let Some(bytes) = bytes {
             out.push(Picture {

@@ -464,18 +464,23 @@ impl Repo {
                 .show_untracked_content(true);
             o
         };
-        // The images a document links to are read from HEAD on the old side, the index's
-        // version aside.
+        // A document's images: on the old side from HEAD, or for the not staged changes alone
+        // from the index they are compared with; on the new side from the disk.
         let sides = diff::Sides {
             old: head.as_ref(),
             new: None,
             disk: true,
+            old_index: None,
         };
+        let index = self.inner.index()?;
         let unstaged = diff::collect(
             &self.inner,
             self.inner
                 .diff_index_to_workdir(None, Some(&mut opts(settings)))?,
-            sides,
+            diff::Sides {
+                old_index: Some(&index),
+                ..sides
+            },
         )?;
         let staged = self.inner.diff_tree_to_index(
             head.as_ref(),

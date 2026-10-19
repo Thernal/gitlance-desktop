@@ -1,10 +1,14 @@
 //! A changed markdown file read as a page (Design #11 A + B, `docs/specs/markdown-viewer.md`): its
-//! card has Rendered | Source (M), Rendered by default, and the page follows the toolbar's Split |
+//! card has Rendered | Source (M, the active file's), Rendered by default; a document turned to
+//! Source stays so between launches (`page-source.txt`). The page follows the toolbar's Split |
 //! Unified. Unified draws the new version with the changes in it — a bar in the margin for every
 //! changed block, green added, yellow changed with its words marked, red removed (faded and struck;
 //! a removed section folds to one line). Split draws the old version beside the new, block beside
 //! block, a hatched gap where one side has none. Images come from the repository at each side's
-//! version (`FileDiff::pictures`). A comment on a block goes to the source line it starts on.
+//! version (`FileDiff::pictures`). A comment on a block goes to the source line it starts on,
+//! written under the block on the page; its count opens the block's comments there.
+//! Viewed one file at a time the page scrolls on its own: n / p step through its changed blocks,
+//! space and ⇧space scroll it.
 
 use super::diff_view::{LineNote, NoteTone, chip, group};
 use super::markdown::{Pictures, doc_block};
@@ -20,20 +24,84 @@ use std::rc::Rc;
 /// A document's rows, by the texts compared (their addresses).
 type Rows = RefCell<HashMap<(usize, usize), Rc<Vec<Row>>>>;
 
+const SOURCE_FILE: &str = "page-source.txt";
+
 /// How changed documents are read, and their rows kept between frames.
 #[derive(Default)]
 pub struct Page {
-    /// Source: the ordinary diff of the text.
-    pub source: bool,
+    /// The documents read as Source (the ordinary diff of the text), by path; of the repository
+    /// `source_of`.
+    source: HashSet<String>,
+    source_of: Option<String>,
     /// Removed sections opened, by path and the first old line.
     open: HashSet<(String, u32)>,
-    /// After a click on a block: the line to put a comment on once the source is laid out.
-    pub comment: Option<(bool, u32)>,
+    /// Blocks whose comments are shown under them: path, side, first line.
+    notes_open: HashSet<(String, bool, u32)>,
     /// A document's rows, by the texts compared.
     cache: Rows,
+    /// One file at a time: the page's own scroll, its children the blocks.
+    scroll: gpui::ScrollHandle,
+    /// The changed blocks among those children, as last drawn; the one n / p last went to.
+    changes: RefCell<Vec<usize>>,
+    at: Option<usize>,
+}
+
+/// The paths of repository `repo` in the lines of `page-source.txt` (`repo<TAB>path`).
+fn source_paths(text: &str, repo: &str) -> HashSet<String> {
+    text.lines()
+        .filter_map(|l| l.split_once('\t'))
+        .filter(|(r, _)| *r == repo)
+        .map(|(_, p)| p.to_owned())
+        .collect()
+}
+
+/// `text` with repository `repo`'s lines replaced by `paths`; other repositories' kept.
+fn with_source_paths(text: &str, repo: &str, paths: &HashSet<String>) -> String {
+    let mut lines: Vec<String> = text
+        .lines()
+        .filter(|l| l.split_once('\t').is_some_and(|(r, _)| r != repo))
+        .map(str::to_owned)
+        .chain(paths.iter().map(|p| format!("{repo}\t{p}")))
+        .collect();
+    lines.sort_unstable();
+    lines.join("\n") + "\n"
 }
 
 impl Page {
+    /// Another file: n / p start again from the top of its view.
+    pub fn leave(&mut self) {
+        self.at = None;
+    }
+
+    /// Document `path` is read as Source.
+    pub fn is_source(&self, path: &str) -> bool {
+        self.source.contains(path)
+    }
+
+    /// The documents of repository `repo` read as Source, once per repository.
+    pub fn load(&mut self, repo: &str) {
+        if self.source_of.as_deref() != Some(repo) {
+            self.source = source_paths(&crate::storage::read(SOURCE_FILE), repo);
+            self.source_of = Some(repo.to_owned());
+        }
+    }
+
+    /// Document `path` read as Source or not; remembered.
+    fn set_source(&mut self, path: &str, source: bool) -> bool {
+        let changed = if source {
+            self.source.insert(path.to_owned())
+        } else {
+            self.source.remove(path)
+        };
+        if changed && let Some(repo) = &self.source_of {
+            crate::storage::save(
+                SOURCE_FILE,
+                with_source_paths(&crate::storage::read(SOURCE_FILE), repo, &self.source),
+            );
+        }
+        changed
+    }
+
     fn rows(&self, file: &FileDiff) -> Rc<Vec<Row>> {
         let key = |t: &Option<std::sync::Arc<str>>| {
             t.as_ref()
@@ -77,7 +145,7 @@ fn heading(block: &Block) -> Option<String> {
 impl Workspace {
     /// Whether file `file` is drawn as a page (not as its text diff).
     pub(super) fn shows_page(&self, file: &FileDiff) -> bool {
-        !self.page.source
+        !self.page.is_source(file.path())
             && markdown::is_document(file.path())
             && file.note.is_none()
             && !file.hunks.is_empty()
@@ -95,12 +163,13 @@ impl Workspace {
         if !markdown::is_document(file.path()) || file.note.is_some() || file.hunks.is_empty() {
             return None;
         }
-        let source = self.page.source;
+        let source = self.page.is_source(file.path());
         let set = |to: bool| {
             let this = this.clone();
+            let path = file.path().to_owned();
             move |_: &ClickEvent, _: &mut gpui::Window, cx: &mut gpui::App| {
                 cx.stop_propagation();
-                this.update(cx, |this, cx| this.set_page_source(to, cx))
+                this.update(cx, |this, cx| this.set_page_source(&path, to, cx))
                     .ok();
             }
         };
@@ -121,8 +190,26 @@ impl Workspace {
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
                     group()
-                        .child(chip("page-rendered", "Rendered", !source).on_click(set(false)))
-                        .child(chip("page-source", "Source", source).on_click(set(true))),
+                        .child(
+                            chip(
+                                gpui::ElementId::Name(
+                                    format!("page-rendered-{}", file.path()).into(),
+                                ),
+                                "Rendered",
+                                !source,
+                            )
+                            .on_click(set(false)),
+                        )
+                        .child(
+                            chip(
+                                gpui::ElementId::Name(
+                                    format!("page-source-{}", file.path()).into(),
+                                ),
+                                "Source",
+                                source,
+                            )
+                            .on_click(set(true)),
+                        ),
                 )
                 .child(super::keys::caps("M", super::keys::On::Plain))
                 .children((legend && !source).then(|| {
@@ -140,12 +227,14 @@ impl Workspace {
         )
     }
 
-    /// Rendered or Source for every document (M).
-    pub(super) fn set_page_source(&mut self, source: bool, cx: &mut Context<Self>) {
-        if self.page.source == source {
+    /// Document `path` read Rendered or as Source.
+    pub(super) fn set_page_source(&mut self, path: &str, source: bool, cx: &mut Context<Self>) {
+        if let Some(root) = &self.root {
+            self.page.load(&crate::review::key(root));
+        }
+        if !self.page.set_source(path, source) {
             return;
         }
-        self.page.source = source;
         self.sync_stack();
         self.build_stack(cx);
         if self.stack.is_none() {
@@ -154,19 +243,47 @@ impl Workspace {
         cx.notify();
     }
 
+    /// M: the active file, when it is a document, turns Rendered or Source.
     pub(super) fn toggle_page_source(&mut self, cx: &mut Context<Self>) {
-        self.set_page_source(!self.page.source, cx);
+        let Some(path) = self
+            .diff
+            .as_ref()
+            .and_then(|d| d.files.get(self.file))
+            .map(|f| f.path().to_owned())
+            .filter(|p| markdown::is_document(p))
+        else {
+            return;
+        };
+        let source = self.page.is_source(&path);
+        self.set_page_source(&path, !source, cx);
     }
 
-    /// Goes to `line` of file `ix` in Source; with `comment`, starts a comment on it.
-    fn page_to_source(
-        &mut self,
-        ix: usize,
-        old: bool,
-        line: u32,
-        comment: bool,
-        cx: &mut Context<Self>,
-    ) {
+    /// The comment button of file `ix`'s third block (a snapshot's way in).
+    #[cfg(feature = "snapshot")]
+    pub(super) fn page_block_comment(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(file) = self.diff.as_ref().and_then(|d| d.files.get(ix)) else {
+            return;
+        };
+        let rows = self.page.rows(file);
+        if let Some((_, (line, _))) = rows.get(2).and_then(|r| r.new.clone()) {
+            self.start_page_comment(ix, false, line, cx);
+        }
+    }
+
+    /// The count of file `ix`'s third block opened (a snapshot's way in).
+    #[cfg(feature = "snapshot")]
+    pub(super) fn page_block_notes(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(file) = self.diff.as_ref().and_then(|d| d.files.get(ix)) else {
+            return;
+        };
+        let rows = self.page.rows(file);
+        if let Some((_, (line, _))) = rows.get(2).and_then(|r| r.new.clone()) {
+            self.toggle_page_notes(ix, false, line, cx);
+        }
+    }
+
+    /// A block's count: its comments shown under it on the page, or hidden again.
+    fn toggle_page_notes(&mut self, ix: usize, old: bool, first: u32, cx: &mut Context<Self>) {
         let Some(path) = self
             .diff
             .as_ref()
@@ -175,41 +292,66 @@ impl Workspace {
         else {
             return;
         };
-        self.page.comment = comment.then_some((old, line));
-        if ix != self.file {
-            self.page.source = true;
-            self.sync_stack();
-            self.build_stack(cx);
-            self.jump_to_line(&path, line, old, cx);
-            return;
+        let key = (path, old, first);
+        if !self.page.notes_open.remove(&key) {
+            self.page.notes_open.insert(key);
         }
-        self.set_page_source(true, cx);
-        self.jump_line = Some((line, old));
-        if self.stack.is_none() {
-            self.apply_jump(cx);
-        }
+        self.remeasure_pages();
+        cx.notify();
     }
 
-    /// What a click on the comment button of file `ix`'s third block does (a snapshot's way in).
-    #[cfg(feature = "snapshot")]
-    pub(super) fn page_block_comment(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(file) = self.diff.as_ref().and_then(|d| d.files.get(ix)) else {
-            return;
+    /// What goes under each block of file `ix` (by side and first line): the composer written
+    /// on it, and the comments of a block whose count was opened.
+    fn page_under(
+        &self,
+        ix: usize,
+        path: &str,
+        rows: &[Row],
+        this: &WeakEntity<Self>,
+    ) -> HashMap<(bool, u32), Vec<AnyElement>> {
+        let span = |old: bool, line: u32| {
+            rows.iter()
+                .filter_map(|r| if old { r.old.as_ref() } else { r.new.as_ref() })
+                .map(|(_, l)| *l)
+                .find(|(a, b)| (*a..=*b).contains(&line))
         };
-        let rows = self.page.rows(file);
-        if let Some((_, (line, _))) = rows.get(2).and_then(|r| r.new.clone()) {
-            self.page_to_source(ix, false, line, true, cx);
-        }
-    }
-
-    /// A comment asked for on a block, once the file's source is laid out.
-    pub(super) fn page_comment(&mut self, cx: &mut Context<Self>) {
-        if self.data.is_some()
-            && !self.rows.is_empty()
-            && let Some((old, line)) = self.page.comment.take()
+        let mut under: HashMap<(bool, u32), Vec<AnyElement>> = HashMap::new();
+        if let Some((_, old, line)) = self.page_compose().filter(|(f, _, _)| *f == ix)
+            && let Some((first, _)) = span(old, line)
+            && let Some(composer) = self.compose_box(this.clone())
         {
-            self.start_comment(old, line, cx);
+            under
+                .entry((old, first))
+                .or_default()
+                .push(div().mt(px(8.)).child(composer).into_any_element());
         }
+        for (p, old, first) in &self.page.notes_open {
+            let Some((first, last)) = span(*old, *first).filter(|_| p == path) else {
+                continue;
+            };
+            let here = |o: bool, n: u32| o == *old && (first..=last).contains(&n);
+            let mut notes: Vec<AnyElement> = Vec::new();
+            if self.showing_request() {
+                notes.extend(
+                    self.request_threads_in(path)
+                        .into_iter()
+                        .filter(|&(_, o, n)| here(o, n))
+                        .map(|(t, _, _)| self.render_request_thread(t, 0., this.clone())),
+                );
+            }
+            notes.extend(
+                self.comments
+                    .iter()
+                    .filter(|c| c.path == path && here(c.old, c.line))
+                    .map(|c| self.render_thread(c.id, 0., this.clone())),
+            );
+            under.entry((*old, first)).or_default().extend(
+                notes
+                    .into_iter()
+                    .map(|n| div().mt(px(8.)).child(n).into_any_element()),
+            );
+        }
+        under
     }
 
     /// The column heads of Split: the versions compared.
@@ -236,10 +378,125 @@ impl Workspace {
         }
     }
 
-    /// File `ix` as a page: Unified or Split as the toolbar says.
+    /// File `ix` as a page in the list of every file: Unified or Split as the toolbar says.
     pub(super) fn render_page(&self, ix: usize, this: WeakEntity<Self>) -> AnyElement {
+        let blocks = self.page_blocks(ix, this);
+        page_text(div().w_full().py(px(16.)).pl(px(44.)).pr(px(24.)))
+            .child(
+                div()
+                    .when(self.options.unified, |s| s.max_w(px(880.)))
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.))
+                    .children(blocks.into_iter().map(|(b, _)| b)),
+            )
+            .into_any_element()
+    }
+
+    /// File `ix` alone as a page that scrolls on its own, its blocks its children, so n / p can
+    /// step through the changed ones.
+    pub(super) fn render_page_alone(&self, ix: usize, this: WeakEntity<Self>) -> AnyElement {
+        let blocks = self.page_blocks(ix, this);
+        *self.page.changes.borrow_mut() = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, changed))| *changed)
+            .map(|(k, _)| k)
+            .collect();
+        let unified = self.options.unified;
+        // Laid over its place rather than in it: its blocks never make the pane taller than the
+        // window, so it scrolls.
+        let page = page_text(
+            div()
+                .id("page")
+                .track_scroll(&self.page.scroll)
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .py(px(16.))
+                .pl(px(44.))
+                .pr(px(24.)),
+        )
+        .children(blocks.into_iter().map(|(b, _)| {
+            div()
+                .flex_none()
+                .when(unified, |s| s.max_w(px(880.)))
+                .child(b)
+        }));
+        div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .child(page)
+            .into_any_element()
+    }
+
+    /// n / p on a page viewed alone: the next (or previous) changed block, from the last one gone
+    /// to, else from the top of the view. Whether the page took the keys.
+    pub(super) fn step_page(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
+        if !self.page_alone() {
+            return false;
+        }
+        let changes = self.page.changes.borrow().clone();
+        let top = self.page.scroll.top_item();
+        let from = self.page.at.filter(|&at| at + 1 >= top);
+        let to = if forward {
+            changes
+                .iter()
+                .copied()
+                .find(|&c| from.map_or(c >= top, |at| c > at))
+        } else {
+            changes
+                .iter()
+                .rev()
+                .copied()
+                .find(|&c| c < from.unwrap_or(top))
+        };
+        if let Some(to) = to {
+            self.page.at = Some(to);
+            self.page.scroll.scroll_to_top_of_item(to);
+            cx.notify();
+        }
+        true
+    }
+
+    /// Space and ⇧space on a page viewed alone: a screen down or up. Whether the page took it.
+    pub(super) fn scroll_page(&mut self, down: bool, cx: &mut Context<Self>) -> bool {
+        if !self.page_alone() {
+            return false;
+        }
+        let s = &self.page.scroll;
+        let step = s.bounds().size.height * 0.85;
+        let y = if down {
+            (s.offset().y - step).max(-s.max_offset().y)
+        } else {
+            (s.offset().y + step).min(px(0.))
+        };
+        s.set_offset(gpui::point(s.offset().x, y));
+        self.page.at = None;
+        cx.notify();
+        true
+    }
+
+    /// One file at a time, and it is a page.
+    fn page_alone(&self) -> bool {
+        self.stack.is_none()
+            && self
+                .diff
+                .as_ref()
+                .and_then(|d| d.files.get(self.file))
+                .is_some_and(|f| self.shows_page(f))
+    }
+
+    /// File `ix`'s blocks: Unified or Split as the toolbar says, each with whether it is a change.
+    fn page_blocks(&self, ix: usize, this: WeakEntity<Self>) -> Vec<(AnyElement, bool)> {
         let Some(file) = self.diff.as_ref().and_then(|d| d.files.get(ix)) else {
-            return div().into_any_element();
+            return Vec::new();
         };
         let rows = self.page.rows(file);
         let path = file.path().to_owned();
@@ -259,29 +516,21 @@ impl Workspace {
             .into_iter()
             .filter(|n| n.tone != NoteTone::Bookmark)
             .collect();
+        let under = self.page_under(ix, &path, &rows, &this);
         let ctx = BlockCtx {
             ix,
             this,
             notes: Rc::new(notes),
+            under: RefCell::new(under),
         };
-        let page = if self.options.unified {
+        if self.options.unified {
             self.unified(&rows, &path, &ctx, &old_pics, &new_pics)
         } else {
             self.split(&rows, &ctx, &old_pics, &new_pics)
-        };
-        div()
-            .w_full()
-            .py(px(16.))
-            .pl(px(44.))
-            .pr(px(24.))
-            .font_family(theme::UI_FONT)
-            .text_size(px(14.))
-            .line_height(px(22.))
-            .text_color(theme::text())
-            .child(page)
-            .into_any_element()
+        }
     }
 
+    /// Unified's blocks, each with whether it is a change.
     fn unified(
         &self,
         rows: &[Row],
@@ -289,8 +538,8 @@ impl Workspace {
         ctx: &BlockCtx,
         old_pics: &Rc<Pictures>,
         new_pics: &Rc<Pictures>,
-    ) -> AnyElement {
-        let mut out: Vec<AnyElement> = Vec::new();
+    ) -> Vec<(AnyElement, bool)> {
+        let mut out: Vec<(AnyElement, bool)> = Vec::new();
         let mut k = 0;
         while k < rows.len() {
             let row = &rows[k];
@@ -309,10 +558,10 @@ impl Workspace {
                     .collect();
                 let key = (path.to_owned(), *line);
                 let open = self.page.open.contains(&key);
-                out.push(fold_line(&names, open, key, ctx.this.clone(), k));
+                out.push((fold_line(&names, open, key, ctx.this.clone(), k), true));
                 if open {
                     for (n, r) in rows[k..end].iter().enumerate() {
-                        out.push(ctx.block(r, true, old_pics, k + n, true));
+                        out.push((ctx.block(r, true, old_pics, k + n, true), false));
                     }
                 }
                 k = end;
@@ -323,25 +572,23 @@ impl Workspace {
             } else {
                 new_pics
             };
-            out.push(ctx.block(row, row.change == Change::Removed, pics, k, true));
+            out.push((
+                ctx.block(row, row.change == Change::Removed, pics, k, true),
+                row.change != Change::Same,
+            ));
             k += 1;
         }
-        div()
-            .max_w(px(880.))
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .children(out)
-            .into_any_element()
+        out
     }
 
+    /// Split's column heads, then its rows, each with whether it is a change.
     fn split(
         &self,
         rows: &[Row],
         ctx: &BlockCtx,
         old_pics: &Rc<Pictures>,
         new_pics: &Rc<Pictures>,
-    ) -> AnyElement {
+    ) -> Vec<(AnyElement, bool)> {
         let (before, now) = self.page_heads();
         let head = |text: String| {
             let (version, rest) = text.split_once(" · ").unwrap_or((&text, ""));
@@ -374,18 +621,14 @@ impl Workspace {
                 .into_any_element()
         };
         let cell = |el: AnyElement| div().flex_1().min_w_0().child(el).into_any_element();
-        div()
+        let heads = div()
             .flex()
-            .flex_col()
-            .gap(px(12.))
-            .child(
-                div()
-                    .flex()
-                    .gap(px(56.))
-                    .child(head(before))
-                    .child(head(now)),
-            )
-            .children(rows.iter().enumerate().map(|(k, r)| {
+            .gap(px(56.))
+            .child(head(before))
+            .child(head(now))
+            .into_any_element();
+        std::iter::once((heads, false))
+            .chain(rows.iter().enumerate().map(|(k, r)| {
                 let (left, right) = match r.change {
                     Change::Added => (hatch(), cell(ctx.side_block(r, false, new_pics, k))),
                     Change::Removed => (cell(ctx.side_block(r, true, old_pics, k)), hatch()),
@@ -394,9 +637,17 @@ impl Workspace {
                         cell(ctx.side_block(r, false, new_pics, k)),
                     ),
                 };
-                div().flex().gap(px(56.)).child(left).child(right)
+                (
+                    div()
+                        .flex()
+                        .gap(px(56.))
+                        .child(left)
+                        .child(right)
+                        .into_any_element(),
+                    r.change != Change::Same,
+                )
             }))
-            .into_any_element()
+            .collect()
     }
 }
 
@@ -405,6 +656,8 @@ struct BlockCtx {
     ix: usize,
     this: WeakEntity<Workspace>,
     notes: Rc<Vec<LineNote>>,
+    /// What goes under a block (the composer, its opened comments), by side and first line.
+    under: RefCell<HashMap<(bool, u32), Vec<AnyElement>>>,
 }
 
 impl BlockCtx {
@@ -480,12 +733,12 @@ impl BlockCtx {
             .filter(|n| n.old == old && (first..=last).contains(&n.line))
             .map(|n| n.count)
             .sum();
-        let at = self
-            .notes
-            .iter()
-            .find(|n| n.old == old && (first..=last).contains(&n.line))
-            .map_or(first, |n| n.line);
         let (ix, show, write) = (self.ix, self.this.clone(), self.this.clone());
+        let under = self
+            .under
+            .borrow_mut()
+            .remove(&(old, first))
+            .unwrap_or_default();
         let group_name = "page-block";
         div()
             .id(("page-block", k * 2 + old as usize))
@@ -507,6 +760,7 @@ impl BlockCtx {
                     .when(struck, |s| s.opacity(0.6).line_through())
                     .child(body),
             )
+            .children(under)
             .child(
                 div()
                     .absolute()
@@ -527,11 +781,15 @@ impl BlockCtx {
                             .text_size(px(11.))
                             .text_color(theme::accent())
                             .cursor_pointer()
-                            .child(super::icons::icon("message").size(px(12.)))
+                            .child(
+                                super::icons::icon("message")
+                                    .size(px(12.))
+                                    .text_color(theme::accent()),
+                            )
                             .child(count.to_string())
                             .on_click(move |_: &ClickEvent, _, cx| {
                                 show.update(cx, |this, cx| {
-                                    this.page_to_source(ix, old, at, false, cx)
+                                    this.toggle_page_notes(ix, old, first, cx)
                                 })
                                 .ok();
                             })
@@ -554,7 +812,7 @@ impl BlockCtx {
                             .on_click(move |_: &ClickEvent, _, cx| {
                                 write
                                     .update(cx, |this, cx| {
-                                        this.page_to_source(ix, old, first, true, cx)
+                                        this.start_page_comment(ix, old, first, cx)
                                     })
                                     .ok();
                             }),
@@ -562,6 +820,14 @@ impl BlockCtx {
             )
             .into_any_element()
     }
+}
+
+/// A page's type: the document reads in the interface's font, a size up.
+fn page_text<E: Styled>(el: E) -> E {
+    el.font_family(theme::UI_FONT)
+        .text_size(px(14.))
+        .line_height(px(22.))
+        .text_color(theme::text())
 }
 
 /// "1 section removed: Known issues", and a click shows it where it was.
@@ -618,4 +884,25 @@ fn fold_line(
             .ok();
         })
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn documents_read_as_source_are_kept_per_repository() {
+        let text = "a\tREADME.md\nb\tdocs/x.md\n";
+        assert_eq!(
+            source_paths(text, "a"),
+            HashSet::from(["README.md".to_owned()])
+        );
+        let paths = HashSet::from(["CHANGELOG.md".to_owned()]);
+        let saved = with_source_paths(text, "a", &paths);
+        assert_eq!(saved, "a\tCHANGELOG.md\nb\tdocs/x.md\n");
+        assert_eq!(
+            source_paths(&saved, "b"),
+            HashSet::from(["docs/x.md".to_owned()])
+        );
+    }
 }

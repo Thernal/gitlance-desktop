@@ -217,6 +217,10 @@ impl Workspace {
 
     /// F7 / ⇧F7: the next (or previous) change in the open file.
     pub(super) fn step_change(&mut self, forward: bool, cx: &mut Context<Self>) {
+        // A document read as a page: its changed blocks (#11).
+        if self.step_page(forward, cx) {
+            return;
+        }
         let n = self.changes.len();
         if n == 0 {
             return;
