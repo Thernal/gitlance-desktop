@@ -37,6 +37,10 @@ pub enum Act {
     Reveal(std::path::PathBuf),
     NewWindow(std::path::PathBuf),
     CloseProject(usize),
+    /// The agent comment being written (#50 F, its ▾): sent alone, to a chat picked, or copied.
+    AgentSendOnly,
+    AgentChooseChat,
+    AgentCopy,
 }
 
 #[derive(Clone)]
@@ -135,6 +139,9 @@ impl Workspace {
             Act::Tool(tool) => self.toggle_tool(tool, cx),
             Act::Reveal(path) => cx.reveal_path(&path),
             Act::NewWindow(path) => cx.defer(move |cx| super::open_new_window(path, cx)),
+            Act::AgentSendOnly => self.add_and_send(true, cx),
+            Act::AgentChooseChat => self.add_and_pick_chat(cx),
+            Act::AgentCopy => self.add_and_copy(cx),
             // Need the window: `run_act_in` runs them.
             Act::MoveProject { .. } | Act::CloseProject(_) => {}
         }

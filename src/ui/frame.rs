@@ -937,7 +937,13 @@ impl Render for Workspace {
             )
             .on_action(cx.listener(|this, _: &SendToAgent, _, cx| this.open_agent_pick(cx)))
             .on_action(cx.listener(|this, _: &ShowShortcuts, _, cx| this.toggle_shortcuts(cx)))
-            .on_action(cx.listener(|this, _: &NextThread, _, cx| this.step_thread(true, cx)))
+            .on_action(cx.listener(|this, _: &NextThread, _, cx| {
+                // ⇧N: a note on the agent's form in view, else the next discussion (#10 C).
+                match this.acting_agent_form() {
+                    Some(id) => this.start_answer(id, cx),
+                    None => this.step_thread(true, cx),
+                }
+            }))
             .on_action(cx.listener(|this, _: &PreviousThread, _, cx| this.step_thread(false, cx)))
             .on_action(cx.listener(|this, _: &ReplyThread, _, cx| this.reply_focused(cx)))
             .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))

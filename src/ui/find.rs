@@ -304,6 +304,15 @@ impl Workspace {
             self.filter_key(event, cx);
             return;
         }
+        // 0…9 answer the agent's form in view (#10 C).
+        if self.dfind.is_none()
+            && self.find.text.is_none()
+            && key.modifiers.number_of_modifiers() == 0
+            && let Some(digit) = key.key.parse::<usize>().ok().filter(|d| *d < 10)
+            && self.answer_by_key(digit, cx)
+        {
+            return;
+        }
         if let Some(mut text) = self.dfind.clone() {
             match input::edit(&mut text, &mut self.field_edit, key, cx) {
                 Edit::Changed => self.set_dfind(text, cx),

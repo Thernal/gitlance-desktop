@@ -1,7 +1,7 @@
 //! Reactions on a request's notes (Design #9 B, `docs/specs/reactions.md`): pills under a note
 //! once it has some (yours outlined, hover names who, a click toggles yours); hovering a note
-//! floats a bar on its corner — your five most used, ☺+ for the rest, Reply with the author
-//! already mentioned; ⇧E opens it on the selected discussion's newest note. ☺+ is a search over
+//! floats a bar on its corner — your five most used, ☺+ for the rest, 🤖 a note for your agent
+//! (#50 G), Reply with the author already mentioned; ⇧E opens it on the selected discussion's newest note. ☺+ is a search over
 //! every emoji (your recent first, then the rest), arrows and ↵, `:name:` at its foot. On GitHub
 //! only its eight, no search. The five are counted on this Mac (`reactions-used.txt`).
 
@@ -263,7 +263,7 @@ impl Workspace {
         };
         let author = author.to_owned();
         let five = self.five();
-        let (grid_this, reply_this) = (this.clone(), this.clone());
+        let (grid_this, reply_this, agent_this) = (this.clone(), this.clone(), this.clone());
         Some(
             div()
                 .flex()
@@ -313,6 +313,23 @@ impl Workspace {
                         .h(px(18.))
                         .mx(px(2.))
                         .bg(theme::island_border()),
+                )
+                // A note on this discussion for your agent, kept on this Mac (#50 G).
+                .child(
+                    cell(
+                        ("bar-agent", note as usize),
+                        div().child("🤖").into_any_element(),
+                    )
+                    .tooltip_show_delay(crate::ui::hover::LONG)
+                    .tooltip(|_, cx| {
+                        cx.new(|_| super::Tip("A note for your agent — only on this Mac"))
+                            .into()
+                    })
+                    .on_click(move |_, _, cx| {
+                        agent_this
+                            .update(cx, |this, cx| this.start_thread_note(thread, cx))
+                            .ok();
+                    }),
                 )
                 .child(
                     div()

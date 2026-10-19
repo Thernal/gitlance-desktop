@@ -46,6 +46,8 @@ pub enum Target {
     ThreadNote(usize),
     /// The reviewer's note answering the agent's question on comment `0` (#10).
     Answer(u64),
+    /// Text's own value on the agent's form of comment `0` (#10 C).
+    AnswerValue(u64),
     /// Written in the Inbox: a reply to the selected notice's discussion, or a comment on its
     /// request when it has none (`Workspace::inbox_view.reply`).
     InboxReply,
@@ -355,6 +357,7 @@ impl Workspace {
                                 | Target::Edit(_)
                                 | Target::ThreadNote(_)
                                 | Target::Answer(_)
+                                | Target::AnswerValue(_)
                                 | Target::InboxReply
                         )
                 }) || go == Some((old, line))
@@ -447,20 +450,49 @@ impl Workspace {
     }
 
     /// Adds the agent comment being written to the drafts, then sends it alone or with all.
-    fn add_and_send(&mut self, only: bool, cx: &mut Context<Self>) {
-        let before = self.comments.iter().map(|c| c.id).max().unwrap_or(0);
-        self.add_comment(cx);
-        let Some(new) = self
-            .comments
-            .iter()
-            .map(|c| c.id)
-            .max()
-            .filter(|&id| id > before)
-        else {
+    pub(super) fn add_and_send(&mut self, only: bool, cx: &mut Context<Self>) {
+        let Some(new) = self.add_agent_comment(cx) else {
             return;
         };
         let ids = if only { vec![new] } else { self.agent_drafts() };
         self.send_agent(ids, cx);
+    }
+
+    /// Adds the agent comment being written; its id, when it was added.
+    fn add_agent_comment(&mut self, cx: &mut Context<Self>) -> Option<u64> {
+        let before = self.comments.iter().map(|c| c.id).max().unwrap_or(0);
+        self.add_comment(cx);
+        self.comments
+            .iter()
+            .map(|c| c.id)
+            .max()
+            .filter(|&id| id > before)
+    }
+
+    /// 🤖 on a discussion's hover bar: the purple note for the agent on it, written in its reply
+    /// field (#50 G, as ⇥ there).
+    pub(super) fn start_thread_note(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.start_reply(ix, cx);
+        if let Some(c) = self.compose.as_mut()
+            && c.target == Target::Reply(ix)
+        {
+            c.target = Target::ThreadNote(ix);
+        }
+        cx.notify();
+    }
+
+    /// ▾ → Choose the chat…: adds it and asks where it goes.
+    pub(super) fn add_and_pick_chat(&mut self, cx: &mut Context<Self>) {
+        if let Some(new) = self.add_agent_comment(cx) {
+            self.open_agent_pick_for(vec![new], cx);
+        }
+    }
+
+    /// ▾ → Copy as markdown: adds it and copies every open comment for an agent.
+    pub(super) fn add_and_copy(&mut self, cx: &mut Context<Self>) {
+        if self.add_agent_comment(cx).is_some() {
+            self.copy_for_agent(cx);
+        }
     }
 
     /// The note answering the agent on comment `id` (⇥ Add a note under its form).
@@ -489,6 +521,41 @@ impl Workspace {
             closed: None,
         });
         self.reset_field_edit();
+        self.refresh_rows();
+        cx.notify();
+    }
+
+    /// Text's own value on the agent's form of comment `id`, in a field of its own.
+    pub(super) fn start_answer_value(&mut self, id: u64, cx: &mut Context<Self>) {
+        let value = self
+            .comments
+            .iter()
+            .find(|c| c.id == id)
+            .and_then(|c| c.answer.as_ref())
+            .map(|a| a.value.clone())
+            .unwrap_or_default();
+        self.start_answer(id, cx);
+        if let Some(c) = self.compose.as_mut() {
+            c.target = Target::AnswerValue(id);
+            c.edit = TextEdit::new(value);
+        }
+    }
+
+    /// The typed value replaces any suggestion picked; it goes to the drafts like a pick.
+    fn save_answer_value(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(compose) = self.compose.take() else {
+            return;
+        };
+        if let Some(c) = self.comments.iter_mut().find(|c| c.id == id) {
+            let a = c.answer.get_or_insert_with(Default::default);
+            a.value = compose.edit.text().trim().to_owned();
+            if !a.value.is_empty() {
+                a.picks.clear();
+                a.your_call = false;
+            }
+            c.state = State::Draft;
+        }
+        self.save_comments();
         self.refresh_rows();
         cx.notify();
     }
@@ -842,6 +909,7 @@ impl Workspace {
                 (Target::Reply(ix), _) => Target::ThreadNote(ix),
                 (Target::ThreadNote(ix), _) => Target::Reply(ix),
                 (Target::Answer(id), _) => Target::Answer(id),
+                (Target::AnswerValue(id), _) => Target::AnswerValue(id),
                 (Target::Edit(change), _) => Target::Edit(change),
                 (Target::InboxReply, _) => Target::InboxReply,
                 (Target::Agent, Some(iid)) => Target::Request(iid),
@@ -865,6 +933,7 @@ impl Workspace {
             Some(Target::Reply(ix)) => return self.post_reply(ix, cx),
             Some(Target::Edit(change)) => return self.save_edit(change, cx),
             Some(Target::Answer(id)) => return self.save_answer_note(id, cx),
+            Some(Target::AnswerValue(id)) => return self.save_answer_value(id, cx),
             Some(Target::ThreadNote(ix)) => return self.add_thread_note(ix, cx),
             Some(Target::InboxReply) => return self.post_inbox_reply(cx),
             _ => {}
@@ -1752,10 +1821,9 @@ impl Workspace {
         });
         // The agent asked with a form: answered here, the pick going to the drafts (#10 C).
         let form = self.render_agent_form(id, asking.clone());
-        let answering = self
-            .compose
-            .as_ref()
-            .is_some_and(|c| c.target == Target::Answer(id));
+        let answering = self.compose.as_ref().is_some_and(
+            |c| matches!(c.target, Target::Answer(i) | Target::AnswerValue(i) if i == id),
+        );
         let answer_box = answering
             .then(|| self.reply_editor(asking))
             .flatten()
@@ -1820,7 +1888,8 @@ impl Workspace {
             Target::Agent
             | Target::Edit(Change::Agent(_))
             | Target::ThreadNote(_)
-            | Target::Answer(_) => Source::Agent,
+            | Target::Answer(_)
+            | Target::AnswerValue(_) => Source::Agent,
             Target::Request(_)
             | Target::Reply(_)
             | Target::Edit(Change::Note { .. })
@@ -1923,21 +1992,37 @@ impl Workspace {
                 })
                 .into_any_element(),
             );
+            // ▾: Send this only, the chat it goes to, Copy as markdown (#50 F).
             tail.push(
-                discussion::button(
-                    "compose-send-one",
-                    "Send this only",
-                    Some("⌥⌘↵"),
-                    Kind::Quiet,
-                )
-                .h(px(28.))
-                .px(px(8.))
-                .on_click(move |_, _, cx| {
-                    send_one
-                        .update(cx, |this, cx| this.add_and_send(true, cx))
-                        .ok();
-                })
-                .into_any_element(),
+                discussion::button("compose-more", "▾", None, Kind::Quiet)
+                    .h(px(28.))
+                    .px(px(8.))
+                    .tooltip_show_delay(crate::ui::hover::LONG)
+                    .tooltip(|_, cx| {
+                        cx.new(|_| super::Tip("Send this only, choose the chat, copy"))
+                            .into()
+                    })
+                    .on_click(move |event, _, cx| {
+                        let at = event.position();
+                        send_one
+                            .update(cx, |this, cx| {
+                                use super::menu::{Act, Entry};
+                                this.open_menu(
+                                    at,
+                                    vec![
+                                        vec![
+                                            Entry::new("Send this only", Act::AgentSendOnly)
+                                                .key("⌥⌘↵"),
+                                            Entry::new("Choose the chat…", Act::AgentChooseChat),
+                                        ],
+                                        vec![Entry::new("Copy as markdown", Act::AgentCopy)],
+                                    ],
+                                    cx,
+                                )
+                            })
+                            .ok();
+                    })
+                    .into_any_element(),
             );
         }
         tail.push(
@@ -1991,7 +2076,10 @@ impl Workspace {
     pub(super) fn reply_editor(&self, this: WeakEntity<Self>) -> Option<gpui::Div> {
         let compose = self.compose.as_ref()?;
         // ⇥ turned it into a note for the agent: purple, and it stays on this Mac (#50 G).
-        let agent = matches!(compose.target, Target::ThreadNote(_) | Target::Answer(_));
+        let agent = matches!(
+            compose.target,
+            Target::ThreadNote(_) | Target::Answer(_) | Target::AnswerValue(_)
+        );
         let tone = if agent {
             Source::Agent.color()
         } else {
@@ -2059,6 +2147,7 @@ impl Workspace {
                     "A note for your agent, with this discussion — never posted"
                 }
                 Target::Answer(_) => "A note for the agent with your answer",
+                Target::AnswerValue(_) => "Your own value",
                 _ => "Reply…",
             },
             lead,

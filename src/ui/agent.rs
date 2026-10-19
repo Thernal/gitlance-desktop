@@ -236,121 +236,42 @@ impl Workspace {
                 .border_color(if on { theme::agent() } else { theme::faint() })
                 .when(on, |s| s.bg(theme::agent()))
         };
-        let rows: Vec<gpui::AnyElement> = form
-            .map(|f| {
-                let choices = f.choices();
-                let many = f.kind.many();
-                order
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(place, &i)| {
-                        let o = choices.get(i)?.clone();
-                        let on = if f.kind == FormKind::Order {
-                            false
-                        } else if answered {
-                            answer.picks.contains(&i)
-                        } else {
-                            many && o.on
-                        };
-                        let (pick, up, down) = (this.clone(), this.clone(), this.clone());
-                        let order_kind = f.kind == FormKind::Order;
-                        Some(
-                            div()
-                                .id(("form-option", id as usize * 64 + i))
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.))
-                                .px(px(8.))
-                                .py(px(6.))
-                                .rounded(px(ROW_RADIUS))
-                                .cursor_pointer()
-                                .when(on, |s| s.bg(theme::agent_bg()))
-                                .hover(|s| s.bg(theme::hover()))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(8.))
-                                        .child(
-                                            div()
-                                                .w(px(16.))
-                                                .text_size(px(11.))
-                                                .text_color(theme::faint())
-                                                .child((place + 1).to_string()),
-                                        )
-                                        .children((!order_kind).then(|| mark(on, many)))
-                                        .child(div().flex_1().child(o.label.clone()))
-                                        .children((!o.detail.is_empty()).then(|| {
-                                            div()
-                                                .text_size(px(12.))
-                                                .text_color(theme::muted())
-                                                .child(o.detail.clone())
-                                        }))
-                                        .children(order_kind.then(|| {
-                                            div()
-                                                .flex()
-                                                .gap(px(2.))
-                                                .child(
-                                                    div()
-                                                        .id(("form-up", id as usize * 64 + i))
-                                                        .px(px(6.))
-                                                        .rounded(px(4.))
-                                                        .hover(|s| s.bg(theme::selected()))
-                                                        .child("↑")
-                                                        .on_click(move |_, _, cx| {
-                                                            cx.stop_propagation();
-                                                            up.update(cx, |this, cx| {
-                                                                this.move_answer(
-                                                                    id, place, true, cx,
-                                                                )
-                                                            })
-                                                            .ok();
-                                                        }),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .id(("form-down", id as usize * 64 + i))
-                                                        .px(px(6.))
-                                                        .rounded(px(4.))
-                                                        .hover(|s| s.bg(theme::selected()))
-                                                        .child("↓")
-                                                        .on_click(move |_, _, cx| {
-                                                            cx.stop_propagation();
-                                                            down.update(cx, |this, cx| {
-                                                                this.move_answer(
-                                                                    id, place, false, cx,
-                                                                )
-                                                            })
-                                                            .ok();
-                                                        }),
-                                                )
-                                        })),
-                                )
-                                .children((!o.code.is_empty()).then(|| {
-                                    div()
-                                        .ml(px(38.))
-                                        .px(px(10.))
-                                        .py(px(6.))
-                                        .rounded(px(6.))
-                                        .bg(theme::editor())
-                                        .font_family(theme::CODE_FONT)
-                                        .text_size(px(12.))
-                                        .children(o.code.iter().map(|l| div().child(l.clone())))
-                                }))
-                                .when(!order_kind, |s| {
-                                    s.on_click(move |_, _, cx| {
-                                        pick.update(cx, |this, cx| {
-                                            this.pick_answer(id, Some(i), cx)
-                                        })
-                                        .ok();
-                                    })
-                                })
-                                .into_any_element(),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let rows: Vec<gpui::AnyElement> = match form {
+            Some(f) if f.kind == FormKind::Line => {
+                self.render_line_choices(c, f, &answer, this.clone())
+            }
+            _ => self.render_option_rows(id, form, &order, &answer, answered, &mark, this.clone()),
+        };
+        // Text: one's own value beside the suggestions (#10 C).
+        let own = form.filter(|f| f.kind == FormKind::Text).map(|_| {
+            let edit = this.clone();
+            div()
+                .id(("form-own", id as usize))
+                .mx(px(8.))
+                .mt(px(2.))
+                .h(px(30.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap_2()
+                .rounded(px(ROW_RADIUS))
+                .border_1()
+                .border_color(theme::agent())
+                .bg(theme::base())
+                .cursor_text()
+                .font_family(theme::CODE_FONT)
+                .text_size(px(12.))
+                .child(if answer.value.is_empty() {
+                    div().text_color(theme::faint()).child("Your own value…")
+                } else {
+                    div().child(answer.value.clone())
+                })
+                .on_click(move |_, _, cx| {
+                    edit.update(cx, |this, cx| this.start_answer_value(id, cx))
+                        .ok();
+                })
+                .into_any_element()
+        });
         let (call, note, only, all) = (this.clone(), this.clone(), this.clone(), this);
         let button = |idn: (&'static str, usize), label: String, primary: bool| {
             div()
@@ -391,6 +312,7 @@ impl Workspace {
                 .flex_col()
                 .gap(px(4.))
                 .children(rows)
+                .children(own)
                 .children((!answer.note.is_empty()).then(|| {
                     div()
                         .px(px(8.))
@@ -417,7 +339,7 @@ impl Workspace {
                         .child(
                             button(
                                 ("form-note", id as usize),
-                                "⇥  Add a note".to_owned(),
+                                super::keys::text("⇧N  Add a note").into_owned(),
                                 false,
                             )
                             .on_click(move |_, _, cx| {
@@ -464,6 +386,312 @@ impl Workspace {
                 )
                 .into_any_element(),
         )
+    }
+
+    /// Line: the lines the agent suggests drawn as code, with the lines between them from the
+    /// file (when it is the one open); a suggested line is picked with a click (Design
+    /// `kinds.html`, line).
+    fn render_line_choices(
+        &self,
+        c: &crate::review::Comment,
+        f: &crate::review::Form,
+        answer: &crate::review::Answered,
+        this: gpui::WeakEntity<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let id = c.id;
+        let choices = f.choices();
+        // Each suggestion's line number: the first number in its label.
+        let number = |label: &str| -> Option<u32> {
+            let digits: String = label
+                .chars()
+                .skip_while(|ch| !ch.is_ascii_digit())
+                .take_while(char::is_ascii_digit)
+                .collect();
+            digits.parse().ok()
+        };
+        let suggested: Vec<(usize, u32, String)> = choices
+            .iter()
+            .enumerate()
+            .filter_map(|(i, o)| {
+                let code = o.code.first().cloned().unwrap_or_else(|| o.detail.clone());
+                Some((i, number(&o.label)?, code))
+            })
+            .collect();
+        if suggested.is_empty() {
+            return Vec::new();
+        }
+        let (low, high) = suggested.iter().fold((u32::MAX, 0), |(lo, hi), (_, n, _)| {
+            (lo.min(*n), hi.max(*n))
+        });
+        // The file's own lines fill the gaps when it is the open one.
+        let open = self
+            .data
+            .as_ref()
+            .filter(|_| self.current_path().as_deref() == Some(c.path.as_str()));
+        let text_of = |n: u32| -> Option<String> {
+            suggested
+                .iter()
+                .find(|(_, m, _)| *m == n)
+                .map(|(_, _, code)| code.clone())
+                .or_else(|| {
+                    let side = open?.side(false);
+                    (n >= 1 && n <= side.count()).then(|| side.line(n).0.to_owned())
+                })
+        };
+        let span = if open.is_some() && high - low <= 12 {
+            (low.saturating_sub(1).max(1)..=high + 1).collect::<Vec<u32>>()
+        } else {
+            suggested.iter().map(|(_, n, _)| *n).collect()
+        };
+        let rows = span.into_iter().filter_map(|n| {
+            let text = text_of(n)?;
+            let choice = suggested
+                .iter()
+                .find(|(_, m, _)| *m == n)
+                .map(|(i, _, _)| *i);
+            let picked = choice.is_some_and(|i| answer.picks.contains(&i));
+            let pick = this.clone();
+            Some(
+                div()
+                    .id(("form-line", n as usize))
+                    .h(px(20.))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .px(px(8.))
+                    .when(picked, |s| {
+                        s.bg(theme::agent_bg())
+                            .border_l(px(3.))
+                            .border_color(theme::agent())
+                    })
+                    .child(
+                        div()
+                            .w(px(28.))
+                            .flex_none()
+                            .text_right()
+                            .text_color(if choice.is_some() {
+                                theme::agent()
+                            } else {
+                                theme::faint()
+                            })
+                            .child(n.to_string()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .child(text),
+                    )
+                    .children(picked.then(|| {
+                        div()
+                            .flex_none()
+                            .font_family(theme::UI_FONT)
+                            .text_size(px(11.))
+                            .text_color(theme::agent())
+                            .child("← here")
+                    }))
+                    .when_some(choice, |s, i| {
+                        s.cursor_pointer().hover(|s| s.bg(theme::hover())).on_click(
+                            move |_, _, cx| {
+                                pick.update(cx, |this, cx| this.pick_answer(id, Some(i), cx))
+                                    .ok();
+                            },
+                        )
+                    })
+                    .into_any_element(),
+            )
+        });
+        vec![
+            div()
+                .mx(px(8.))
+                .py(px(4.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(theme::island_border())
+                .bg(theme::editor())
+                .font_family(theme::CODE_FONT)
+                .text_size(px(12.))
+                .children(rows)
+                .into_any_element(),
+            div()
+                .px(px(8.))
+                .text_size(px(11.))
+                .text_color(theme::faint())
+                .child(format!(
+                    "click a line, or 1–{} for the ones it suggests",
+                    suggested.len()
+                ))
+                .into_any_element(),
+        ]
+    }
+
+    /// The asked comment the form keys act on: the first one with a form from the top of the
+    /// view (#10 C: 1…9 pick, 0 your call, ⇧N a note).
+    pub(super) fn acting_agent_form(&self) -> Option<u64> {
+        let top = self.local_top();
+        self.rows.iter().skip(top).find_map(|row| match row {
+            super::rows::Row::Thread(id) => self
+                .comments
+                .iter()
+                .find(|c| c.id == *id)
+                .filter(|c| matches!(c.state, State::Sent | State::Draft))
+                .filter(|c| c.replies.last().is_some_and(|r| r.form.is_some()))
+                .map(|c| c.id),
+            _ => None,
+        })
+    }
+
+    /// A digit on the acting form: 0 is your call, 1…9 the option drawn with that number (Line:
+    /// the suggestion in order). Whether it took the key.
+    pub(super) fn answer_by_key(&mut self, digit: usize, cx: &mut Context<Self>) -> bool {
+        use crate::review::FormKind;
+        let Some(id) = self.acting_agent_form() else {
+            return false;
+        };
+        if digit == 0 {
+            self.pick_answer(id, None, cx);
+            return true;
+        }
+        let Some(f) = self
+            .comments
+            .iter()
+            .find(|c| c.id == id)
+            .and_then(|c| c.replies.last())
+            .and_then(|r| r.form.clone())
+        else {
+            return false;
+        };
+        if f.kind == FormKind::Order || digit > f.choices().len() {
+            return false;
+        }
+        self.pick_answer(id, Some(digit - 1), cx);
+        true
+    }
+
+    /// The options of a form, one row each: number, mark, label, detail, code (Order: ↑ ↓).
+    #[allow(clippy::too_many_arguments)]
+    fn render_option_rows(
+        &self,
+        id: u64,
+        form: Option<&crate::review::Form>,
+        order: &[usize],
+        answer: &crate::review::Answered,
+        answered: bool,
+        mark: &dyn Fn(bool, bool) -> gpui::Div,
+        this: gpui::WeakEntity<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        use crate::review::FormKind;
+        let Some(f) = form else {
+            return Vec::new();
+        };
+
+        let choices = f.choices();
+        let many = f.kind.many();
+        order
+            .iter()
+            .enumerate()
+            .filter_map(|(place, &i)| {
+                let o = choices.get(i)?.clone();
+                let on = if f.kind == FormKind::Order {
+                    false
+                } else if answered {
+                    answer.picks.contains(&i)
+                } else {
+                    many && o.on
+                };
+                let (pick, up, down) = (this.clone(), this.clone(), this.clone());
+                let order_kind = f.kind == FormKind::Order;
+                Some(
+                    div()
+                        .id(("form-option", id as usize * 64 + i))
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .px(px(8.))
+                        .py(px(6.))
+                        .rounded(px(ROW_RADIUS))
+                        .cursor_pointer()
+                        .when(on, |s| s.bg(theme::agent_bg()))
+                        .hover(|s| s.bg(theme::hover()))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(
+                                    div()
+                                        .w(px(16.))
+                                        .text_size(px(11.))
+                                        .text_color(theme::faint())
+                                        .child((place + 1).to_string()),
+                                )
+                                .children((!order_kind).then(|| mark(on, many)))
+                                .child(div().flex_1().child(o.label.clone()))
+                                .children((!o.detail.is_empty()).then(|| {
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(theme::muted())
+                                        .child(o.detail.clone())
+                                }))
+                                .children(order_kind.then(|| {
+                                    div()
+                                        .flex()
+                                        .gap(px(2.))
+                                        .child(
+                                            div()
+                                                .id(("form-up", id as usize * 64 + i))
+                                                .px(px(6.))
+                                                .rounded(px(4.))
+                                                .hover(|s| s.bg(theme::selected()))
+                                                .child("↑")
+                                                .on_click(move |_, _, cx| {
+                                                    cx.stop_propagation();
+                                                    up.update(cx, |this, cx| {
+                                                        this.move_answer(id, place, true, cx)
+                                                    })
+                                                    .ok();
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .id(("form-down", id as usize * 64 + i))
+                                                .px(px(6.))
+                                                .rounded(px(4.))
+                                                .hover(|s| s.bg(theme::selected()))
+                                                .child("↓")
+                                                .on_click(move |_, _, cx| {
+                                                    cx.stop_propagation();
+                                                    down.update(cx, |this, cx| {
+                                                        this.move_answer(id, place, false, cx)
+                                                    })
+                                                    .ok();
+                                                }),
+                                        )
+                                })),
+                        )
+                        .children((!o.code.is_empty()).then(|| {
+                            div()
+                                .ml(px(38.))
+                                .px(px(10.))
+                                .py(px(6.))
+                                .rounded(px(6.))
+                                .bg(theme::editor())
+                                .font_family(theme::CODE_FONT)
+                                .text_size(px(12.))
+                                .children(o.code.iter().map(|l| div().child(l.clone())))
+                        }))
+                        .when(!order_kind, |s| {
+                            s.on_click(move |_, _, cx| {
+                                pick.update(cx, |this, cx| this.pick_answer(id, Some(i), cx))
+                                    .ok();
+                            })
+                        })
+                        .into_any_element(),
+                )
+            })
+            .collect()
     }
 
     fn send_to_chat(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -546,8 +774,27 @@ impl Workspace {
     /// The Agents tool window: the chats that listen here, then the purple comments by state.
     pub(super) fn agents_tool(&self, cx: &mut Context<Self>) -> ToolView {
         let drafts = self.agent_drafts().len();
+        // A chat works while it has comments it took and has not answered, and is not listening:
+        // the watcher wakes it with them and runs again when it is done.
+        let working = |session: &str| {
+            self.comments
+                .iter()
+                .filter(|c| c.state == State::Sent)
+                .filter(|c| {
+                    c.sent
+                        .as_ref()
+                        .is_some_and(|s| s.delivered && s.session == session)
+                })
+                .filter(|c| c.replies.is_empty() || c.answer.is_some())
+                .count()
+        };
         let chats =
             self.agent_chats.iter().map(|c| {
+                let busy = if c.listening() {
+                    0
+                } else {
+                    working(&c.session)
+                };
                 div()
                     .mx(px(6.))
                     .px(px(8.))
@@ -563,6 +810,8 @@ impl Workspace {
                             .child(div().flex_none().size(px(8.)).rounded_full().bg(
                                 if c.listening() {
                                     theme::added()
+                                } else if busy > 0 {
+                                    theme::agent()
                                 } else {
                                     theme::faint()
                                 },
@@ -580,7 +829,14 @@ impl Workspace {
                                     .flex_none()
                                     .text_size(px(11.))
                                     .text_color(theme::faint())
-                                    .child(if c.listening() { "listening" } else { "quiet" }),
+                                    .when(busy > 0, |s| s.text_color(theme::agent()))
+                                    .child(if c.listening() {
+                                        "listening".to_owned()
+                                    } else if busy > 0 {
+                                        format!("working · {}", super::plural(busy, "comment"))
+                                    } else {
+                                        "quiet".to_owned()
+                                    }),
                             ),
                     )
                     .children((!c.title.is_empty()).then(|| {

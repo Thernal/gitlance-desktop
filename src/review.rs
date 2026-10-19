@@ -122,6 +122,9 @@ pub struct Answered {
     pub your_call: bool,
     #[serde(default)]
     pub note: String,
+    /// Text's own value, typed in the form's field instead of a suggestion (#10 C).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub value: String,
 }
 
 impl Answered {
@@ -130,6 +133,8 @@ impl Answered {
         let mut parts = Vec::new();
         if self.your_call {
             parts.push("Your call — decide yourself.".to_owned());
+        } else if !self.value.trim().is_empty() {
+            parts.push(format!("Use: {}", self.value.trim()));
         } else if let Some(form) = form {
             let choices = form.choices();
             let picked: Vec<String> = self
