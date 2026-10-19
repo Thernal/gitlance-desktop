@@ -106,6 +106,20 @@ impl Notice {
 }
 
 impl Notices {
+    /// The discussion of request `iid` holding note `note`, as last read.
+    pub fn thread_of(&self, iid: u64, note: u64) -> Option<&Thread> {
+        self.cache
+            .get(&iid)?
+            .1
+            .iter()
+            .find(|t| t.notes.iter().any(|n| n.id == note))
+    }
+
+    /// Request `iid`'s discussions are read again on the next load (after posting to it).
+    pub fn forget(&mut self, iid: u64) {
+        self.cache.remove(&iid);
+    }
+
     pub fn unread(&self) -> usize {
         self.list
             .iter()
@@ -376,11 +390,20 @@ impl Workspace {
                             this.notices.save_read();
                         }
                     }
-                    this.notices.list = list;
-                    this.notices.at = this
+                    // The selected notice stays selected where it moved to.
+                    let selected = this
                         .notices
-                        .at
+                        .list
+                        .get(this.notices.at)
+                        .map(|n| n.key.clone());
+                    this.notices.list = list;
+                    this.notices.at = selected
+                        .and_then(|key| this.notices.list.iter().position(|n| n.key == key))
+                        .unwrap_or(this.notices.at)
                         .min(this.notices.list.len().saturating_sub(1));
+                    if this.inbox {
+                        this.inbox_selected(cx);
+                    }
                 }
                 cx.notify();
             })

@@ -19,6 +19,7 @@ mod goto;
 mod hover;
 mod icons;
 mod image_view;
+mod inbox;
 mod input;
 mod keymap;
 mod keys;
@@ -1196,7 +1197,7 @@ pub struct Workspace {
     agent_chats: Vec<crate::agents::Chat>,
     /// The Inbox place is shown, and which of its notifications it lists.
     inbox: bool,
-    inbox_filter: places::InboxFilter,
+    inbox_view: inbox::InboxView,
     /// The menu of places opened while a merge request is reviewed (it is folded there).
     places_peek: bool,
     /// The note under the pointer (its reaction bar shows), and the one whose ☺+ is open (#9).
@@ -1394,7 +1395,7 @@ impl Workspace {
             answers_stamp: None,
             agent_chats: Vec::new(),
             inbox: false,
-            inbox_filter: Default::default(),
+            inbox_view: Default::default(),
             places_peek: false,
             hover_note: None,
             reaction_grid: None,

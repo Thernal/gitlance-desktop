@@ -980,6 +980,10 @@ impl Workspace {
     }
 
     pub(super) fn reply_focused(&mut self, cx: &mut Context<Self>) {
+        // In the Inbox, r answers the selected notice.
+        if self.inbox && self.zone != super::zones::Zone::Tool {
+            return self.reply_in_inbox(cx);
+        }
         if let Some(ix) = self
             .acting_thread()
             .filter(|_| self.request_target().is_some())

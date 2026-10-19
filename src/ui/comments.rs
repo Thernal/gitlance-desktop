@@ -46,6 +46,9 @@ pub enum Target {
     ThreadNote(usize),
     /// The reviewer's note answering the agent's question on comment `0` (#10).
     Answer(u64),
+    /// Written in the Inbox: a reply to the selected notice's discussion, or a comment on its
+    /// request when it has none (`Workspace::inbox_view.reply`).
+    InboxReply,
 }
 
 /// The comment an edit changes.
@@ -287,6 +290,7 @@ impl Workspace {
                                 | Target::Edit(_)
                                 | Target::ThreadNote(_)
                                 | Target::Answer(_)
+                                | Target::InboxReply
                         )
                 }) || go == Some((old, line))
                 {
@@ -514,6 +518,63 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The Inbox's composer: a reply to discussion `discussion` of request `iid` (on `path` and
+    /// `line` when it is on code), or with no discussion a comment on the request. A comment
+    /// being written elsewhere is kept: the Inbox then waits for it.
+    pub(super) fn start_inbox_reply(
+        &mut self,
+        iid: u64,
+        discussion: Option<String>,
+        spot: Option<(String, u32)>,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .compose
+            .as_ref()
+            .is_some_and(|c| c.target != Target::InboxReply)
+        {
+            return;
+        }
+        let (path, line) = spot.unwrap_or_default();
+        self.compose = Some(Compose {
+            path,
+            old: false,
+            first: None,
+            line,
+            code: String::new(),
+            edit: TextEdit::default(),
+            at: String::new(),
+            target: Target::InboxReply,
+            error: None,
+            posting: false,
+            preview: false,
+            pick: 0,
+            closed: None,
+        });
+        self.reset_field_edit();
+        self.inbox_view.reply = Some((iid, discussion));
+        cx.notify();
+    }
+
+    /// Posts the Inbox's reply: to its discussion, or as a comment on the request.
+    fn post_inbox_reply(&mut self, cx: &mut Context<Self>) {
+        let (Some(remote), Some(compose), Some((iid, discussion))) = (
+            self.web.clone(),
+            self.compose.as_ref(),
+            self.inbox_view.reply.clone(),
+        ) else {
+            return;
+        };
+        let body = compose.edit.text().trim().to_owned();
+        if body.is_empty() || compose.posting {
+            return;
+        }
+        self.submit_compose(cx, move || match discussion {
+            Some(id) => crate::mr::reply(&remote, iid, &id, &body),
+            None => crate::mr::comment(&remote, iid, &body),
+        });
+    }
+
     /// Edit: the composer in place of one's own comment, its text in it.
     pub(super) fn start_edit(&mut self, change: Change, cx: &mut Context<Self>) {
         let (path, old, line, text) = match change {
@@ -717,6 +778,7 @@ impl Workspace {
                 (Target::ThreadNote(ix), _) => Target::Reply(ix),
                 (Target::Answer(id), _) => Target::Answer(id),
                 (Target::Edit(change), _) => Target::Edit(change),
+                (Target::InboxReply, _) => Target::InboxReply,
                 (Target::Agent, Some(iid)) => Target::Request(iid),
                 _ => Target::Agent,
             };
@@ -739,6 +801,7 @@ impl Workspace {
             Some(Target::Edit(change)) => return self.save_edit(change, cx),
             Some(Target::Answer(id)) => return self.save_answer_note(id, cx),
             Some(Target::ThreadNote(ix)) => return self.add_thread_note(ix, cx),
+            Some(Target::InboxReply) => return self.post_inbox_reply(cx),
             _ => {}
         }
         let Some(compose) = self.compose.take() else {
@@ -852,6 +915,10 @@ impl Workspace {
             c.posting = true;
             c.error = None;
         }
+        let inbox = self
+            .compose
+            .as_ref()
+            .is_some_and(|c| c.target == Target::InboxReply);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx.background_executor().spawn(async move { work() }).await;
@@ -860,7 +927,10 @@ impl Workspace {
                     Ok(()) => {
                         this.compose = None;
                         this.refresh_rows();
-                        this.reload_threads(cx);
+                        match this.inbox_view.reply.take() {
+                            Some((iid, _)) if inbox => this.inbox_posted(iid, cx),
+                            _ => this.reload_threads(cx),
+                        }
                     }
                     Err(e) => {
                         if let Some(c) = this.compose.as_mut() {
@@ -1685,9 +1755,10 @@ impl Workspace {
             | Target::Edit(Change::Agent(_))
             | Target::ThreadNote(_)
             | Target::Answer(_) => Source::Agent,
-            Target::Request(_) | Target::Reply(_) | Target::Edit(Change::Note { .. }) => {
-                Source::GitLab
-            }
+            Target::Request(_)
+            | Target::Reply(_)
+            | Target::Edit(Change::Note { .. })
+            | Target::InboxReply => Source::GitLab,
         };
         let tone = source.color();
         let (cancel, add, review, audience) =
