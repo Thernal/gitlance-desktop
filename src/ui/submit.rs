@@ -89,6 +89,17 @@ impl Workspace {
         if key.key == "enter" && key.modifiers.secondary() {
             return self.run_submit(cx);
         }
+        // `@` and `:` complete in the summary too (#51, #9).
+        let mut summary = s.summary.clone();
+        if self.field_completion_key(&mut summary, key) {
+            if let Some(s) = self.submit.as_mut() {
+                s.summary = summary;
+            }
+            return cx.notify();
+        }
+        let Some(s) = self.submit.as_mut() else {
+            return;
+        };
         if key.key == "tab" {
             let at = VERDICTS.iter().position(|v| *v == s.verdict).unwrap_or(0);
             let step = if key.modifiers.shift { 2 } else { 1 };
@@ -382,6 +393,10 @@ impl Workspace {
                     .bg(theme::base())
                     .cursor_text()
                     .child(field),
+            )
+            .children(
+                self.field_completion(&s.summary)
+                    .map(|(_, choices)| self.render_completion(&choices, self.field_pick)),
             )
             .children((agent_drafts > 0).then(|| {
                 div()

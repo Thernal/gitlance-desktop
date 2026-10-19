@@ -437,6 +437,8 @@ impl Workspace {
     /// A field takes the keyboard: its caret starts at the end of its text.
     pub(super) fn reset_field_edit(&mut self) {
         self.field_edit = TextEdit::default();
+        self.field_pick = 0;
+        self.field_closed = None;
         self.field_scroll.set(0.);
     }
 }

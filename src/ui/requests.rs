@@ -34,6 +34,8 @@ pub struct Requests {
     pub scope: Scope,
     /// The project's members, for `@` completion (#51).
     pub members: Vec<(String, String)>,
+    /// Members a mention does not reach (a private project's guests): "not notified" (#51).
+    pub unreached: Vec<String>,
     pub available: bool,
     /// A GitLab project without a token: the rail offers to connect instead of listing.
     pub connectable: bool,
@@ -104,17 +106,19 @@ impl Workspace {
                         mr::username(&remote).ok()
                     };
                     let members = mr::members(&remote).unwrap_or_default();
-                    mr::list(&remote).map(|list| (list, login, members))
+                    let unreached = mr::unreached(&remote).unwrap_or_default();
+                    mr::list(&remote).map(|list| (list, login, (members, unreached)))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.requests.loading = false;
                 match result {
-                    Ok((list, login, members)) => {
+                    Ok((list, login, (members, unreached))) => {
                         this.requests.list = list;
                         if !members.is_empty() {
                             this.requests.members = members;
                         }
+                        this.requests.unreached = unreached;
                         this.requests.error = None;
                         if login.is_some() {
                             this.requests.login = login;

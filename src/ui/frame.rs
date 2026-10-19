@@ -868,6 +868,7 @@ impl Render for Workspace {
                     || self.submit.is_some()
                     || self.open_ask.is_some()
                     || self.agent_pick.is_some()
+                    || self.reaction_grid.is_some()
                 {
                     if self.palette.is_some() || self.ffind.is_some() {
                         "Workspace Typing Palette"
@@ -952,6 +953,7 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleThread, _, cx| this.toggle_focused(cx)))
+            .on_action(cx.listener(|this, _: &ReactNote, _, cx| this.react_focused(cx)))
             .on_action(cx.listener(|this, _: &MarkReviewed, _, cx| this.mark_and_advance(cx)))
             .on_action(cx.listener(|this, _: &ToggleBookmark, _, cx| this.toggle_bookmark(cx)))
             .on_action(cx.listener(|this, _: &ShowBookmarks, _, cx| {

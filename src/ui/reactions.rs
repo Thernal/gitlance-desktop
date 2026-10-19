@@ -1,8 +1,9 @@
 //! Reactions on a request's notes (Design #9 B, `docs/specs/reactions.md`): pills under a note
 //! once it has some (yours outlined, hover names who, a click toggles yours); hovering a note
 //! floats a bar on its corner — your five most used, ☺+ for the rest, Reply with the author
-//! already mentioned. On GitHub only its eight. The five are counted on this Mac
-//! (`reactions-used.txt`).
+//! already mentioned; ⇧E opens it on the selected discussion's newest note. ☺+ is a search over
+//! every emoji (your recent first, then the rest), arrows and ↵, `:name:` at its foot. On GitHub
+//! only its eight, no search. The five are counted on this Mac (`reactions-used.txt`).
 
 use super::{ROW_RADIUS, Workspace, px, theme};
 use crate::{emoji, mr, storage};
@@ -10,6 +11,8 @@ use gpui::{AnyElement, Context, Rgba, WeakEntity, div, prelude::*};
 use std::collections::HashMap;
 
 const USED: &str = "reactions-used.txt";
+/// ☺+'s cells to a row.
+const COLS: usize = 12;
 /// Until there is a history: the five most people reach for.
 const DEFAULT_FIVE: [&str; 5] = ["thumbsup", "heart", "tada", "eyes", "rocket"];
 
@@ -295,8 +298,11 @@ impl Workspace {
                     .on_click(move |_, _, cx| {
                         grid_this
                             .update(cx, |this, cx| {
-                                this.reaction_grid = if open { None } else { Some(note) };
-                                cx.notify();
+                                if open {
+                                    this.close_reaction_grid(cx)
+                                } else {
+                                    this.open_reaction_grid(note, cx)
+                                }
                             })
                             .ok();
                     }),
@@ -331,49 +337,194 @@ impl Workspace {
         )
     }
 
-    /// ☺+: every reaction there is (GitHub: its eight), under the note.
+    /// ⇧E: ☺+ on the newest note of the selected discussion, its search taking the keyboard.
+    pub(super) fn react_focused(&mut self, cx: &mut Context<Self>) {
+        let Some(ix) = self
+            .acting_thread()
+            .filter(|_| self.request_target().is_some())
+        else {
+            return;
+        };
+        let Some(note) = self.requests.threads.get(ix).and_then(|t| t.notes.last()) else {
+            return;
+        };
+        self.thread_at = Some(ix);
+        self.open_reaction_grid(note.id, cx);
+    }
+
+    fn open_reaction_grid(&mut self, note: u64, cx: &mut Context<Self>) {
+        self.reaction_grid = Some(note);
+        self.reaction_query.clear();
+        self.reaction_at = 0;
+        self.reset_field_edit();
+        self.refresh_rows();
+        cx.notify();
+    }
+
+    fn close_reaction_grid(&mut self, cx: &mut Context<Self>) {
+        self.reaction_grid = None;
+        self.reaction_query.clear();
+        self.refresh_rows();
+        cx.notify();
+    }
+
+    /// What ☺+ offers for its search: your recent first (empty search), then every other match.
+    fn grid_names(&self) -> Vec<&'static str> {
+        if self.web.as_ref().is_some_and(|w| w.github) {
+            return emoji::GITHUB.iter().map(|(_, n)| *n).collect();
+        }
+        let q = self.reaction_query.trim().to_lowercase();
+        if !q.is_empty() {
+            return emoji::find(&q, usize::MAX)
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect();
+        }
+        let recent = self.five();
+        let rest = emoji::ALL
+            .iter()
+            .map(|(n, _)| *n)
+            .filter(|n| !recent.contains(n));
+        recent.iter().copied().chain(rest).collect()
+    }
+
+    /// Keys while ☺+ is open: typing searches, arrows move, ↵ reacts, esc closes.
+    pub(super) fn reaction_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+        let Some(note) = self.reaction_grid else {
+            return;
+        };
+        let key = &event.keystroke;
+        let count = self.grid_names().len();
+        let at = self.reaction_at;
+        let moved = match key.key.as_str() {
+            "left" => Some(at.saturating_sub(1)),
+            "right" => Some((at + 1).min(count.saturating_sub(1))),
+            "up" => Some(at.saturating_sub(COLS)),
+            "down" => Some((at + COLS).min(count.saturating_sub(1))),
+            _ => None,
+        };
+        if let Some(to) = moved.filter(|_| key.modifiers.number_of_modifiers() == 0) {
+            self.reaction_at = to;
+            return cx.notify();
+        }
+        match key.key.as_str() {
+            "escape" => return self.close_reaction_grid(cx),
+            "enter" => {
+                if let Some(name) = self.grid_names().get(at).copied() {
+                    self.toggle_reaction(note, name, cx);
+                }
+                return self.close_reaction_grid(cx);
+            }
+            _ => {}
+        }
+        if self.web.as_ref().is_some_and(|w| w.github) {
+            return;
+        }
+        let mut query = std::mem::take(&mut self.reaction_query);
+        let edit = super::input::edit(&mut query, &mut self.field_edit, key, cx);
+        self.reaction_query = query;
+        if matches!(edit, super::input::Edit::Changed) {
+            self.reaction_at = 0;
+        }
+        cx.notify();
+    }
+
+    /// ☺+: a search over every reaction there is (GitHub: its eight), under the note.
     pub(super) fn reaction_grid(&self, note: u64, this: WeakEntity<Self>) -> Option<AnyElement> {
         if self.reaction_grid != Some(note) {
             return None;
         }
         let github = self.web.as_ref().is_some_and(|w| w.github);
-        let names: Vec<&'static str> = if github {
-            emoji::GITHUB.iter().map(|(_, n)| *n).collect()
-        } else {
-            emoji::ALL.iter().map(|(n, _)| *n).collect()
-        };
+        let names = self.grid_names();
+        let at = self.reaction_at.min(names.len().saturating_sub(1));
+        let search = (!github).then(|| {
+            div()
+                .mb(px(4.))
+                .px(px(8.))
+                .py(px(4.))
+                .rounded(px(ROW_RADIUS))
+                .border_1()
+                .border_color(theme::focus())
+                .bg(theme::base())
+                .child(self.field_look(
+                    &self.reaction_query,
+                    true,
+                    "Search emoji",
+                    Default::default(),
+                    this.clone(),
+                ))
+        });
+        let recent = (!github && self.reaction_query.trim().is_empty()).then_some(5);
+        let foot = names.get(at).map(|name| {
+            div()
+                .mt(px(4.))
+                .flex()
+                .gap_3()
+                .text_size(px(11.))
+                .text_color(theme::faint())
+                .child(
+                    div()
+                        .flex_1()
+                        .text_color(theme::muted())
+                        .child(format!(":{name}:")),
+                )
+                .child("←↑↓→ move · ↵ react · esc")
+        });
+        let cells = names.into_iter().enumerate().map(|(i, name)| {
+            let this = this.clone();
+            let tip: gpui::SharedString = format!(":{name}:").into();
+            div()
+                .id(("grid-react", i))
+                .size(px(28.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(ROW_RADIUS))
+                .when(i == at, |s| s.bg(theme::selected()))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::hover()))
+                .child(emoji::get(name).unwrap_or("·"))
+                .tooltip_show_delay(crate::ui::hover::LONG)
+                .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
+                .on_click(move |_, _, cx| {
+                    this.update(cx, |this, cx| this.toggle_reaction(note, name, cx))
+                        .ok();
+                })
+        });
+        let mut cells: Vec<AnyElement> = cells.map(IntoElement::into_any_element).collect();
+        // Recent first, a line under them.
+        if let Some(n) = recent.filter(|&n| n < cells.len()) {
+            cells.insert(
+                n,
+                div()
+                    .w_full()
+                    .h(px(1.))
+                    .my(px(3.))
+                    .bg(theme::island_border())
+                    .into_any_element(),
+            );
+        }
         Some(
             div()
                 .mt(px(6.))
                 .p(px(6.))
-                .max_w(px(420.))
+                .w(px(COLS as f32 * 30. + 14.))
                 .rounded(px(8.))
                 .border_1()
                 .border_color(theme::island_border())
                 .bg(theme::panel())
-                .flex()
-                .flex_wrap()
-                .gap(px(2.))
-                .children(names.into_iter().enumerate().map(|(i, name)| {
-                    let this = this.clone();
-                    let tip: gpui::SharedString = format!(":{name}:").into();
+                .children(search)
+                .child(
                     div()
-                        .id(("grid-react", note as usize * 128 + i))
-                        .size(px(28.))
+                        .id(("grid-scroll", note as usize))
+                        .max_h(px(220.))
+                        .overflow_y_scroll()
                         .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(ROW_RADIUS))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme::hover()))
-                        .child(emoji::get(name).unwrap_or("·"))
-                        .tooltip_show_delay(crate::ui::hover::LONG)
-                        .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
-                        .on_click(move |_, _, cx| {
-                            this.update(cx, |this, cx| this.toggle_reaction(note, name, cx))
-                                .ok();
-                        })
-                }))
+                        .flex_wrap()
+                        .gap(px(2.))
+                        .children(cells),
+                )
+                .children(foot)
                 .into_any_element(),
         )
     }

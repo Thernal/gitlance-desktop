@@ -508,6 +508,19 @@ impl Workspace {
         if key.key == "enter" && key.modifiers.secondary() {
             return self.submit_create(cx);
         }
+        // `@` and `:` complete in the description (#51, #9).
+        if n.focus == Focus::Description && !n.changes && !n.preview {
+            let mut text = n.description.clone();
+            if self.field_completion_key(&mut text, key) {
+                if let Some(n) = self.newreq.as_mut() {
+                    n.description = text;
+                }
+                return cx.notify();
+            }
+        }
+        let Some(n) = self.newreq.as_mut() else {
+            return;
+        };
         // The quick way: ⇥ opens the whole form where it stands, ⇧⇥ goes a question back.
         if n.quick && key.key == "tab" {
             if key.modifiers.shift {
@@ -1150,6 +1163,10 @@ impl Workspace {
         let template_menu =
             (n.menu == Some(Menu::Templates)).then(|| self.render_template_menu(n, cx));
         let labels_row = self.render_labels_row(n, cx);
+        let completion = (n.focus == Focus::Description && !n.preview)
+            .then(|| self.field_completion(&n.description))
+            .flatten()
+            .map(|(_, choices)| self.render_completion(&choices, self.field_pick));
         let label = |text: &'static str| {
             div()
                 .text_size(px(11.))
@@ -1528,7 +1545,8 @@ impl Workspace {
                             "create-description",
                             Some(Focus::Description),
                             description,
-                        )),
+                        ))
+                        .children(completion),
                 )
                 .child(reviewers)
                 .child(labels_row)
@@ -1794,6 +1812,10 @@ impl Workspace {
                                 },
                                 cx.entity().downgrade(),
                             )),
+                    )
+                    .children(
+                        self.field_completion(&n.description)
+                            .map(|(_, choices)| self.render_completion(&choices, self.field_pick)),
                     )
                     .into_any_element(),
             ),

@@ -547,6 +547,49 @@ pub fn milestones(remote: &WebRemote) -> Result<Vec<Milestone>> {
         .collect())
 }
 
+/// The members a mention does not reach: in a private project, those below Reporter cannot read
+/// its merge requests, so GitLab sends them nothing. GitHub: none (only collaborators are listed).
+pub fn unreached(remote: &WebRemote) -> Result<Vec<String>> {
+    if remote.github {
+        return Ok(Vec::new());
+    }
+    let read = |file: &str| -> Result<Value> {
+        Ok(match fixture() {
+            Some(dir) => match std::fs::read_to_string(dir.join(file)) {
+                Ok(text) => serde_json::from_str(&text)?,
+                Err(_) => Value::Null,
+            },
+            None => match file {
+                "project.json" => {
+                    let (_, project) = api(remote)?;
+                    get(remote, &format!("/projects/{project}"))?
+                }
+                _ => get(remote, "members/all?per_page=100")?,
+            },
+        })
+    };
+    if text(&read("project.json")?, "visibility") != "private" {
+        return Ok(Vec::new());
+    }
+    Ok(below_reporter(&read("members.json")?))
+}
+
+/// The usernames in a members list whose access level is under Reporter (20).
+pub fn below_reporter(members: &Value) -> Vec<String> {
+    members
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|m| {
+            m.get("access_level")
+                .and_then(Value::as_u64)
+                .is_some_and(|l| l < 20)
+        })
+        .map(|m| text(m, "username"))
+        .filter(|u| !u.is_empty())
+        .collect()
+}
+
 /// The description template set in the project's settings (GitLab's `merge_requests_template`);
 /// GitHub has none apart from the files.
 pub fn project_template(remote: &WebRemote) -> Result<Option<String>> {
@@ -1633,6 +1676,16 @@ mod tests {
         ]);
         assert_eq!(changes_requested(&states), ["Ember Lind", "kestrel"]);
         assert!(changes_requested(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn only_guests_and_below_go_unreached() {
+        let members = json!([
+            { "username": "wren", "access_level": 10 },
+            { "username": "ember", "access_level": 30 },
+            { "username": "kestrel" }
+        ]);
+        assert_eq!(below_reporter(&members), ["wren"]);
     }
 
     #[test]

@@ -148,6 +148,7 @@ actions!(
         ReplyThread,
         ResolveThread,
         EditComment,
+        ReactNote,
         NextZone,
         PreviousZone,
         Activate,
@@ -267,6 +268,7 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("r"), ReplyThread, Some("Workspace && !Typing")),
         KeyBinding::new(&k("x"), ResolveThread, Some("Workspace && !Typing")),
         KeyBinding::new(&k("e"), EditComment, Some("Workspace && !Typing")),
+        KeyBinding::new(&k("shift-e"), ReactNote, Some("Workspace && !Typing")),
         KeyBinding::new(&k("o"), ToggleThread, Some("Workspace && !Typing")),
         KeyBinding::new(
             &k("cmd-shift-d"),
@@ -1217,6 +1219,9 @@ pub struct Workspace {
     /// The note under the pointer (its reaction bar shows), and the one whose ☺+ is open (#9).
     hover_note: Option<u64>,
     reaction_grid: Option<u64>,
+    /// ☺+'s search and its cursor (#9).
+    reaction_query: String,
+    reaction_at: usize,
     /// Settings → Agents: what connecting said, and whether it runs.
     agent_setup: Option<String>,
     agent_setup_busy: bool,
@@ -1307,6 +1312,10 @@ pub struct Workspace {
     copied: bool,
     /// The caret, selection and undo of the field that has the keyboard (`input`).
     field_edit: crate::textedit::TextEdit,
+    /// The completion list of a plain field (a description, a summary): its pick, and where one
+    /// was closed with esc (#51, #9).
+    field_pick: usize,
+    field_closed: Option<usize>,
     /// How far the one-line field with the keyboard is scrolled sideways.
     field_scroll: Rc<Shared<f32>>,
     /// The last layout of the wrapped field (the composer, a description) and the x ↑ ↓ keep.
@@ -1424,6 +1433,8 @@ impl Workspace {
             places_peek: false,
             hover_note: None,
             reaction_grid: None,
+            reaction_query: String::new(),
+            reaction_at: 0,
             agent_setup: None,
             agent_setup_busy: false,
             notices: Default::default(),
@@ -1491,6 +1502,8 @@ impl Workspace {
             jump: None,
             copied: false,
             field_edit: Default::default(),
+            field_pick: 0,
+            field_closed: None,
             field_scroll: Rc::default(),
             field_lines: Rc::default(),
             field_goal: None,

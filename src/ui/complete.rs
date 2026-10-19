@@ -1,6 +1,7 @@
 //! Completion while writing a comment (#51 mentions, #9 `:name` emoji): `@` and a letter lists
 //! people — the request's first (its author, reviewers, who wrote in it), then the project's
-//! members; `:` and two letters lists emoji by name. ↑ ↓ move, ↵ or ⇥ puts it in, esc closes it.
+//! members, one a mention does not reach greyed (not notified); `:` and two letters lists emoji by
+//! name. ↑ ↓ move, ↵ or ⇥ puts it in, esc closes it.
 //! No agents: they are messaged apart.
 
 use super::{ROW_RADIUS, Workspace, px, theme};
@@ -124,7 +125,12 @@ impl Workspace {
             .take(8)
             .map(|(login, name)| Choice {
                 label: if name.is_empty() { login.clone() } else { name },
-                detail: format!("@{login}"),
+                // Greyed: GitLab sends them nothing, they cannot read the request.
+                detail: if self.requests.unreached.contains(&login) {
+                    format!("@{login} · not notified")
+                } else {
+                    format!("@{login}")
+                },
                 insert: format!("@{login} "),
             })
             .collect(),
@@ -138,6 +144,49 @@ impl Workspace {
                 .collect(),
         };
         (!choices.is_empty()).then_some((at, choices))
+    }
+
+    /// The list for the token at the caret of a plain field showing `text` (the new request's
+    /// description, a review's summary), if one is open.
+    pub(super) fn field_completion(&self, text: &str) -> Option<(usize, Vec<Choice>)> {
+        // Until the field is edited the shared edit holds another text: the caret is at the end.
+        let caret = if self.field_edit.text() == text {
+            self.field_edit.caret()
+        } else {
+            text.len()
+        };
+        self.completion(text, caret, self.field_closed)
+    }
+
+    /// ↑ ↓ ↵ ⇥ esc in a plain field while its list is open; whether it took the key. `text` is the
+    /// field's text, changed when a choice goes in.
+    pub(super) fn field_completion_key(
+        &mut self,
+        text: &mut String,
+        key: &gpui::Keystroke,
+    ) -> bool {
+        let Some((at, choices)) = self.field_completion(text) else {
+            return false;
+        };
+        if key.modifiers.number_of_modifiers() > 0 {
+            return false;
+        }
+        match key.key.as_str() {
+            "down" => self.field_pick = (self.field_pick + 1).min(choices.len() - 1),
+            "up" => self.field_pick = self.field_pick.saturating_sub(1),
+            "enter" | "tab" => {
+                super::input::sync(text, &mut self.field_edit);
+                let choice = &choices[self.field_pick.min(choices.len() - 1)];
+                let caret = self.field_edit.caret();
+                let end = at + choice.insert.len();
+                self.field_edit.replace(at..caret, &choice.insert, end..end);
+                *text = self.field_edit.text().to_owned();
+                self.field_pick = 0;
+            }
+            "escape" => self.field_closed = Some(at),
+            _ => return false,
+        }
+        true
     }
 
     /// The list under the field, `pick` selected.
@@ -167,6 +216,9 @@ impl Workspace {
                             .min_w_0()
                             .truncate()
                             .font_weight(FontWeight::MEDIUM)
+                            .when(c.detail.ends_with("not notified"), |s| {
+                                s.text_color(theme::faint())
+                            })
                             .child(c.label.clone()),
                     )
                     .child(

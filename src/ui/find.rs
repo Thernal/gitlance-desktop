@@ -263,6 +263,9 @@ impl Workspace {
         if self.compose.is_some() {
             return self.compose_key(event, cx);
         }
+        if self.reaction_grid.is_some() {
+            return self.reaction_key(event, cx);
+        }
         let key = &event.keystroke;
         if key.key == "escape" {
             if self.done_card {
