@@ -56,7 +56,7 @@ impl Workspace {
         // Who reviews: those asked, then whoever approved without being asked (GitHub drops an
         // approving reviewer from the asked ones).
         let mut reviewers = d.reviewers.clone();
-        for name in &approved {
+        for name in approved.iter().chain(&d.changes_requested) {
             if !reviewers.contains(name) {
                 reviewers.push(name.clone());
             }
@@ -123,6 +123,8 @@ impl Workspace {
                         .children(reviewers.into_iter().map(|r| {
                             let state = if approved.contains(&r) {
                                 ("✓ approved", theme::added())
+                            } else if d.changes_requested.contains(&r) {
+                                ("requested changes", theme::warning())
                             } else {
                                 ("reviewing", theme::muted())
                             };

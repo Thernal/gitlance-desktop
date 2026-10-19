@@ -1,14 +1,16 @@
 //! Creating a merge request from a branch (Design #47 E, `docs/specs/new-request.md`, flow 08): the
 //! request is written in place of the diff while the branch's commits and changes stay on the left.
 //! From → Into, the target picked from the branch list; the description starts from the project's
-//! template on the target (or a single commit's body); reviewers are suggested from the code owners
-//! of the changed files; Request | Changes (⌃⇥) shows the diff and keeps the draft. The one outward
+//! template on the target, else the project's template setting, else a single commit's body, and
+//! Templates ▾ offers the others; whether the pair merges cleanly is worked out in memory; the code
+//! owners of the changed files start as the reviewers; labels and a milestone are picked from the
+//! project's lists; Request | Changes (⌃⇥) shows the diff and keeps the draft. The one outward
 //! action besides posting comments; it never pushes, so a branch only on this Mac is told to be
 //! pushed first.
 
 use super::input::{self, Edit};
 use super::{ROW_RADIUS, Workspace, chip, markdown, plural, px, theme};
-use crate::codeowners::{self, Rule};
+use crate::codeowners;
 use crate::git::{RefKind, Repo};
 use crate::mr;
 use git2::Oid;
@@ -21,6 +23,14 @@ enum Focus {
     Description,
 }
 
+/// A list open under its field.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Menu {
+    Templates,
+    Labels,
+    Milestone,
+}
+
 pub struct NewRequest {
     source: String,
     /// The branch is not on origin, so the host cannot open a request from it.
@@ -30,6 +40,24 @@ pub struct NewRequest {
     description: String,
     /// Where the description started from: "Default.md template", "the commit's message".
     started_from: Option<String>,
+    /// The description as the form filled it: a template read later replaces it only while it
+    /// is unchanged.
+    started: String,
+    /// Every template on offer (name, text), the default first.
+    templates: Vec<(String, String)>,
+    /// The labels chosen, and the milestone (its id).
+    labels: Vec<String>,
+    milestone: Option<u64>,
+    /// The project's labels and milestones, read as the form opens.
+    all_labels: Vec<mr::Label>,
+    milestones: Vec<mr::Milestone>,
+    menu: Option<Menu>,
+    /// The files merging into the target would leave in conflict; `None` while not known.
+    conflicts: Option<Vec<String>>,
+    /// Code owners of the changed files; they start as the reviewers.
+    suggested: Vec<String>,
+    /// The reviewers were changed by hand: another target no longer replaces them.
+    reviewers_touched: bool,
     draft: bool,
     delete_branch: bool,
     squash: bool,
@@ -39,8 +67,7 @@ pub struct NewRequest {
     /// The request that already exists for this pair.
     existing: Option<u64>,
     commits: usize,
-    /// CODEOWNERS of the target, for the suggested reviewers; the ones chosen.
-    owners: Vec<Rule>,
+    /// The reviewers chosen.
     reviewers: Vec<String>,
     /// The description as it will read, instead of its text.
     preview: bool,
@@ -64,35 +91,52 @@ pub fn mid(text: &str, n: usize) -> String {
     out
 }
 
-/// The template a new request starts from, read from the target with `file`/`files`: GitLab's
-/// `.gitlab/merge_request_templates/Default.md` (any case), GitHub's `pull_request_template.md` in
-/// `.github/`, `docs/` or the root. Its name and text.
-pub fn template(
+/// The templates a new request can start from, read from the target with `file`/`files`, the
+/// default first: GitLab's `.gitlab/merge_request_templates/*.md` (`Default.md` in any case is the
+/// default); GitHub's `pull_request_template.md` in `.github/`, `docs/` or the root, then the files
+/// of `.github/PULL_REQUEST_TEMPLATE/`. Each with its name and text.
+pub fn templates(
     github: bool,
     file: impl Fn(&str) -> Option<String>,
     files: impl Fn(&str) -> Vec<String>,
-) -> Option<(String, String)> {
+) -> Vec<(String, String)> {
+    let read = |dir: &str, name: String| {
+        let path = if dir.is_empty() {
+            name.clone()
+        } else {
+            format!("{dir}/{name}")
+        };
+        file(&path).map(|t| (name, t))
+    };
+    let markdown = |n: &String| n.to_lowercase().ends_with(".md");
+    let mut out = Vec::new();
     if github {
-        for dir in [".github", "docs", ""] {
-            if let Some(name) = files(dir)
+        if let Some(found) = [".github", "docs", ""].into_iter().find_map(|dir| {
+            files(dir)
                 .into_iter()
                 .find(|n| n.eq_ignore_ascii_case("pull_request_template.md"))
-            {
-                let path = if dir.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{dir}/{name}")
-                };
-                return file(&path).map(|t| (name, t));
-            }
+                .and_then(|name| read(dir, name))
+        }) {
+            out.push(found);
         }
-        return None;
+        let dir = ".github/PULL_REQUEST_TEMPLATE";
+        let mut names: Vec<String> = files(dir).into_iter().filter(markdown).collect();
+        names.sort_by_key(|n| n.to_lowercase());
+        out.extend(names.into_iter().filter_map(|n| read(dir, n)));
+        return out;
     }
     let dir = ".gitlab/merge_request_templates";
-    let name = files(dir)
-        .into_iter()
-        .find(|n| n.eq_ignore_ascii_case("default.md"))?;
-    file(&format!("{dir}/{name}")).map(|t| (format!("{name} template"), t))
+    let mut names: Vec<String> = files(dir).into_iter().filter(markdown).collect();
+    names.sort_by_key(|n| (!n.eq_ignore_ascii_case("default.md"), n.to_lowercase()));
+    out.extend(names.into_iter().filter_map(|n| read(dir, n)));
+    out
+}
+
+/// A template's name as the chip says it: `Default.md` without its extension.
+fn template_name(name: &str) -> &str {
+    name.strip_suffix(".md")
+        .or_else(|| name.strip_suffix(".MD"))
+        .unwrap_or(name)
 }
 
 impl Workspace {
@@ -149,6 +193,16 @@ impl Workspace {
             title,
             description: String::new(),
             started_from: None,
+            started: String::new(),
+            templates: Vec::new(),
+            labels: Vec::new(),
+            milestone: None,
+            all_labels: Vec::new(),
+            milestones: Vec::new(),
+            menu: None,
+            conflicts: None,
+            suggested: Vec::new(),
+            reviewers_touched: false,
             draft: false,
             delete_branch: true,
             squash: false,
@@ -156,7 +210,6 @@ impl Workspace {
             target_at: 0,
             existing: None,
             commits: 0,
-            owners: Vec::new(),
             reviewers: Vec::new(),
             preview: false,
             changes: false,
@@ -170,15 +223,15 @@ impl Workspace {
             .as_ref()
             .and_then(|n| self.remote_tip(&n.target));
         if let Some(n) = self.newreq.as_mut() {
-            let found = match (&repo, target_tip) {
+            n.templates = match (&repo, target_tip) {
                 (Some(r), Some(t)) => {
-                    template(web.github, |p| r.file_at(t, p), |d| r.files_at(t, d))
+                    templates(web.github, |p| r.file_at(t, p), |d| r.files_at(t, d))
                 }
-                _ => None,
+                _ => Vec::new(),
             };
-            if let Some((name, text)) = found {
-                n.description = text;
-                n.started_from = Some(format!("from {name}"));
+            if let Some((name, text)) = n.templates.first() {
+                n.description = text.clone();
+                n.started_from = Some(format!("from {} template", template_name(name)));
             } else if n.commits == 1
                 && let Some(body) = commit
                     .as_ref()
@@ -189,6 +242,82 @@ impl Workspace {
                 n.description = body;
                 n.started_from = Some("from the commit's message".to_owned());
             }
+            n.started = n.description.clone();
+        }
+        self.read_create_lists(web, cx);
+        cx.notify();
+    }
+
+    /// The project's labels, milestones and template setting, in the background. The template
+    /// setting comes after a template file and before a commit's message.
+    fn read_create_lists(&mut self, web: crate::git::WebRemote, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let (labels, milestones, template) = cx
+                .background_executor()
+                .spawn(async move {
+                    (
+                        mr::labels(&web).unwrap_or_default(),
+                        mr::milestones(&web).unwrap_or_default(),
+                        mr::project_template(&web).ok().flatten(),
+                    )
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                let Some(n) = this.newreq.as_mut() else {
+                    return;
+                };
+                n.all_labels = labels;
+                n.milestones = milestones;
+                if let Some(text) = template {
+                    let had_file = !n.templates.is_empty();
+                    n.templates
+                        .push(("Project settings".to_owned(), text.clone()));
+                    if !had_file && n.description == n.started {
+                        n.description = text;
+                        n.started = n.description.clone();
+                        n.started_from = Some("from the project's template".to_owned());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Templates ▾: the description becomes template `ix`.
+    fn use_template(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if let Some(n) = self.newreq.as_mut()
+            && let Some((name, text)) = n.templates.get(ix).cloned()
+        {
+            n.description = text;
+            n.started = n.description.clone();
+            n.started_from = Some(if name == "Project settings" {
+                "from the project's template".to_owned()
+            } else {
+                format!("from {} template", template_name(&name))
+            });
+            n.menu = None;
+            self.reset_field_edit();
+        }
+        cx.notify();
+    }
+
+    /// A snapshot's way in: `create-templates`, `create-labels`, `create-milestone`.
+    #[cfg(feature = "snapshot")]
+    pub(super) fn open_create_menu(&mut self, name: &str, cx: &mut Context<Self>) {
+        let menu = match name {
+            "create-templates" => Menu::Templates,
+            "create-labels" => Menu::Labels,
+            "create-milestone" => Menu::Milestone,
+            _ => return,
+        };
+        self.toggle_create_menu(menu, cx);
+    }
+
+    fn toggle_create_menu(&mut self, menu: Menu, cx: &mut Context<Self>) {
+        if let Some(n) = self.newreq.as_mut() {
+            n.menu = (n.menu != Some(menu)).then_some(menu);
         }
         cx.notify();
     }
@@ -234,12 +363,26 @@ impl Workspace {
             .find(|m| m.source == n.source && m.target == n.target)
             .map(|m| m.iid);
         let repo = Repo::open(&root).ok();
-        let commits = match (&repo, &source, &target) {
-            (Some(r), Some(s), Some(t)) => {
-                r.range_log(t.1, s.1, true).map(|l| l.len()).unwrap_or(0)
-            }
-            _ => 0,
+        let log = match (&repo, &source, &target) {
+            (Some(r), Some(s), Some(t)) => r.range_log(t.1, s.1, true).unwrap_or_default(),
+            _ => Vec::new(),
         };
+        let commits = log.len();
+        let conflicts = match (&repo, &source, &target) {
+            (Some(r), Some(s), Some(t)) => r.conflicts(t.1, s.1),
+            _ => None,
+        };
+        // The files the request changes, commit by commit: their code owners review it.
+        let ids: Vec<Oid> = log.iter().map(|c| c.id).collect();
+        let mut paths: Vec<String> = repo
+            .as_ref()
+            .map(|r| r.changed_paths(&ids))
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|(_, p)| p)
+            .collect();
+        paths.sort_unstable();
+        paths.dedup();
         let places = if github {
             codeowners::PLACES_GITHUB
         } else {
@@ -253,28 +396,20 @@ impl Workspace {
                 .unwrap_or_default(),
             _ => Vec::new(),
         };
+        let suggested = codeowners::suggest(&owners, &paths, self.requests.login.as_deref());
         if let Some(n) = self.newreq.as_mut() {
             n.existing = existing;
             n.commits = commits;
-            n.owners = owners;
+            n.conflicts = conflicts;
+            if !n.reviewers_touched {
+                n.reviewers = suggested.clone();
+            }
+            n.suggested = suggested;
         }
         // The diff the request would hold: under Changes, and the files on the left.
         if let (Some(s), Some(t)) = (source, target) {
             self.run_compare(t, s, true, None, cx);
         }
-    }
-
-    /// Code owners of the files the request changes, without the one writing it.
-    fn suggested_reviewers(&self) -> Vec<String> {
-        let Some(n) = self.newreq.as_ref() else {
-            return Vec::new();
-        };
-        let paths: Vec<String> = self
-            .diff
-            .as_ref()
-            .map(|d| d.files.iter().map(|f| f.path().to_owned()).collect())
-            .unwrap_or_default();
-        codeowners::suggest(&n.owners, &paths, self.requests.login.as_deref())
     }
 
     /// The branches Into offers for what is typed: on origin first (the default first), then
@@ -359,6 +494,10 @@ impl Workspace {
         }
         if key.key == "escape" && n.changes {
             n.changes = false;
+            return cx.notify();
+        }
+        if key.key == "escape" && n.menu.is_some() {
+            n.menu = None;
             return cx.notify();
         }
         if n.changes {
@@ -476,6 +615,8 @@ impl Workspace {
             remove_source: n.delete_branch,
             squash: n.squash,
             reviewers: n.reviewers.clone(),
+            labels: n.labels.clone(),
+            milestone: n.milestone,
         };
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -681,10 +822,300 @@ impl Workspace {
         )
     }
 
+    /// Beside From → Into: whether it merges cleanly, and how many commits are ahead.
+    fn render_merge_state(&self, n: &NewRequest) -> gpui::Div {
+        let ahead = if n.commits == 0 {
+            "nothing ahead of the target".to_owned()
+        } else {
+            format!("{} ahead", plural(n.commits, "commit"))
+        };
+        let (text, color) = match &n.conflicts {
+            _ if n.commits == 0 => (ahead, theme::muted()),
+            Some(files) if files.is_empty() => {
+                (format!("✓ merges cleanly · {ahead}"), theme::added())
+            }
+            Some(files) => (
+                format!(
+                    "⚠ {} · {ahead}",
+                    match files.as_slice() {
+                        [one] => format!("conflicts in {}", one.rsplit('/').next().unwrap_or(one)),
+                        _ => format!("conflicts in {}", plural(files.len(), "file")),
+                    }
+                ),
+                theme::warning(),
+            ),
+            None => (ahead, theme::muted()),
+        };
+        div()
+            .flex_none()
+            .text_size(px(12.))
+            .text_color(color)
+            .child(text)
+    }
+
+    /// A list under a field: rows of `(label, chosen, swatch)`, each a click.
+    fn create_menu(
+        &self,
+        id: &'static str,
+        rows: Vec<(String, bool, Option<u32>, Option<String>)>,
+        pick: impl Fn(&mut Self, usize, &mut Context<Self>) + Clone + 'static,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .max_h(px(240.))
+            .overflow_y_scroll()
+            .p(px(4.))
+            .rounded(px(ROW_RADIUS))
+            .border_1()
+            .border_color(theme::island_border())
+            .bg(theme::panel())
+            .children(
+                rows.into_iter()
+                    .enumerate()
+                    .map(|(i, (label, on, swatch, end))| {
+                        let pick = pick.clone();
+                        div()
+                            .id((id, i))
+                            .px(px(8.))
+                            .h(px(26.))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .rounded(px(ROW_RADIUS))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::hover()))
+                            .child(
+                                div()
+                                    .w(px(12.))
+                                    .flex_none()
+                                    .text_color(theme::accent())
+                                    .child(if on { "✓" } else { "" }),
+                            )
+                            .children(swatch.map(|c| {
+                                div()
+                                    .size(px(10.))
+                                    .flex_none()
+                                    .rounded_full()
+                                    .bg(gpui::rgb(c))
+                            }))
+                            .child(div().flex_1().min_w_0().truncate().child(label))
+                            .children(end.map(|e| {
+                                div()
+                                    .flex_none()
+                                    .text_size(px(11.))
+                                    .text_color(theme::faint())
+                                    .child(e)
+                            }))
+                            .on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| pick(this, i, cx)),
+                            )
+                    }),
+            )
+    }
+
+    /// Templates ▾ open: every template; the one the description started from is ticked.
+    fn render_template_menu(&self, n: &NewRequest, cx: &mut Context<Self>) -> AnyElement {
+        let rows = n
+            .templates
+            .iter()
+            .map(|(name, text)| {
+                (
+                    template_name(name).to_owned(),
+                    *text == n.started,
+                    None,
+                    None,
+                )
+            })
+            .collect();
+        self.create_menu(
+            "create-template-menu",
+            rows,
+            |this, i, cx| this.use_template(i, cx),
+            cx,
+        )
+        .into_any_element()
+    }
+
+    /// Labels and Milestone side by side, each opening the project's list under it.
+    fn render_labels_row(&self, n: &NewRequest, cx: &mut Context<Self>) -> AnyElement {
+        let menu = match n.menu {
+            Some(Menu::Labels) if !n.all_labels.is_empty() => Some(
+                self.create_menu(
+                    "create-label-menu",
+                    n.all_labels
+                        .iter()
+                        .map(|l| (l.name.clone(), n.labels.contains(&l.name), l.color, None))
+                        .collect(),
+                    |this, i, cx| {
+                        if let Some(n) = this.newreq.as_mut()
+                            && let Some(name) = n.all_labels.get(i).map(|l| l.name.clone())
+                        {
+                            match n.labels.iter().position(|l| *l == name) {
+                                Some(at) => {
+                                    n.labels.remove(at);
+                                }
+                                None => n.labels.push(name),
+                            }
+                        }
+                        cx.notify();
+                    },
+                    cx,
+                )
+                .into_any_element(),
+            ),
+            Some(Menu::Milestone) if !n.milestones.is_empty() => Some(
+                self.create_menu(
+                    "create-milestone-menu",
+                    std::iter::once(("No milestone".to_owned(), n.milestone.is_none(), None, None))
+                        .chain(n.milestones.iter().map(|m| {
+                            (
+                                m.title.clone(),
+                                n.milestone == Some(m.id),
+                                None,
+                                m.due.clone().map(|d| format!("due {d}")),
+                            )
+                        }))
+                        .collect(),
+                    |this, i, cx| {
+                        if let Some(n) = this.newreq.as_mut() {
+                            n.milestone = i
+                                .checked_sub(1)
+                                .and_then(|i| n.milestones.get(i))
+                                .map(|m| m.id);
+                            n.menu = None;
+                        }
+                        cx.notify();
+                    },
+                    cx,
+                )
+                .into_any_element(),
+            ),
+            _ => None,
+        };
+        let field =
+            |id: &'static str, menu: Menu, body: AnyElement| {
+                let on = n.menu == Some(menu);
+                div()
+                    .id(id)
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(32.))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded(px(ROW_RADIUS))
+                    .border_2()
+                    .border_color(if on {
+                        theme::focus()
+                    } else {
+                        theme::island_border()
+                    })
+                    .bg(theme::base())
+                    .cursor_pointer()
+                    .child(div().flex_1().min_w_0().overflow_hidden().child(body))
+                    .child(div().text_color(theme::faint()).child("▾"))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.toggle_create_menu(menu, cx)
+                    }))
+            };
+        let faint = |text: &str| {
+            div()
+                .text_color(theme::faint())
+                .child(text.to_owned())
+                .into_any_element()
+        };
+        let labels = if n.labels.is_empty() {
+            faint(if n.all_labels.is_empty() {
+                "No labels in this project"
+            } else {
+                "None"
+            })
+        } else {
+            div()
+                .flex()
+                .gap(px(6.))
+                .children(n.labels.iter().map(|name| {
+                    let color = n
+                        .all_labels
+                        .iter()
+                        .find(|l| l.name == *name)
+                        .and_then(|l| l.color);
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(5.))
+                        .px(px(7.))
+                        .h(px(20.))
+                        .rounded_full()
+                        .bg(theme::selected())
+                        .text_size(px(12.))
+                        .children(color.map(|c| div().size(px(8.)).rounded_full().bg(gpui::rgb(c))))
+                        .child(name.clone())
+                }))
+                .into_any_element()
+        };
+        let milestone = match n
+            .milestone
+            .and_then(|id| n.milestones.iter().find(|m| m.id == id))
+        {
+            Some(m) => div().truncate().child(m.title.clone()).into_any_element(),
+            None => faint(if n.milestones.is_empty() {
+                "No open milestones"
+            } else {
+                "None"
+            }),
+        };
+        let label = |text: &'static str| {
+            div()
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme::faint())
+                .child(text.to_uppercase())
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(
+                div()
+                    .flex()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .child(label("Labels"))
+                            .child(field("create-labels", Menu::Labels, labels)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.))
+                            .child(label("Milestone"))
+                            .child(field("create-milestone", Menu::Milestone, milestone)),
+                    ),
+            )
+            .children(menu)
+            .into_any_element()
+    }
+
     /// The form, in place of the diff.
     pub(super) fn render_create_form(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let n = self.newreq.as_ref()?;
         let github = self.web.as_ref().is_some_and(|w| w.github);
+        // Built first: they need the context to themselves.
+        let template_menu =
+            (n.menu == Some(Menu::Templates)).then(|| self.render_template_menu(n, cx));
+        let labels_row = self.render_labels_row(n, cx);
         let label = |text: &'static str| {
             div()
                 .text_size(px(11.))
@@ -823,7 +1254,7 @@ impl Workspace {
                         }))
                 }))
         });
-        let suggested = self.suggested_reviewers();
+        let suggested = n.suggested.clone();
         let mut people: Vec<String> = n.reviewers.clone();
         for s in &suggested {
             if !people.contains(s) {
@@ -861,6 +1292,7 @@ impl Workspace {
                     )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         if let Some(n) = this.newreq.as_mut() {
+                            n.reviewers_touched = true;
                             match n.reviewers.iter().position(|r| *r == name) {
                                 Some(at) => {
                                     n.reviewers.remove(at);
@@ -966,21 +1398,7 @@ impl Workspace {
                                     .into_any_element(),
                             )),
                         )
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_size(px(12.))
-                                .text_color(if n.commits > 0 {
-                                    theme::added()
-                                } else {
-                                    theme::muted()
-                                })
-                                .child(if n.commits == 0 {
-                                    "nothing ahead of the target".to_owned()
-                                } else {
-                                    format!("{} ahead", plural(n.commits, "commit"))
-                                }),
-                        ),
+                        .child(self.render_merge_state(n)),
                 )
                 .children(list)
                 .children(note.map(|(text, warn)| {
@@ -1057,8 +1475,21 @@ impl Workspace {
                                         .text_size(px(11.))
                                         .text_color(theme::muted())
                                         .child(from)
+                                }))
+                                .children((n.templates.len() > 1).then(|| {
+                                    chip(
+                                        "create-templates",
+                                        "Templates ▾",
+                                        n.menu == Some(Menu::Templates),
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _: &ClickEvent, _, cx| {
+                                            this.toggle_create_menu(Menu::Templates, cx)
+                                        },
+                                    ))
                                 })),
                         )
+                        .children(template_menu)
                         .child(boxed(
                             "create-description",
                             Some(Focus::Description),
@@ -1066,6 +1497,7 @@ impl Workspace {
                         )),
                 )
                 .child(reviewers)
+                .child(labels_row)
                 .child(
                     div()
                         .flex()
@@ -1134,27 +1566,34 @@ mod tests {
     }
 
     #[test]
-    fn the_template_comes_from_the_hosts_place() {
+    fn the_templates_come_from_the_hosts_place_default_first() {
         let files = |dir: &str| match dir {
-            ".gitlab/merge_request_templates" => vec!["Bug.md".to_owned(), "default.md".to_owned()],
+            ".gitlab/merge_request_templates" => vec![
+                "Bug.md".to_owned(),
+                "default.md".to_owned(),
+                "notes.txt".to_owned(),
+            ],
             "docs" => vec!["PULL_REQUEST_TEMPLATE.md".to_owned()],
+            ".github/PULL_REQUEST_TEMPLATE" => vec!["release.md".to_owned()],
             _ => Vec::new(),
         };
         let file = |path: &str| Some(format!("text of {path}"));
+        let names = |list: Vec<(String, String)>| -> Vec<String> {
+            list.into_iter().map(|(n, _)| n).collect()
+        };
         assert_eq!(
-            template(false, file, files),
-            Some((
-                "default.md template".to_owned(),
-                "text of .gitlab/merge_request_templates/default.md".to_owned()
-            ))
+            names(templates(false, file, files)),
+            ["default.md", "Bug.md"]
         );
         assert_eq!(
-            template(true, file, files),
-            Some((
-                "PULL_REQUEST_TEMPLATE.md".to_owned(),
-                "text of docs/PULL_REQUEST_TEMPLATE.md".to_owned()
-            ))
+            templates(false, file, files)[0].1,
+            "text of .gitlab/merge_request_templates/default.md"
         );
-        assert_eq!(template(false, file, |_| Vec::new()), None);
+        assert_eq!(
+            names(templates(true, file, files)),
+            ["PULL_REQUEST_TEMPLATE.md", "release.md"]
+        );
+        assert!(templates(false, file, |_| Vec::new()).is_empty());
+        assert_eq!(template_name("Default.md"), "Default");
     }
 }

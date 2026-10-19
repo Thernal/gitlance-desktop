@@ -373,7 +373,9 @@ pub fn details(remote: &WebRemote, number: u64) -> Result<Details> {
         Some(v) => v?,
         None => get(remote, &format!("pulls/{number}"))?,
     };
-    Ok(parse_details(&value))
+    let mut details = parse_details(&value);
+    details.changes_requested = changes_requested(remote, number);
+    Ok(details)
 }
 
 pub fn parse_details(p: &Value) -> Details {
@@ -407,6 +409,7 @@ pub fn parse_details(p: &Value) -> Details {
             .flatten()
             .map(who)
             .collect(),
+        changes_requested: Vec::new(),
     }
 }
 
@@ -984,12 +987,21 @@ pub fn create(
     target: &str,
     title: &str,
     description: &str,
-    draft: bool,
-    reviewers: &[String],
+    options: &crate::mr::NewOptions,
 ) -> Result<Mr> {
+    let crate::mr::NewOptions {
+        draft,
+        reviewers,
+        labels,
+        milestone,
+        ..
+    } = options;
+    let draft = *draft;
     if crate::mr::record(format!(
-        "create {source} {target} {draft} r={} {title}",
-        reviewers.join(",")
+        "create {source} {target} {draft} r={} l={} m={} {title}",
+        reviewers.join(","),
+        labels.join(","),
+        milestone.map(|m| m.to_string()).unwrap_or_default()
     ))? {
         return Ok(Mr {
             iid: 999,
@@ -1026,7 +1038,76 @@ pub fn create(
             Some(&json!({ "reviewers": reviewers })),
         );
     }
+    // Labels and the milestone belong to the pull request's issue.
+    if !labels.is_empty() || milestone.is_some() {
+        let mut fields = json!({});
+        if !labels.is_empty() {
+            fields["labels"] = json!(labels);
+        }
+        if let Some(m) = milestone {
+            fields["milestone"] = json!(m);
+        }
+        let _ = rest(
+            remote,
+            "PATCH",
+            &format!("issues/{}", pull.iid),
+            Some(&fields),
+        );
+    }
     Ok(pull)
+}
+
+/// The repository's labels in their colours.
+pub fn labels(remote: &WebRemote) -> Result<Vec<Label>> {
+    let value = match read_fixture("labels.json") {
+        Some(v) => v?,
+        None => get(remote, "labels?per_page=100")?,
+    };
+    Ok(crate::mr::parse_labels(&value))
+}
+
+/// The repository's open milestones, by number.
+pub fn milestones(remote: &WebRemote) -> Result<Vec<crate::mr::Milestone>> {
+    let value = match read_fixture("milestones.json") {
+        Some(v) => v?,
+        None => get(remote, "milestones?state=open&per_page=100")?,
+    };
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            let due = s(&m["due_on"]);
+            Some(crate::mr::Milestone {
+                id: m["number"].as_u64()?,
+                title: s(&m["title"]),
+                due: due.get(..10).map(str::to_owned),
+            })
+        })
+        .collect())
+}
+
+/// The reviewers whose latest review asked for changes, by name.
+fn changes_requested(remote: &WebRemote, number: u64) -> Vec<String> {
+    let value = match read_fixture(&format!("reviews-{number}.json")) {
+        Some(v) => v.unwrap_or(Value::Null),
+        None => get(remote, &format!("pulls/{number}/reviews?per_page=100")).unwrap_or(Value::Null),
+    };
+    let mut last: Vec<(String, String)> = Vec::new();
+    for r in value.as_array().into_iter().flatten() {
+        let state = s(&r["state"]);
+        // A comment does not change where a reviewer stands.
+        if state == "COMMENTED" {
+            continue;
+        }
+        let name = who(&r["user"]);
+        last.retain(|(n, _)| *n != name);
+        last.push((name, state));
+    }
+    last.into_iter()
+        .filter(|(_, state)| state == "CHANGES_REQUESTED")
+        .map(|(name, _)| name)
+        .collect()
 }
 
 /// The user's unread notifications on pull requests of this repository, newest first.

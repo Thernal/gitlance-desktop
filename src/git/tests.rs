@@ -445,6 +445,38 @@ fn range_pairs_tell_unchanged_modified_new_and_dropped_commits() {
 }
 
 #[test]
+fn conflicts_name_the_files_both_sides_changed() {
+    let mut fx = Fixture::new();
+    let root = fx.commit("refs/heads/main", &[], &[("a.txt", "1\n2\n3\n")], "root");
+    let feature = fx.commit(
+        "refs/heads/feature",
+        &[root],
+        &[("a.txt", "1\ntwo\n3\n"), ("f.txt", "f\n")],
+        "commit: feature",
+    );
+    let clean = fx.commit(
+        "refs/heads/clean",
+        &[root],
+        &[("a.txt", "1\n2\n3\n"), ("m.txt", "m\n")],
+        "commit: elsewhere",
+    );
+    let clash = fx.commit(
+        "refs/heads/main",
+        &[root],
+        &[("a.txt", "1\nzwei\n3\n")],
+        "commit: main work",
+    );
+    let before = fx.loose_objects();
+    let repo = fx.open();
+    assert_eq!(repo.conflicts(clean, feature), Some(Vec::new()));
+    assert_eq!(
+        repo.conflicts(clash, feature),
+        Some(vec!["a.txt".to_owned()])
+    );
+    assert_eq!(fx.loose_objects(), before);
+}
+
+#[test]
 fn compare_since_the_merge_base_shows_only_what_the_head_added() {
     let mut fx = Fixture::new();
     let root = fx.commit("refs/heads/main", &[], &[("a.txt", "1\n")], "root");

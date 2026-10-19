@@ -385,6 +385,29 @@ impl Repo {
         })
     }
 
+    /// The files merging `source` into `target` would leave in conflict (empty: it merges
+    /// cleanly), merged in memory; `None` when the two cannot be read.
+    pub fn conflicts(&self, target: Oid, source: Oid) -> Option<Vec<String>> {
+        let tree = |id: Oid| self.inner.find_commit(id).and_then(|c| c.tree()).ok();
+        let base = self.inner.merge_base(target, source).ok()?;
+        // Merged blobs go to memory, never to the repository's objects.
+        let odb = self.inner.odb().ok()?;
+        let _mempack = odb.add_new_mempack_backend(1000).ok()?;
+        let index = self
+            .inner
+            .merge_trees(&tree(base)?, &tree(target)?, &tree(source)?, None)
+            .ok()?;
+        let mut paths: Vec<String> = index
+            .conflicts()
+            .ok()?
+            .filter_map(Result::ok)
+            .filter_map(|c| c.our.or(c.their).or(c.ancestor))
+            .map(|e| String::from_utf8_lossy(&e.path).into_owned())
+            .collect();
+        paths.dedup();
+        Some(paths)
+    }
+
     /// The paths each of `ids` touched against its first parent, without reading file contents.
     pub fn changed_paths(&self, ids: &[Oid]) -> Vec<(Oid, Vec<String>)> {
         let mut opts = git2::DiffOptions::new();

@@ -415,6 +415,17 @@ pub struct Details {
     pub assignees: Vec<String>,
     /// The reviewers by name (GitHub: those still asked; who approved is in the approvals).
     pub reviewers: Vec<String>,
+    /// The reviewers, by name, whose last word was to request changes.
+    pub changes_requested: Vec<String>,
+}
+
+/// A milestone a new request can be put in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Milestone {
+    /// GitLab's id, GitHub's number: what creating a request takes.
+    pub id: u64,
+    pub title: String,
+    pub due: Option<String>,
 }
 
 /// `#rrggbb` (or `rrggbb`) as 0xRRGGBB.
@@ -454,7 +465,106 @@ pub fn details(remote: &WebRemote, iid: u64) -> Result<Details> {
             .unwrap_or(Value::Null),
         None => get(remote, "labels?per_page=100").unwrap_or(Value::Null),
     };
-    Ok(parse_details(&value, &colors))
+    let mut details = parse_details(&value, &colors);
+    // Which reviewers asked for changes: their states come from a list of their own.
+    let states = match fixture() {
+        Some(dir) => std::fs::read_to_string(dir.join(format!("reviewers-{iid}.json")))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or(Value::Null),
+        None => get(remote, &format!("merge_requests/{iid}/reviewers")).unwrap_or(Value::Null),
+    };
+    details.changes_requested = changes_requested(&states);
+    Ok(details)
+}
+
+/// The names in GitLab's reviewers list whose state is `requested_changes`.
+pub fn changes_requested(states: &Value) -> Vec<String> {
+    states
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| text(r, "state") == "requested_changes")
+        .map(|r| match text(&r["user"], "name") {
+            n if n.is_empty() => text(&r["user"], "username"),
+            n => n,
+        })
+        .collect()
+}
+
+/// The project's labels in their colours, for a new request.
+pub fn labels(remote: &WebRemote) -> Result<Vec<Label>> {
+    if remote.github {
+        return github::labels(remote);
+    }
+    let value = match fixture() {
+        Some(dir) => match std::fs::read_to_string(dir.join("labels.json")) {
+            Ok(text) => serde_json::from_str(&text)?,
+            Err(_) => Value::Null,
+        },
+        None => get(remote, "labels?per_page=100")?,
+    };
+    Ok(parse_labels(&value))
+}
+
+pub fn parse_labels(value: &Value) -> Vec<Label> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|l| Label {
+            name: text(l, "name"),
+            color: hex_color(&text(l, "color")),
+        })
+        .filter(|l| !l.name.is_empty())
+        .collect()
+}
+
+/// The project's open milestones, for a new request.
+pub fn milestones(remote: &WebRemote) -> Result<Vec<Milestone>> {
+    if remote.github {
+        return github::milestones(remote);
+    }
+    let value = match fixture() {
+        Some(dir) => match std::fs::read_to_string(dir.join("milestones.json")) {
+            Ok(text) => serde_json::from_str(&text)?,
+            Err(_) => Value::Null,
+        },
+        None => get(remote, "milestones?state=active&per_page=100")?,
+    };
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            let due = text(m, "due_date");
+            Some(Milestone {
+                id: m.get("id")?.as_u64()?,
+                title: text(m, "title"),
+                due: (!due.is_empty()).then_some(due),
+            })
+        })
+        .collect())
+}
+
+/// The description template set in the project's settings (GitLab's `merge_requests_template`);
+/// GitHub has none apart from the files.
+pub fn project_template(remote: &WebRemote) -> Result<Option<String>> {
+    if remote.github {
+        return Ok(None);
+    }
+    let value = match fixture() {
+        Some(dir) => match std::fs::read_to_string(dir.join("project.json")) {
+            Ok(text) => serde_json::from_str(&text)?,
+            Err(_) => Value::Null,
+        },
+        None => {
+            let (_, project) = api(remote)?;
+            get(remote, &format!("/projects/{project}"))?
+        }
+    };
+    let template = text(&value, "merge_requests_template");
+    Ok((!template.trim().is_empty()).then_some(template))
 }
 
 pub fn parse_details(m: &Value, labels: &Value) -> Details {
@@ -485,6 +595,7 @@ pub fn parse_details(m: &Value, labels: &Value) -> Details {
         }),
         assignees: people(m, "assignees"),
         reviewers: people(m, "reviewers"),
+        changes_requested: Vec::new(),
     }
 }
 
@@ -854,6 +965,9 @@ pub struct NewOptions {
     pub squash: bool,
     /// Usernames to ask for a review.
     pub reviewers: Vec<String>,
+    /// Label names, and the milestone's id (GitHub: number).
+    pub labels: Vec<String>,
+    pub milestone: Option<u64>,
 }
 
 /// Opens a merge request from `source` into `target`. The branch must already be on the remote.
@@ -870,10 +984,12 @@ pub fn create(
         remove_source,
         squash,
         reviewers,
+        labels,
+        milestone,
     } = options;
     let (draft, remove_source, squash) = (*draft, *remove_source, *squash);
     if remote.github {
-        return github::create(remote, source, target, title, description, draft, reviewers);
+        return github::create(remote, source, target, title, description, options);
     }
     let title = if draft && !title.to_lowercase().starts_with("draft:") {
         format!("Draft: {title}")
@@ -881,8 +997,10 @@ pub fn create(
         title.to_owned()
     };
     if record(format!(
-        "create {source} {target} {draft} {remove_source} {squash} r={} {title}",
-        reviewers.join(",")
+        "create {source} {target} {draft} {remove_source} {squash} r={} l={} m={} {title}",
+        reviewers.join(","),
+        labels.join(","),
+        milestone.map(|m| m.to_string()).unwrap_or_default()
     ))? {
         return Ok(Mr {
             iid: 999,
@@ -910,8 +1028,10 @@ pub fn create(
             ("description", description.to_owned()),
             ("remove_source_branch", remove_source.to_string()),
             ("squash", squash.to_string()),
+            ("labels", labels.join(",")),
         ]
         .into_iter()
+        .chain(milestone.map(|id| ("milestone_id", id.to_string())))
         .chain(
             user_ids(remote, reviewers)
                 .into_iter()
@@ -1504,6 +1624,40 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn only_reviewers_who_requested_changes_are_named() {
+        let states = json!([
+            { "user": { "username": "ember", "name": "Ember Lind" }, "state": "requested_changes" },
+            { "user": { "username": "kestrel", "name": "" }, "state": "requested_changes" },
+            { "user": { "username": "juniper", "name": "Juniper Hale" }, "state": "approved" },
+            { "user": { "username": "wren", "name": "Wren" }, "state": "unreviewed" }
+        ]);
+        assert_eq!(changes_requested(&states), ["Ember Lind", "kestrel"]);
+        assert!(changes_requested(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn labels_keep_their_colours_and_skip_the_nameless() {
+        let labels = parse_labels(&json!([
+            { "name": "auth", "color": "#428BCA" },
+            { "name": "", "color": "#000000" },
+            { "name": "refactor", "color": "" }
+        ]));
+        assert_eq!(
+            labels,
+            [
+                Label {
+                    name: "auth".to_owned(),
+                    color: Some(0x428bca)
+                },
+                Label {
+                    name: "refactor".to_owned(),
+                    color: None
+                }
+            ]
+        );
+    }
+
+    #[test]
     fn a_pipeline_is_read_from_a_list_or_an_object() {
         let list = json!([{"id": 9, "status": "failed", "web_url": "https://g/p/9", "updated_at": "2026-10-08T00:00:00Z"}, {"id": 8, "status": "success"}]);
         let p = parse_pipeline(&list).expect("a pipeline");
@@ -1562,14 +1716,14 @@ mod tests {
 
     #[test]
     fn details_carry_labels_in_their_colours_and_the_milestone() {
-        let m = serde_json::json!({
+        let m = json!({
             "description": "Moves the state.",
             "labels": ["auth", "odd"],
             "milestone": { "title": "2.5", "due_date": "2026-10-31" },
             "assignees": [{ "username": "juniper", "name": "Juniper Hale" }],
             "reviewers": [{ "username": "ember", "name": "" }]
         });
-        let labels = serde_json::json!([{ "name": "auth", "color": "#61afef" }]);
+        let labels = json!([{ "name": "auth", "color": "#61afef" }]);
         let d = parse_details(&m, &labels);
         assert_eq!(d.description, "Moves the state.");
         assert_eq!(d.labels[0].color, Some(0x61afef));
@@ -1577,10 +1731,7 @@ mod tests {
         assert_eq!(d.milestone, Some(("2.5".into(), Some("2026-10-31".into()))));
         assert_eq!(d.assignees, ["Juniper Hale"]);
         assert_eq!(d.reviewers, ["ember"]);
-        assert_eq!(
-            parse_details(&serde_json::json!({}), &Value::Null),
-            Details::default()
-        );
+        assert_eq!(parse_details(&json!({}), &Value::Null), Details::default());
     }
 
     #[test]

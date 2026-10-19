@@ -835,6 +835,15 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.go_place(places::Place::Inbox, cx);
                             continue;
                         }
+                        // The new request for the open branch, and one of its lists open.
+                        "create" => {
+                            this.open_create(None, cx);
+                            continue;
+                        }
+                        menu if menu.starts_with("create-") => {
+                            this.open_create_menu(menu, cx);
+                            continue;
+                        }
                         "all-requests" => {
                             this.go_place(places::Place::Requests, cx);
                             continue;
