@@ -431,7 +431,7 @@ impl Workspace {
         let text_of = |n: u32| -> Option<String> {
             suggested
                 .iter()
-                .find(|(_, m, _)| *m == n)
+                .find(|(_, m, code)| *m == n && !code.is_empty())
                 .map(|(_, _, code)| code.clone())
                 .or_else(|| {
                     let side = open?.side(false);
@@ -444,11 +444,12 @@ impl Workspace {
             suggested.iter().map(|(_, n, _)| *n).collect()
         };
         let rows = span.into_iter().filter_map(|n| {
-            let text = text_of(n)?;
             let choice = suggested
                 .iter()
                 .find(|(_, m, _)| *m == n)
                 .map(|(i, _, _)| *i);
+            // A suggestion stays pickable even when its text is not known here.
+            let text = text_of(n).or_else(|| choice.map(|_| String::new()))?;
             let picked = choice.is_some_and(|i| answer.picks.contains(&i));
             let pick = this.clone();
             Some(
