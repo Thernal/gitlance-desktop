@@ -1,8 +1,8 @@
 //! The menu of places on the left (Design `design/shell/` `nav()`, #49): Inbox, Merge requests (every
 //! open one, #57), Review requests and My requests, then the repository's Commits, Branches and
 //! Working tree, Settings at the foot. It folds to icons (the title bar's first button), and is
-//! drawn folded while a merge request is reviewed unless opened there. The Inbox is a place of its
-//! own (`super::inbox`).
+//! drawn folded while a merge request is reviewed unless opened there (Settings → Appearance, on by
+//! default). The Inbox is a place of its own (`super::inbox`).
 
 use super::requests::{Scope, Side};
 use super::{Selection, Workspace, icons, px, theme};
@@ -48,15 +48,20 @@ impl Workspace {
 
     /// Folded to icons: by choice, or while a merge request is reviewed (unless opened there).
     pub(super) fn places_folded(&self) -> bool {
-        if self.showing_request() {
+        if self.folds_for_review() {
             !self.places_peek
         } else {
             self.layout.fold_places
         }
     }
 
+    /// A merge request is reviewed and Settings folds the menu for it.
+    fn folds_for_review(&self) -> bool {
+        self.settings.fold_reviewing && self.showing_request()
+    }
+
     pub(super) fn toggle_places(&mut self, cx: &mut Context<Self>) {
-        if self.showing_request() {
+        if self.folds_for_review() {
             self.places_peek = !self.places_peek;
         } else {
             self.layout.fold_places = !self.layout.fold_places;

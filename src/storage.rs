@@ -353,6 +353,8 @@ pub struct Settings {
     pub projects: Projects,
     /// Flat panes (hairlines, no gaps) instead of islands.
     pub flat: bool,
+    /// The menu of places folds to icons while a merge request is reviewed.
+    pub fold_reviewing: bool,
 }
 
 impl Default for Settings {
@@ -373,6 +375,7 @@ impl Default for Settings {
             last_new_tab: false,
             projects: Projects::Rail,
             flat: false,
+            fold_reviewing: true,
         }
     }
 }
@@ -410,6 +413,7 @@ impl Settings {
                 "last_new_tab" => settings.last_new_tab = value == "true",
                 "projects" => settings.projects = Projects::from_key(value).unwrap_or_default(),
                 "flat" => settings.flat = value == "true",
+                "fold_reviewing" => settings.fold_reviewing = value != "false",
                 "ui_zoom" => {
                     settings.ui_zoom = value.parse().map_or(100, |z: u16| {
                         z.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX)
@@ -447,6 +451,7 @@ impl std::fmt::Display for Settings {
         writeln!(f, "last_new_tab={}", self.last_new_tab)?;
         writeln!(f, "projects={}", self.projects.key())?;
         writeln!(f, "flat={}", self.flat)?;
+        writeln!(f, "fold_reviewing={}", self.fold_reviewing)?;
         writeln!(f, "zoom={}", self.zoom)?;
         writeln!(f, "ui_zoom={}", self.ui_zoom)?;
         if let Some(editor) = self.editor {
@@ -552,6 +557,7 @@ mod tests {
             last_new_tab: true,
             projects: Projects::Menu,
             flat: true,
+            fold_reviewing: false,
         };
         assert_eq!(Settings::parse(&settings.to_string()), settings);
     }

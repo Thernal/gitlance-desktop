@@ -104,11 +104,23 @@ pub enum T {
     Code8,
 }
 
-/// The tokens the Code choice brings (#12 D): the syntax colours, the diff's tints and the surface
-/// and text they are drawn on.
+/// The tokens the Code choice brings (#12 D, D16): the diff's tints and the syntax colours. The
+/// surface they are drawn on and the code's plain text stay the window's.
 pub fn is_code(i: usize) -> bool {
-    i == T::Bg3 as usize || i >= T::Added1 as usize
+    i >= T::Added1 as usize
 }
+
+/// The syntax colours.
+pub const SYNTAX: [T; 8] = [
+    T::Code1,
+    T::Code2,
+    T::Code3,
+    T::Code4,
+    T::Code5,
+    T::Code6,
+    T::Code7,
+    T::Code8,
+];
 
 /// The tokens that are text, each read on every surface: they need 4.5:1.
 pub const TEXT: [T; 16] = [
@@ -154,8 +166,12 @@ pub struct Theme {
     /// As shown: "One Dark", or the user's name.
     pub label: String,
     pub colors: [u32; TOKENS.len()],
-    /// The panes it prefers (`islands`); the setting wins.
-    pub islands: Option<bool>,
+    /// Offered as a window theme: its file sets `colors` or `window`, or neither part apart.
+    pub window: bool,
+    /// Offered as a code theme: its file sets `colors` or `code`, or neither part apart.
+    pub code: bool,
+    /// Its file sets `window` and `code` apart, and is written back so.
+    pub split: bool,
     /// Shipped with the app.
     pub built_in: bool,
     /// The theme it extends.
@@ -178,23 +194,35 @@ impl Theme {
         luminance(self.get(T::Bg1)) > luminance(self.get(T::Text1))
     }
 
-    /// The theme as a JSON file: every token when `full`, else the ones it sets itself.
+    /// The theme as a JSON file: every token when `full`, else the ones it sets itself — in
+    /// `window` and `code` when its file had them apart, else in `colors`.
     pub fn to_json(&self, full: bool) -> String {
-        let mut colors = Map::new();
-        for (i, (name, _, _)) in TOKENS.iter().enumerate() {
-            if full || self.own.contains(&i) {
-                colors.insert((*name).to_owned(), Value::String(hex(self.colors[i])));
+        // The tokens written: every one, or the code part's (`Some(true)`), or the window's.
+        let colors = |part: Option<bool>| {
+            let mut colors = Map::new();
+            for (i, (name, _, _)) in TOKENS.iter().enumerate() {
+                if (full || self.own.contains(&i)) && part.is_none_or(|code| code == is_code(i)) {
+                    colors.insert((*name).to_owned(), Value::String(hex(self.colors[i])));
+                }
             }
-        }
+            Value::Object(colors)
+        };
         let mut root = Map::new();
         root.insert("name".into(), Value::String(self.id.clone()));
         if !full && let Some(e) = &self.extends {
             root.insert("extends".into(), Value::String(e.clone()));
         }
-        if let Some(i) = self.islands {
-            root.insert("islands".into(), Value::Bool(i));
+        if self.split && !full {
+            let sets = |code: bool| self.own.iter().any(|&i| is_code(i) == code);
+            if self.window || sets(false) {
+                root.insert("window".into(), colors(Some(false)));
+            }
+            if self.code || sets(true) {
+                root.insert("code".into(), colors(Some(true)));
+            }
+        } else {
+            root.insert("colors".into(), colors(None));
         }
-        root.insert("colors".into(), Value::Object(colors));
         serde_json::to_string_pretty(&Value::Object(root)).unwrap_or_default() + "\n"
     }
 
@@ -218,11 +246,13 @@ struct Raw {
     id: String,
     label: String,
     extends: Option<String>,
-    islands: Option<bool>,
     colors: Vec<(usize, u32)>,
     problems: Vec<String>,
     built_in: bool,
     file: Option<PathBuf>,
+    window: bool,
+    code: bool,
+    split: bool,
 }
 
 fn label_of(id: &str) -> String {
@@ -241,6 +271,8 @@ fn read_raw(text: &str, fallback: &str) -> Raw {
     let mut raw = Raw {
         id: fallback.to_owned(),
         label: label_of(fallback),
+        window: true,
+        code: true,
         ..Raw::default()
     };
     let value: Value = match serde_json::from_str(text) {
@@ -266,30 +298,57 @@ fn read_raw(text: &str, fallback: &str) -> Raw {
         .get("extends")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    raw.islands = obj.get("islands").and_then(Value::as_bool);
     for key in obj.keys() {
-        if !matches!(
-            key.as_str(),
-            "name" | "extends" | "islands" | "colors" | "window" | "code"
-        ) {
-            raw.problems.push(format!("Unknown field “{key}”"));
+        match key.as_str() {
+            "name" | "extends" | "colors" | "window" | "code" => {}
+            // Islands | Flat is the setting alone (D12).
+            "islands" => raw
+                .problems
+                .push("“islands” is a setting: Settings → Appearance → Panes".into()),
+            _ => raw.problems.push(format!("Unknown field “{key}”")),
         }
     }
-    if let Some(colors) = obj.get("colors") {
+    // A file may set the window and the code apart; a theme with one of them is offered there only.
+    let (window, code) = (obj.contains_key("window"), obj.contains_key("code"));
+    if window || code {
+        let both = obj.contains_key("colors");
+        raw.window = window || both;
+        raw.code = code || both;
+        raw.split = true;
+    }
+    // Each field and the part it may set: any token, the window's, the code's.
+    for (field, part) in [
+        ("colors", None),
+        ("window", Some(false)),
+        ("code", Some(true)),
+    ] {
+        let Some(colors) = obj.get(field) else {
+            continue;
+        };
         let Some(colors) = colors.as_object() else {
-            raw.problems.push("“colors” is not an object".into());
-            return raw;
+            raw.problems.push(format!("“{field}” is not an object"));
+            continue;
         };
         for (name, value) in colors {
             // Code roles (`code.parameter`) are known names; they fall back to their code token
             // until the highlighter draws roles of its own (#13).
             if name.starts_with("code.") {
+                if part == Some(false) {
+                    raw.problems.push(format!("“{name}” belongs in “code”"));
+                }
                 continue;
             }
             let Some(i) = index(name) else {
                 raw.problems.push(format!("No token “{name}”"));
                 continue;
             };
+            if let Some(code) = part
+                && code != is_code(i)
+            {
+                let home = if is_code(i) { "code" } else { "window" };
+                raw.problems.push(format!("“{name}” belongs in “{home}”"));
+                continue;
+            }
             match value.as_str().and_then(parse_hex) {
                 Some(c) => raw.colors.push((i, c)),
                 None => raw.problems.push(format!(
@@ -365,18 +424,18 @@ pub fn resolve(user: &[(PathBuf, String)]) -> Vec<Theme> {
         for (i, c) in base(&raws) {
             colors[i] = c;
         }
-        let mut islands = None;
         for r in chain.iter().rev() {
             for &(i, c) in &r.colors {
                 colors[i] = c;
             }
-            islands = r.islands.or(islands);
         }
         let mut theme = Theme {
             id: raw.id.clone(),
             label: raw.label.clone(),
             colors,
-            islands,
+            window: raw.window,
+            code: raw.code,
+            split: raw.split,
             built_in: raw.built_in,
             extends: raw.extends.clone(),
             own: raw.colors.iter().map(|(i, _)| *i).collect(),
@@ -416,6 +475,16 @@ pub fn read_folder() -> Vec<(PathBuf, String)> {
         .collect();
     files.sort_by(|a, b| a.0.cmp(&b.0));
     files
+}
+
+/// The syntax colours of `code` under 4.5:1 where the Code choice draws them (D16): on `window`'s
+/// diff surface. (token, its ratio)
+pub fn code_on(code: &Theme, window: &Theme) -> Vec<(T, f32)> {
+    SYNTAX
+        .iter()
+        .map(|&t| (t, contrast(code.get(t), window.get(T::Bg3))))
+        .filter(|(_, ratio)| *ratio < 4.5)
+        .collect()
 }
 
 /// When the themes folder last changed (its files' times, summed), to notice an edit.
@@ -538,9 +607,52 @@ mod tests {
         let mine = themes.iter().find(|t| t.id == "mine").unwrap();
         assert_eq!(mine.get(T::Accent), 0xe5c07bff);
         assert_eq!(mine.get(T::Bg1), night.get(T::Bg1));
-        assert_eq!(mine.islands, Some(false));
-        assert_eq!(mine.problems.len(), 2, "{:?}", mine.problems);
-        assert!(mine.to_json(false).contains("\"extends\": \"night\""));
+        assert!(mine.window && mine.code);
+        // `islands` is a setting now (D12): the file is told so.
+        assert_eq!(mine.problems.len(), 3, "{:?}", mine.problems);
+        assert!(mine.problems.iter().any(|p| p.contains("Settings")));
+        let json = mine.to_json(false);
+        assert!(json.contains("\"extends\": \"night\""));
+        assert!(!json.contains("islands"));
+    }
+
+    #[test]
+    fn window_and_code_set_their_parts_apart() {
+        let text =
+            r##"{ "name": "ink", "code": { "code-01": "#ff9e64", "background-01": "#000" } }"##;
+        let themes = resolve(&[(PathBuf::from("/t/ink.json"), text.into())]);
+        let ink = themes.iter().find(|t| t.id == "ink").unwrap();
+        assert!(ink.code && !ink.window);
+        assert_eq!(ink.get(T::Code1), 0xff9e64ff);
+        assert_eq!(ink.get(T::Bg1), themes[0].get(T::Bg1));
+        assert_eq!(ink.problems, ["“background-01” belongs in “window”"]);
+        let json = ink.to_json(false);
+        assert!(
+            json.contains("\"code\"")
+                && !json.contains("\"colors\"")
+                && !json.contains("\"window\"")
+        );
+        // Read back, it is the same theme.
+        let again = resolve(&[(PathBuf::from("/t/ink.json"), json)]);
+        let again = again.iter().find(|t| t.id == "ink").unwrap();
+        assert_eq!(
+            (again.colors, again.window, again.code),
+            (ink.colors, false, true)
+        );
+        let both = resolve(&[(
+            PathBuf::from("/t/both.json"),
+            r##"{ "name": "both", "window": { "interactive-01": "#e5c07b" }, "code": {} }"##.into(),
+        )]);
+        let both = both.iter().find(|t| t.id == "both").unwrap();
+        assert!(both.window && both.code && both.problems.is_empty());
+    }
+
+    #[test]
+    fn light_code_on_a_dark_window_is_said() {
+        let themes = resolve(&[]);
+        let find = |id: &str| themes.iter().find(|t| t.id == id).unwrap();
+        assert!(code_on(find("one-dark"), find("one-dark")).is_empty());
+        assert!(!code_on(find("paper"), find("graphite")).is_empty());
     }
 
     #[test]

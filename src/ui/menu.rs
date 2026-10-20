@@ -41,6 +41,8 @@ pub enum Act {
     AgentSendOnly,
     AgentChooseChat,
     AgentCopy,
+    /// The theme being edited is built on this one (its extends ▾).
+    ThemeBase(String),
 }
 
 #[derive(Clone)]
@@ -142,6 +144,7 @@ impl Workspace {
             Act::AgentSendOnly => self.add_and_send(true, cx),
             Act::AgentChooseChat => self.add_and_pick_chat(cx),
             Act::AgentCopy => self.add_and_copy(cx),
+            Act::ThemeBase(id) => self.set_theme_base(&id, cx),
             // Need the window: `run_act_in` runs them.
             Act::MoveProject { .. } | Act::CloseProject(_) => {}
         }

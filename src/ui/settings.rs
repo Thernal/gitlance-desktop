@@ -184,6 +184,14 @@ impl Workspace {
                     },
                 )),
             );
+        let fold_reviewing = switch("fold-reviewing", s.fold_reviewing).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.change_settings(
+                    |this| this.settings.fold_reviewing = !this.settings.fold_reviewing,
+                    cx,
+                )
+            },
+        ));
         let refresh = switch("refresh", s.auto_refresh).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.change_settings(
@@ -254,6 +262,8 @@ impl Workspace {
 
         let gitlab = self.render_gitlab_settings(cx);
         let section = self.settings_section;
+        // The theme editor takes the page's height: its tokens scroll beside a preview that stays.
+        let editing = section == Section::Appearance && self.theme_edit.is_some();
         let column = || div().flex().flex_col().gap_5();
         let content: gpui::AnyElement = match section {
             Section::Diff => column()
@@ -313,6 +323,12 @@ impl Workspace {
                     "Panes",
                     "Islands: rounded panes on the window's ground with gaps between them. Flat: square panes side by side, split by hairlines.",
                     panes,
+                )
+                .into_any_element(),
+                item(
+                    "Fold the menu while reviewing",
+                    "While a merge request is reviewed, the menu of places folds to icons and the diff takes the room; its first button in the title bar opens it for a while. Off: the menu stays as you left it.",
+                    fold_reviewing,
                 )
                 .into_any_element(),
                 cx,
@@ -415,11 +431,13 @@ impl Workspace {
                             .id("settings")
                             .flex_1()
                             .min_w_0()
-                            .overflow_y_scroll()
+                            .when(!editing, |s| s.overflow_y_scroll())
+                            .when(editing, |s| s.flex().flex_col())
                             .child(
                                 div()
                                     .w_full()
-                                    .max_w(px(760.))
+                                    .max_w(px(if editing { 1180. } else { 760. }))
+                                    .when(editing, |s| s.flex_1().min_h_0())
                                     .mx_auto()
                                     .flex()
                                     .flex_col()

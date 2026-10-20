@@ -2,11 +2,12 @@
 //! cards three to a row — tabs down the left, the code as bars in the theme's syntax colours and
 //! diff tints —, the Code themes as syntax samples with "Follow the window" first, several projects,
 //! panes, and your themes (the folder, Copy One Dark as JSON, each file's problems). A theme opens in
-//! the editor: its tokens by group, contrast per text token with a fix; editing a built-in theme
-//! makes a new one that extends it. The whole window is the preview while editing.
+//! the editor: its tokens by group, contrast per text token with a fix, and beside them a preview —
+//! a request's header, a piece of diff and a discussion in the theme being edited, while the window
+//! keeps the chosen themes; editing a built-in theme makes a new one that extends it.
 
 use super::lists::Field;
-use super::{ROW_RADIUS, Workspace, px, theme};
+use super::{ROW_RADIUS, Workspace, icons, px, theme};
 use crate::themes::{self, T, TOKENS, Theme};
 use gpui::{
     AnyElement, ClickEvent, Context, Div, FontWeight, HighlightStyle, Rgba, StyledText, div,
@@ -196,12 +197,312 @@ fn code_face(t: &Theme) -> Div {
         }))
 }
 
+/// Sample Kotlin coloured as the highlighter would: keywords, types (a capital), calls, members,
+/// numbers, strings, comments and operators.
+fn kotlin_runs(line: &str) -> Runs {
+    const KEYWORDS: [&str; 7] = ["class", "private", "val", "var", "fun", "by", "return"];
+    let b = line.as_bytes();
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let start = i;
+        if line[i..].starts_with("//") {
+            runs.push((i..b.len(), T::Code6));
+            break;
+        }
+        if b[i] == b'"' {
+            i = line[i + 1..].find('"').map_or(b.len(), |e| i + e + 2);
+            runs.push((start..i, T::Code3));
+        } else if b[i].is_ascii_digit() {
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            runs.push((start..i, T::Code4));
+        } else if b[i].is_ascii_alphabetic() || b[i] == b'_' {
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                i += 1;
+            }
+            let word = &line[start..i];
+            let token = if KEYWORDS.contains(&word) {
+                Some(T::Code1)
+            } else if word.starts_with(|c: char| c.is_ascii_uppercase()) {
+                Some(T::Code5)
+            } else if b.get(i) == Some(&b'(') {
+                Some(T::Code2)
+            } else if start > 0 && b[start - 1] == b'.' {
+                Some(T::Code7)
+            } else {
+                None
+            };
+            runs.extend(token.map(|t| (start..i, t)));
+        } else {
+            if matches!(b[i], b'=' | b'<' | b'>') {
+                runs.push((i..i + 1, T::Code8));
+            }
+            i += 1;
+        }
+    }
+    runs
+}
+
+/// The preview's piece of diff (Design #12 C and D's sample): (kind -1 / 0 / 1, old and new
+/// numbers, the line, the word marked as changed).
+const SAMPLE: [(i8, u32, u32, &str, &str); 9] = [
+    (0, 12, 12, "class LoginViewModel(", ""),
+    (0, 13, 13, "    private val auth: AuthRepository,", ""),
+    (0, 14, 14, ") : ViewModel() {", ""),
+    (
+        -1,
+        15,
+        0,
+        "    var state by mutableStateOf(LoginState())",
+        "mutableStateOf",
+    ),
+    (
+        1,
+        0,
+        15,
+        "    private val _state = MutableStateFlow(LoginState())",
+        "MutableStateFlow",
+    ),
+    (
+        1,
+        0,
+        16,
+        "    val state: StateFlow<LoginState> = _state",
+        "",
+    ),
+    (0, 16, 17, "    // One source of truth for the screen", ""),
+    (0, 17, 18, "    fun submit(email: String) {", ""),
+    (
+        0,
+        18,
+        19,
+        "        if (email.isBlank()) return show(\"Email is empty\", 3)",
+        "",
+    ),
+];
+
+/// The sample drawn as the diff draws it: the surface and the plain text the window's, the tints
+/// and the syntax colours the code theme's (D16).
+fn sample_diff(window: &Theme, code: &Theme) -> Div {
+    let number = |n: u32, tint: Option<Rgba>| {
+        div()
+            .w(px(34.))
+            .h_full()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_end()
+            .pr(px(8.))
+            .text_color(c(window, T::Text3))
+            .when_some(tint, |s, t| s.bg(t))
+            .child(if n == 0 { String::new() } else { n.to_string() })
+    };
+    div()
+        .py(px(4.))
+        .bg(c(window, T::Bg3))
+        .font_family(theme::CODE_FONT)
+        .text_size(px(12.))
+        .text_color(c(window, T::Text1))
+        .children(SAMPLE.iter().map(|&(kind, old, new, text, word)| {
+            let (line, gutter, mark) = match kind {
+                -1 => (Some(T::Removed1), Some(T::Removed2), T::Removed3),
+                1 => (Some(T::Added1), Some(T::Added2), T::Added3),
+                _ => (None, None, T::Added3),
+            };
+            let gutter = gutter.map(|g| c(code, g));
+            // Each byte's colour and whether it is the changed word, run together.
+            let mut look: Vec<(Option<T>, bool)> = vec![(None, false); text.len()];
+            for (r, t) in kotlin_runs(text) {
+                for l in &mut look[r] {
+                    l.0 = Some(t);
+                }
+            }
+            if let Some(at) = (!word.is_empty()).then(|| text.find(word)).flatten() {
+                for l in &mut look[at..at + word.len()] {
+                    l.1 = true;
+                }
+            }
+            let mut runs = Vec::new();
+            let mut from = 0;
+            for i in 1..=look.len() {
+                if i == look.len() || look[i] != look[from] {
+                    let (color, marked) = look[from];
+                    if color.is_some() || marked {
+                        runs.push((
+                            from..i,
+                            HighlightStyle {
+                                color: color.map(|t| c(code, t).into()),
+                                background_color: marked.then(|| c(code, mark).into()),
+                                ..Default::default()
+                            },
+                        ));
+                    }
+                    from = i;
+                }
+            }
+            div()
+                .h(px(19.))
+                .flex()
+                .items_center()
+                .when_some(line, |s, l| s.bg(c(code, l)))
+                .child(number(old, gutter))
+                .child(number(new, gutter))
+                .child(
+                    div()
+                        .pl(px(10.))
+                        .whitespace_nowrap()
+                        .child(StyledText::new(text).with_highlights(runs)),
+                )
+        }))
+}
+
+/// The preview of the editor (Design #12 C): the app in theme `t` — a request's header, the
+/// sample diff and a selected discussion.
+fn theme_preview(t: &Theme) -> Div {
+    let header = div()
+        .px(px(10.))
+        .h(px(40.))
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .text_size(px(13.))
+        .text_color(c(t, T::Text2))
+        .child(
+            icons::icon("pull-request")
+                .size(px(16.))
+                .text_color(c(t, T::Text2)),
+        )
+        .child("!398")
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(c(t, T::Text1))
+                .child("Refactor the login screen state"),
+        )
+        .child(
+            div()
+                .px(px(10.))
+                .h(px(24.))
+                .flex()
+                .items_center()
+                .rounded(px(ROW_RADIUS))
+                .bg(c(t, T::Accent))
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(c(t, T::Text5))
+                .child("Approve"),
+        );
+    let discussion = div()
+        .m(px(10.))
+        .p(px(10.))
+        .rounded(px(8.))
+        .border_2()
+        .border_color(c(t, T::Focus))
+        .bg(c(t, T::Bg2))
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .text_size(px(12.))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .size(px(22.))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(c(t, T::Code5))
+                        .text_size(px(10.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(c(t, T::Bg1))
+                        .child("EL"),
+                )
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(c(t, T::Text1))
+                        .child("Ember Lind"),
+                )
+                .child(div().text_color(c(t, T::Text3)).child("2 h ago"))
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .px(px(6.))
+                        .rounded(px(4.))
+                        .bg(c(t, T::AttentionBg))
+                        .text_size(px(11.))
+                        .text_color(c(t, T::Attention))
+                        .child("open"),
+                ),
+        )
+        .child(
+            div()
+                .text_color(c(t, T::Text1))
+                .child("Does the old state survive a rotation? StateFlow keeps it, but the screen reads it once."),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .flex_1()
+                        .h(px(28.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(ROW_RADIUS))
+                        .border_1()
+                        .border_color(c(t, T::Border1))
+                        .bg(c(t, T::Bg1))
+                        .text_color(c(t, T::Text3))
+                        .child("Reply…"),
+                )
+                .child(
+                    div()
+                        .px(px(10.))
+                        .h(px(28.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(ROW_RADIUS))
+                        .bg(c(t, T::Bg4))
+                        .text_color(c(t, T::Text1))
+                        .child("Resolve"),
+                ),
+        );
+    div()
+        .rounded(px(10.))
+        .overflow_hidden()
+        .border_1()
+        .border_color(c(t, T::Border1))
+        .bg(c(t, T::Bg1))
+        .child(header)
+        .child(
+            div()
+                .mx(px(8.))
+                .rounded(px(6.))
+                .overflow_hidden()
+                .child(sample_diff(t, t)),
+        )
+        .child(discussion)
+}
+
 /// A card's frame: the accent around the chosen one, its name and a word under it.
 fn card(
     id: (&'static str, usize),
     face: Div,
     name: String,
-    tag: Option<String>,
+    tag: Option<(String, bool)>,
     on: bool,
     extra: Option<AnyElement>,
 ) -> gpui::Stateful<Div> {
@@ -228,7 +529,16 @@ fn card(
                 .gap(px(6.))
                 .text_size(px(12.))
                 .child(div().flex_1().min_w_0().truncate().child(name))
-                .children(tag.map(|t| div().text_size(px(11.)).text_color(theme::faint()).child(t)))
+                .children(tag.map(|(t, bad)| {
+                    div()
+                        .text_size(px(11.))
+                        .text_color(if bad {
+                            theme::removed()
+                        } else {
+                            theme::faint()
+                        })
+                        .child(t)
+                }))
                 .children(extra),
         )
 }
@@ -293,23 +603,21 @@ fn small_button(
         .child(label.into())
 }
 
-/// A tag for a theme's card: default, light, yours, its problems.
-fn tag_of(t: &Theme) -> Option<String> {
+/// A tag for a theme's card: default, light, yours, its problems (true: drawn as one).
+fn tag_of(t: &Theme) -> Option<(String, bool)> {
     if !t.problems.is_empty() {
-        return Some(match t.problems.len() {
-            1 => "1 problem".into(),
-            n => format!("{n} problems"),
-        });
+        return Some((super::plural(t.problems.len(), "problem"), true));
     }
-    if t.id == "one-dark" {
-        Some("default".into())
+    let word = if t.id == "one-dark" {
+        "default"
     } else if !t.built_in {
-        Some("JSON".into())
+        "JSON"
     } else if t.light() {
-        Some("light".into())
+        "light"
     } else {
-        None
-    }
+        return None;
+    };
+    Some((word.into(), false))
 }
 
 impl Workspace {
@@ -318,6 +626,7 @@ impl Workspace {
         &self,
         projects: AnyElement,
         panes: AnyElement,
+        fold: AnyElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if self.theme_edit.is_some() {
@@ -325,8 +634,17 @@ impl Workspace {
         }
         let all = theme::all();
         let choice = theme::choice();
+        let window = all
+            .iter()
+            .find(|t| t.id == choice.window)
+            .unwrap_or(&all[0]);
+        let code = choice
+            .code
+            .as_deref()
+            .and_then(|id| all.iter().find(|t| t.id == id));
         let windows: Vec<AnyElement> = all
             .iter()
+            .filter(|t| t.window)
             .enumerate()
             .map(|(i, t)| {
                 let id = t.id.clone();
@@ -386,13 +704,15 @@ impl Workspace {
             }))
             .into_any_element(),
         ];
-        codes.extend(all.iter().enumerate().map(|(i, t)| {
+        codes.extend(all.iter().filter(|t| t.code).enumerate().map(|(i, t)| {
             let id = t.id.clone();
+            // Drawn on the window's diff surface (D16): what reads under 4.5:1 there is said.
+            let low = themes::code_on(t, window).len();
             card(
                 ("code-theme", i),
                 code_face(t),
                 t.label.clone(),
-                None,
+                (low > 0).then(|| (format!("{low} under 4.5:1 here"), true)),
                 choice.code.as_deref() == Some(t.id.as_str()),
                 None,
             )
@@ -424,11 +744,53 @@ impl Workspace {
                 "Syntax colours and the diff's tints. They follow the window until you pick another.",
             ))
             .child(rows_of_three(codes))
+            .children(code.and_then(|code| {
+                let low = themes::code_on(code, window);
+                let (worst, ratio) = low
+                    .iter()
+                    .copied()
+                    .min_by(|a, b| a.1.total_cmp(&b.1))?;
+                Some({
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .px(px(12.))
+                        .py(px(8.))
+                        .rounded(px(ROW_RADIUS))
+                        .bg(theme::danger_bg())
+                        .text_size(px(12.))
+                        .child(div().flex_1().min_w_0().child(format!(
+                            "{}'s code on {}'s diff: {} of {} syntax colours under 4.5:1, {} at {ratio:.1}:1.",
+                            code.label,
+                            window.label,
+                            low.len(),
+                            themes::SYNTAX.len(),
+                            TOKENS[worst as usize].0
+                        )))
+                        .child(small_button("code-follow", "Follow the window").on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                let mut c = theme::choice();
+                                c.code = None;
+                                this.choose_theme(c, cx);
+                            }),
+                        ))
+                })
+            }))
+            .child(
+                div()
+                    .rounded(px(8.))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(theme::island_border())
+                    .child(sample_diff(window, code.unwrap_or(window))),
+            )
             .child(projects)
             .child(panes)
+            .child(fold)
             .child(section(
                 "Your themes",
-                "A .json file in the themes folder shows up above; its colors set any token by name. A theme extends One Dark unless it says another.",
+                "A .json file in the themes folder shows up above; its colors set any token by name, or window and code set those parts apart — a theme with only one shows up there only. A theme extends One Dark unless it says another.",
             ))
             .child(
                 div()
@@ -476,7 +838,7 @@ impl Workspace {
                     .child(
                         div()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(format!("{} — {}", t.label, tag_of(t).unwrap_or_default())),
+                            .child(format!("{} — {}", t.label, tag_of(t).unwrap_or_default().0)),
                     )
                     .children(t.problems.iter().map(|p| div().child(format!("· {p}"))))
             }))
@@ -524,7 +886,6 @@ impl Workspace {
             .and_then(|e| all.iter().find(|o| o.id == e))
             .unwrap_or(&all[0])
             .clone();
-        theme::preview_theme(&theme);
         self.theme_edit = Some(ThemeEdit {
             start: theme.clone(),
             theme,
@@ -533,18 +894,97 @@ impl Workspace {
             selected: None,
             said: None,
         });
-        cx.refresh_windows();
         cx.notify();
     }
 
-    /// Leaves the editor; the chosen themes draw again.
+    /// Leaves the editor.
     pub(super) fn close_theme_edit(&mut self, cx: &mut Context<Self>) {
         self.theme_edit = None;
         if self.field == Some(Field::ThemeValue) {
             self.field = None;
         }
-        theme::restore();
-        cx.refresh_windows();
+        cx.notify();
+    }
+
+    /// The themes the one being edited may extend: any but itself and those built on it.
+    fn theme_bases(&self) -> Vec<Theme> {
+        let Some(edit) = &self.theme_edit else {
+            return Vec::new();
+        };
+        let all = theme::all();
+        let me = edit.theme.id.as_str();
+        // Whether `t` is `me` or extends it, however far down.
+        let built_on_me = |t: &Theme| {
+            let mut at = Some(t);
+            for _ in 0..all.len() + 1 {
+                let Some(t) = at else {
+                    return false;
+                };
+                if t.id == me {
+                    return true;
+                }
+                at = t
+                    .extends
+                    .as_deref()
+                    .and_then(|e| all.iter().find(|o| o.id == e));
+            }
+            true
+        };
+        all.iter().filter(|t| !built_on_me(t)).cloned().collect()
+    }
+
+    /// The extends ▾ menu: the themes it may be built on, the current one checked.
+    pub(super) fn open_theme_bases(
+        &mut self,
+        at: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        use super::menu::{Act, Entry};
+        let current = self
+            .theme_edit
+            .as_ref()
+            .map(|e| e.base.id.clone())
+            .unwrap_or_default();
+        let (built_in, yours): (Vec<Theme>, Vec<Theme>) =
+            self.theme_bases().into_iter().partition(|t| t.built_in);
+        let entries = |themes: Vec<Theme>| {
+            themes
+                .into_iter()
+                .map(|t| {
+                    Entry::new(t.label.clone(), Act::ThemeBase(t.id.clone()))
+                        .checked(t.id == current)
+                })
+                .collect::<Vec<_>>()
+        };
+        self.open_titled(
+            at,
+            vec![
+                (Some("Extends"), entries(built_in)),
+                (Some("Your themes"), entries(yours)),
+            ],
+            cx,
+        );
+    }
+
+    /// The theme being edited is built on `id` now: what it does not set comes from there.
+    pub(super) fn set_theme_base(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(base) = theme::find(id) else {
+            return;
+        };
+        let Some(edit) = &mut self.theme_edit else {
+            return;
+        };
+        for i in 0..TOKENS.len() {
+            if !edit.theme.own.contains(&i) {
+                edit.theme.colors[i] = base.colors[i];
+            }
+        }
+        edit.theme.extends = Some(base.id.clone());
+        edit.base = base;
+        edit.said = None;
+        if let Some(i) = edit.selected {
+            self.theme_value = themes::hex(edit.theme.colors[i]);
+        }
         cx.notify();
     }
 
@@ -572,8 +1012,6 @@ impl Workspace {
             edit.theme.own.push(i);
         }
         edit.said = None;
-        theme::preview_theme(&edit.theme);
-        cx.refresh_windows();
         cx.notify();
     }
 
@@ -610,8 +1048,8 @@ impl Workspace {
         }
     }
 
-    /// Writes the theme to its file in the themes folder and draws with it.
-    fn save_theme(&mut self, cx: &mut Context<Self>) {
+    /// Writes the theme to its file in the themes folder and draws with it (Save, ⌘S).
+    pub(super) fn save_theme(&mut self, cx: &mut Context<Self>) {
         let Some(edit) = &mut self.theme_edit else {
             return;
         };
@@ -640,12 +1078,14 @@ impl Workspace {
                 edit.said = Some(Ok(format!("Saved {}", super::format::home_relative(&file))));
                 let id = edit.theme.id.clone();
                 theme::reload();
+                // Drawn with where it is offered: a theme of code only is the Code choice.
                 let mut choice = theme::choice();
-                choice.window = id;
-                theme::choose(choice);
-                if let Some(edit) = &self.theme_edit {
-                    theme::preview_theme(&edit.theme);
+                if edit.theme.window {
+                    choice.window = id;
+                } else {
+                    choice.code = Some(id);
                 }
+                theme::choose(choice);
             }
             Err(e) => edit.said = Some(Err(format!("Not saved: {e}"))),
         }
@@ -662,10 +1102,6 @@ impl Workspace {
         if let Some(i) = edit.selected {
             self.theme_value = themes::hex(edit.theme.colors[i]);
         }
-        if let Some(edit) = &self.theme_edit {
-            theme::preview_theme(&edit.theme);
-        }
-        cx.refresh_windows();
         cx.notify();
     }
 
@@ -778,7 +1214,10 @@ impl Workspace {
             .map(|f| super::format::home_relative(&f))
             .unwrap_or_default();
         let open_json = t.file.clone();
+        // The tokens scroll on their own, the preview stays beside them (Design: sticky).
         div()
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .gap(px(12.))
@@ -790,15 +1229,23 @@ impl Workspace {
                     .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(t.label.clone()))
                     .child(
                         div()
+                            .id("theme-extends")
                             .px(px(8.))
                             .h(px(22.))
                             .flex()
                             .items_center()
+                            .gap(px(4.))
                             .rounded(px(ROW_RADIUS))
                             .bg(theme::hover())
                             .text_size(px(12.))
                             .text_color(theme::muted())
-                            .child(format!("extends {from_label}")),
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::selected()))
+                            .child(format!("extends {from_label}"))
+                            .child(icons::icon("chevron").size(px(12.)).text_color(theme::muted()))
+                            .on_click(cx.listener(|this, ev: &ClickEvent, _, cx| {
+                                this.open_theme_bases(ev.position(), cx)
+                            })),
                     )
                     .child(div().flex_1())
                     .children(open_json.map(|f| {
@@ -822,7 +1269,13 @@ impl Workspace {
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::on_accent())
                             .cursor_pointer()
+                            .gap(px(6.))
                             .child("Save")
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::NORMAL)
+                                    .child(super::keys::text("⌘S").into_owned()),
+                            )
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.save_theme(cx))),
                     )
                     .child(
@@ -875,7 +1328,41 @@ impl Workspace {
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.raise_all(cx))),
                     )
             }))
-            .child(div().flex().flex_col().children(list))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .gap(px(20.))
+                    .child(
+                        div()
+                            .id("theme-tokens")
+                            .flex_1()
+                            .min_w(px(340.))
+                            .max_w(px(470.))
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .children(list),
+                    )
+                    .child(
+                        div()
+                            .id("theme-preview")
+                            .flex_1()
+                            .min_w(px(300.))
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(theme::faint())
+                                    .child(format!("Preview — the app in {}", t.label)),
+                            )
+                            .child(theme_preview(t)),
+                    ),
+            )
             .child(
                 div()
                     .flex()

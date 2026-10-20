@@ -1,7 +1,7 @@
 //! The colours the window draws with, read from the theme in use (#12, `crate::themes`): each
 //! function names the token it reads from `../Design/tokens.css`'s theme layer. The window theme
-//! gives the chrome; the code theme (the window's, unless Settings → Appearance → Code picks
-//! another) gives the diff's surface, its tints and the syntax colours.
+//! gives the chrome and the diff's surface; the code theme (the window's, unless Settings →
+//! Appearance → Code picks another) gives the diff's tints and the syntax colours (D16).
 
 use crate::themes::{self, T, TOKENS, Theme};
 use gpui::{Hsla, Rgba, rgba};
@@ -10,23 +10,22 @@ use std::sync::RwLock;
 pub const UI_FONT: &str = ".SystemUIFont";
 pub const CODE_FONT: &str = "Menlo";
 
-/// The tokens in use, and the code's own text colour after them.
-type Colors = [u32; TOKENS.len() + 1];
+/// The tokens in use.
+type Colors = [u32; TOKENS.len()];
 
 static CURRENT: RwLock<Option<Colors>> = RwLock::new(None);
 
 /// Draws with `window`, its code layer from `code` when given.
 pub fn set(window: &Theme, code: Option<&Theme>) {
     let code = code.unwrap_or(window);
-    let mut colors = [0u32; TOKENS.len() + 1];
-    for (i, c) in colors.iter_mut().enumerate().take(TOKENS.len()) {
+    let mut colors = [0u32; TOKENS.len()];
+    for (i, c) in colors.iter_mut().enumerate() {
         *c = if themes::is_code(i) {
             code.colors[i]
         } else {
             window.colors[i]
         };
     }
-    colors[TOKENS.len()] = code.get(T::Text1);
     if let Ok(mut current) = CURRENT.write() {
         *current = Some(colors);
     }
@@ -40,13 +39,7 @@ fn raw(i: usize) -> u32 {
     }
     // Before a theme is set (tests): One Dark.
     static ONE_DARK: std::sync::OnceLock<Colors> = std::sync::OnceLock::new();
-    ONE_DARK.get_or_init(|| {
-        let one = &themes::resolve(&[])[0];
-        let mut c = [0u32; TOKENS.len() + 1];
-        c[..TOKENS.len()].copy_from_slice(&one.colors);
-        c[TOKENS.len()] = one.get(T::Text1);
-        c
-    })[i]
+    ONE_DARK.get_or_init(|| themes::resolve(&[])[0].colors)[i]
 }
 
 fn get(t: T) -> Rgba {
@@ -58,9 +51,9 @@ fn with_alpha(t: T, alpha: u32) -> Rgba {
     rgba(raw(t as usize) & 0xffffff00 | alpha)
 }
 
-/// The code's own text. `content-01` of the code theme
+/// The code's own text: the window's (D16). `--content-01`
 pub fn code_text() -> Rgba {
-    rgba(raw(TOKENS.len()))
+    get(T::Text1)
 }
 
 /// The window behind the islands. `--background-01`
@@ -325,15 +318,9 @@ pub fn choose(choice: Choice) {
     }
 }
 
-/// Draws with `choice` for now (⌘K → Theme, the editor), without keeping it.
+/// Draws with `choice` for now (⌘K → Theme), without keeping it.
 pub fn preview(choice: &Choice) {
     with(|r| apply(r, choice));
-}
-
-/// Draws with `theme` itself, as it is being edited.
-pub fn preview_theme(theme: &Theme) {
-    let code = choice().code.and_then(|id| find(&id));
-    set(theme, code.as_ref());
 }
 
 /// Draws with the chosen themes again, after a preview.

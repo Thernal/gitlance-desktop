@@ -609,7 +609,7 @@ impl Workspace {
             let current = theme::choice().window;
             return theme::all()
                 .into_iter()
-                .filter(|t| matches(&words, &t.label))
+                .filter(|t| t.window && matches(&words, &t.label))
                 .map(|t| Item {
                     group: if t.built_in { "Themes" } else { "Your themes" },
                     detail: if t.id == current {
