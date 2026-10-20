@@ -30,6 +30,8 @@ impl Workspace {
     }
 
     pub(super) fn fold_section(&mut self, section: u8, cx: &mut Context<Self>) {
+        // Its rows stay drawn while it folds (#56, 1).
+        self.mark_motion(&format!("fold-{section}"), cx);
         let fold = match section {
             0 => &mut self.layout.fold_versions,
             1 => &mut self.layout.fold_commits,
@@ -88,11 +90,23 @@ impl Workspace {
                     cx.listener(move |this, _: &ClickEvent, _, cx| this.fold_section(which, cx)),
                 )
             })
-            .child(
-                icons::icon(if folded { "chevron-right" } else { "chevron" })
-                    .size(px(14.))
-                    .text_color(if fold { theme::faint() } else { theme::panel() }),
-            )
+            // The chevron turns as it folds (#56, 1).
+            .child(super::motion::toward(
+                icons::icon("chevron").size(px(14.)).text_color(if fold {
+                    theme::faint()
+                } else {
+                    theme::panel()
+                }),
+                (id, 1usize),
+                !folded,
+                false,
+                super::motion::FAST,
+                |chevron, v| {
+                    chevron.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                        -std::f32::consts::FRAC_PI_2 * (1. - v),
+                    )))
+                },
+            ))
             .child(
                 div()
                     .flex_none()
@@ -115,7 +129,8 @@ impl Workspace {
 
     /// The side panel; None when it is hidden (⌥⌘1, zen).
     pub(super) fn render_side(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        if !self.layout.show_sidebar {
+        // Hidden a moment ago (⌥⌘1, zen), it is drawn on its way out (#56, 4).
+        if !self.layout.show_sidebar && !self.motion.recent("side") {
             return None;
         }
         let keyboard = matches!(self.zone, Zone::Commits | Zone::Files);
@@ -145,13 +160,19 @@ impl Workspace {
                         true,
                         cx,
                     ))
-                    .children((!folded).then(|| {
-                        div()
-                            .id("versions-list")
-                            .max_h(px(240.))
-                            .overflow_y_scroll()
-                            .pb(px(6.))
-                            .child(self.version_rows(cx))
+                    .children((!folded || self.motion.recent("fold-0")).then(|| {
+                        super::motion::toward(
+                            div()
+                                .id("versions-list")
+                                .overflow_y_scroll()
+                                .pb(px(6.))
+                                .child(self.version_rows(cx)),
+                            "versions-open",
+                            !folded,
+                            false,
+                            super::motion::BASE,
+                            |list, v| list.max_h(px(240. * v)).opacity(v),
+                        )
                     }))
                     .into_any_element(),
             );
@@ -205,47 +226,45 @@ impl Workspace {
         if !commits_folded {
             open_lists += 1;
         }
-        sections.push(
-            div()
-                .when(!commits_folded, |s| s.flex_1().min_h(px(120.)))
-                .when(commits_folded, |s| s.flex_none())
-                .flex()
-                .flex_col()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| this.set_zone(Zone::Commits, cx)),
-                )
-                .child(self.section_header(
-                    Section::Commits,
-                    format!("Commits{}", self.zone_tag(Zone::Commits)),
-                    commit_summary,
-                    commit_end,
-                    true,
-                    cx,
-                ))
-                .when(!commits_folded, |s| {
-                    s.children(self.find.text.is_some().then(|| self.render_find(cx)))
-                        .children(self.render_pill(cx))
-                        .child(if self.find.shown.as_ref().is_some_and(Vec::is_empty) {
-                            self.render_no_match().into_any_element()
-                        } else {
-                            uniform_list(
-                                "commits",
-                                self.commit_rows(),
-                                cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                                    range
-                                        .map(|row| this.render_commit_row(this.commit_at(row), cx))
-                                        .collect::<Vec<_>>()
-                                }),
-                            )
-                            .track_scroll(&self.commit_scroll)
-                            .flex_1()
-                            .pb(px(6.))
-                            .into_any_element()
-                        })
-                })
-                .into_any_element(),
-        );
+        let commits_rows = !commits_folded || self.motion.recent("fold-1");
+        let commits = div()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.set_zone(Zone::Commits, cx)),
+            )
+            .child(self.section_header(
+                Section::Commits,
+                format!("Commits{}", self.zone_tag(Zone::Commits)),
+                commit_summary,
+                commit_end,
+                true,
+                cx,
+            ))
+            .when(commits_rows, |s| {
+                s.children(self.find.text.is_some().then(|| self.render_find(cx)))
+                    .children(self.render_pill(cx))
+                    .child(if self.find.shown.as_ref().is_some_and(Vec::is_empty) {
+                        self.render_no_match().into_any_element()
+                    } else {
+                        uniform_list(
+                            "commits",
+                            self.commit_rows(),
+                            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                range
+                                    .map(|row| this.render_commit_row(this.commit_at(row), cx))
+                                    .collect::<Vec<_>>()
+                            }),
+                        )
+                        .track_scroll(&self.commit_scroll)
+                        .flex_1()
+                        .pb(px(6.))
+                        .into_any_element()
+                    })
+            });
+        sections.push(open_share(commits, "commits-open", !commits_folded).into_any_element());
 
         if let Some(diff) = self.diff.as_ref().filter(|d| !d.files.is_empty()) {
             let one = diff.files.len() == 1;
@@ -280,35 +299,33 @@ impl Workspace {
                 open_lists += 1;
             }
             sections.push(rule().into_any_element());
-            sections.push(
-                div()
-                    .when(!folded, |s| s.flex_1().min_h(px(120.)))
-                    .when(folded, |s| s.flex_none())
-                    .flex()
-                    .flex_col()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            if this.files_zone() {
-                                this.set_zone(Zone::Files, cx)
-                            }
-                        }),
-                    )
-                    .child(self.section_header(
-                        Section::Changes,
-                        format!(
-                            "Changes{}{}",
-                            if done { " ✓" } else { "" },
-                            self.zone_tag(Zone::Files)
-                        ),
-                        summary,
-                        end,
-                        !one,
-                        cx,
-                    ))
-                    .when(!folded, |s| s.child(self.render_changes(cx)))
-                    .into_any_element(),
-            );
+            let rows = !folded || (!one && self.motion.recent("fold-2"));
+            let changes = div()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        if this.files_zone() {
+                            this.set_zone(Zone::Files, cx)
+                        }
+                    }),
+                )
+                .child(self.section_header(
+                    Section::Changes,
+                    format!(
+                        "Changes{}{}",
+                        if done { " ✓" } else { "" },
+                        self.zone_tag(Zone::Files)
+                    ),
+                    summary,
+                    end,
+                    !one,
+                    cx,
+                ))
+                .when(rows, |s| s.child(self.render_changes(cx)));
+            sections.push(open_share(changes, "changes-open", !folded).into_any_element());
         }
 
         Some(
@@ -327,6 +344,17 @@ impl Workspace {
                 .when(open_lists == 0, |s| s.child(div().flex_1())),
         )
     }
+}
+
+/// A section that shares the panel's height with the other open one: its share grows from nothing
+/// (its header alone) as it opens, and back as it folds (#56, 1).
+fn open_share(section: gpui::Div, id: &'static str, open: bool) -> impl IntoElement {
+    super::motion::toward(section, id, open, false, super::motion::BASE, |s, v| {
+        s.flex_grow(v)
+            .flex_shrink(1.)
+            .flex_basis(px(0.))
+            .min_h(px(super::motion::mix(HEADER, 120., v)))
+    })
 }
 
 /// A section's count, at the right of its header.

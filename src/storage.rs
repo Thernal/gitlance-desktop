@@ -355,6 +355,8 @@ pub struct Settings {
     pub flat: bool,
     /// The menu of places folds to icons while a merge request is reviewed.
     pub fold_reviewing: bool,
+    /// Panels, menus and folds move instead of jumping (#56).
+    pub animations: bool,
 }
 
 impl Default for Settings {
@@ -376,6 +378,7 @@ impl Default for Settings {
             projects: Projects::Rail,
             flat: false,
             fold_reviewing: true,
+            animations: true,
         }
     }
 }
@@ -414,6 +417,7 @@ impl Settings {
                 "projects" => settings.projects = Projects::from_key(value).unwrap_or_default(),
                 "flat" => settings.flat = value == "true",
                 "fold_reviewing" => settings.fold_reviewing = value != "false",
+                "animations" => settings.animations = value != "false",
                 "ui_zoom" => {
                     settings.ui_zoom = value.parse().map_or(100, |z: u16| {
                         z.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX)
@@ -452,6 +456,7 @@ impl std::fmt::Display for Settings {
         writeln!(f, "projects={}", self.projects.key())?;
         writeln!(f, "flat={}", self.flat)?;
         writeln!(f, "fold_reviewing={}", self.fold_reviewing)?;
+        writeln!(f, "animations={}", self.animations)?;
         writeln!(f, "zoom={}", self.zoom)?;
         writeln!(f, "ui_zoom={}", self.ui_zoom)?;
         if let Some(editor) = self.editor {
@@ -558,6 +563,7 @@ mod tests {
             projects: Projects::Menu,
             flat: true,
             fold_reviewing: false,
+            animations: false,
         };
         assert_eq!(Settings::parse(&settings.to_string()), settings);
     }

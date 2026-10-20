@@ -924,9 +924,22 @@ impl Workspace {
                     })
                     .child(bar)
                     .when(open, |s| {
-                        s.children(history)
+                        let body = div()
+                            .flex()
+                            .flex_col()
+                            .children(history)
                             .child(div().flex().flex_col().children(notes))
-                            .children(reply_row)
+                            .children(reply_row);
+                        if self.motion.recent(&format!("thread-{ix}")) {
+                            s.child(super::motion::appear(
+                                body,
+                                "thread-opening",
+                                super::motion::BASE,
+                                |body, v| body.opacity(v),
+                            ))
+                        } else {
+                            s.child(body)
+                        }
                     }),
             )
             .into_any_element()
@@ -1029,6 +1042,8 @@ impl Workspace {
 
     /// Opens or folds discussion `ix`.
     pub(super) fn set_thread_open(&mut self, ix: usize, open: bool, cx: &mut Context<Self>) {
+        // Its notes fade in as it opens (#56, 10).
+        self.mark_motion(&format!("thread-{ix}"), cx);
         if self.mr_open(ix) != open && !self.toggled_mr.remove(&ix) {
             self.toggled_mr.insert(ix);
         }

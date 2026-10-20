@@ -76,6 +76,7 @@ impl Entry {
 }
 
 /// Entries in groups; a rule is drawn between groups, a group may have a heading.
+#[derive(Clone)]
 pub struct CtxMenu {
     pub at: Point<Pixels>,
     pub groups: Vec<Vec<Entry>>,
@@ -112,18 +113,28 @@ impl Workspace {
         if !groups.is_empty() {
             self.repo_menu = false;
             self.ctx_menu = Some(CtxMenu { at, groups, titles });
+            self.menu_leaving = None;
             cx.notify();
         }
     }
 
     pub(super) fn close_menu(&mut self, cx: &mut Context<Self>) {
-        if self.ctx_menu.take().is_some() {
+        if self.ctx_menu.is_some() {
+            self.let_menu_go(cx);
             cx.notify();
         }
     }
 
+    /// The menu closes; it fades on its way out (#56, 5).
+    fn let_menu_go(&mut self, cx: &mut Context<Self>) {
+        if let Some(menu) = self.ctx_menu.take() {
+            self.menu_leaving = Some(menu);
+            self.mark_motion("menu", cx);
+        }
+    }
+
     pub(super) fn run_act(&mut self, act: Act, cx: &mut Context<Self>) {
-        self.ctx_menu = None;
+        self.let_menu_go(cx);
         match act {
             Act::Copy(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
             Act::OpenUrl(url) => cx.open_url(&url),
@@ -160,12 +171,12 @@ impl Workspace {
     ) {
         match act {
             Act::MoveProject { from, to } => {
-                self.ctx_menu = None;
+                self.let_menu_go(cx);
                 self.with_shell(window, cx, move |s, _, cx| s.move_tab(from, to, cx));
                 cx.notify();
             }
             Act::CloseProject(ix) => {
-                self.ctx_menu = None;
+                self.let_menu_go(cx);
                 self.with_shell(window, cx, move |s, window, cx| s.close(ix, window, cx));
                 cx.notify();
             }
@@ -189,8 +200,67 @@ impl Workspace {
         &self,
         viewport: gpui::Size<Pixels>,
         cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement + use<>> {
-        let menu = self.ctx_menu.as_ref()?;
+    ) -> Option<gpui::AnyElement> {
+        let Some(menu) = self.ctx_menu.as_ref() else {
+            // Closed a moment ago: it fades out, taking no clicks.
+            let menu = self
+                .menu_leaving
+                .as_ref()
+                .filter(|_| self.motion.recent("menu"))?;
+            let (panel, _) = self.menu_panel(menu, viewport, false, cx);
+            return Some(
+                super::motion::toward(
+                    panel,
+                    "menu-leaving",
+                    false,
+                    true,
+                    super::motion::FAST,
+                    |panel, v| panel.opacity(v),
+                )
+                .into_any_element(),
+            );
+        };
+        let (panel, y) = self.menu_panel(menu, viewport, true, cx);
+        Some(
+            div()
+                .absolute()
+                .size_full()
+                .child(
+                    div()
+                        .id("ctx-backdrop")
+                        .absolute()
+                        .size_full()
+                        // Modal: a press on the View button must only close the menu, not reach
+                        // the button and open it again.
+                        .occlude()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| this.close_menu(cx)),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(|this, _, _, cx| this.close_menu(cx)),
+                        ),
+                )
+                // It drops 4 px into place as it fades in (#56, 5).
+                .child(super::motion::appear(
+                    panel,
+                    "menu-coming",
+                    super::motion::FAST,
+                    move |panel, v| panel.top(px(y - 4. * (1. - v))).opacity(v),
+                ))
+                .into_any_element(),
+        )
+    }
+
+    /// The menu's panel at its place, and its top; `live`, its entries take clicks.
+    fn menu_panel(
+        &self,
+        menu: &CtxMenu,
+        viewport: gpui::Size<Pixels>,
+        live: bool,
+        cx: &mut Context<Self>,
+    ) -> (gpui::Div, f32) {
         let rows: usize = menu.groups.iter().map(Vec::len).sum();
         let heads = menu.titles.iter().flatten().count();
         let height = rows as f32 * ROW + heads as f32 * HEAD + menu.groups.len() as f32 * 9. + 12.;
@@ -248,63 +318,42 @@ impl Workspace {
                                 .text_color(theme::faint())
                                 .child(super::keys::text(entry.key).into_owned()),
                         )
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.run_act_in(act.clone(), window, cx)
-                        }))
+                        .when(live, |s| {
+                            s.on_click(cx.listener(move |this, _, window, cx| {
+                                this.run_act_in(act.clone(), window, cx)
+                            }))
+                        })
                 }))
         });
-        Some(
-            div()
-                .absolute()
-                .size_full()
-                .child(
-                    div()
-                        .id("ctx-backdrop")
-                        .absolute()
-                        .size_full()
-                        // Modal: a press on the View button must only close the menu, not reach
-                        // the button and open it again.
-                        .occlude()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| this.close_menu(cx)),
-                        )
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            cx.listener(|this, _, _, cx| this.close_menu(cx)),
-                        ),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        // The panel takes the mouse: otherwise the backdrop behind it sees the press
-                        // first, closes the menu, and the click never reaches an entry.
-                        .occlude()
-                        .left(px(x))
-                        .top(px(y))
-                        .w(px(WIDTH))
-                        .h(px(height))
-                        .flex()
-                        .flex_col()
-                        .rounded(px(ISLAND_RADIUS))
-                        .border_1()
-                        .border_color(theme::island_border())
-                        .bg(theme::panel())
-                        .shadow_lg()
-                        .text_size(px(13.))
-                        .overflow_hidden()
-                        .child(
-                            div()
-                                .id("ctx-scroll")
-                                .flex_1()
-                                .min_h_0()
-                                .p(px(6.))
-                                .flex()
-                                .flex_col()
-                                .when(scrolls, |s| s.overflow_y_scroll())
-                                .children(groups),
-                        ),
-                ),
-        )
+        let panel = div()
+            .absolute()
+            // The panel takes the mouse: otherwise the backdrop behind it sees the press
+            // first, closes the menu, and the click never reaches an entry.
+            .occlude()
+            .left(px(x))
+            .top(px(y))
+            .w(px(WIDTH))
+            .h(px(height))
+            .flex()
+            .flex_col()
+            .rounded(px(ISLAND_RADIUS))
+            .border_1()
+            .border_color(theme::island_border())
+            .bg(theme::panel())
+            .shadow_lg()
+            .text_size(px(13.))
+            .overflow_hidden()
+            .child(
+                div()
+                    .id("ctx-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .p(px(6.))
+                    .flex()
+                    .flex_col()
+                    .when(scrolls, |s| s.overflow_y_scroll())
+                    .children(groups),
+            );
+        (panel, y)
     }
 }

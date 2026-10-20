@@ -184,6 +184,15 @@ impl Workspace {
                     },
                 )),
             );
+        let animations = switch("animations", s.animations).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.change_settings(
+                    |this| this.settings.animations = !this.settings.animations,
+                    cx,
+                );
+                super::motion::set(this.settings.animations, cx);
+            },
+        ));
         let fold_reviewing = switch("fold-reviewing", s.fold_reviewing).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.change_settings(
@@ -325,12 +334,21 @@ impl Workspace {
                     panes,
                 )
                 .into_any_element(),
-                item(
-                    "Fold the menu while reviewing",
-                    "While a merge request is reviewed, the menu of places folds to icons and the diff takes the room; its first button in the title bar opens it for a while. Off: the menu stays as you left it.",
-                    fold_reviewing,
-                )
-                .into_any_element(),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_5()
+                    .child(item(
+                        "Fold the menu while reviewing",
+                        "While a merge request is reviewed, the menu of places folds to icons and the diff takes the room; its first button in the title bar opens it for a while. Off: the menu stays as you left it.",
+                        fold_reviewing,
+                    ))
+                    .child(item(
+                        "Animations",
+                        "Panels, menus and folds move instead of jumping, in 120 or 200 ms; nothing waits for them. Off, or with Reduce motion on in System Settings → Accessibility → Display, everything appears at once.",
+                        animations,
+                    ))
+                    .into_any_element(),
                 cx,
             ),
             Section::General => column()
@@ -459,7 +477,17 @@ impl Workspace {
                                                 ),
                                             ),
                                     )
-                                    .child(content),
+                                    // Another section fades in (#56, 14).
+                                    .child(super::motion::appear(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .when(editing, |s| s.flex_1().min_h_0())
+                                            .child(content),
+                                        ("settings-section", section as usize),
+                                        super::motion::FAST,
+                                        |content, v| content.opacity(v),
+                                    )),
                             ),
                     ),
             )

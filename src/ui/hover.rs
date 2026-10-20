@@ -238,7 +238,16 @@ impl CommitCard {
 }
 
 impl Render for CommitCard {
+    // It fades in after the long rest (#56, 7).
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        super::motion::appear(self.body(), "card-in", super::motion::FAST, |c, v| {
+            c.opacity(v)
+        })
+    }
+}
+
+impl CommitCard {
+    fn body(&mut self) -> gpui::Div {
         let c = &self.info;
         let body: Vec<String> = c
             .message
@@ -370,7 +379,16 @@ impl PersonCard {
 }
 
 impl Render for PersonCard {
+    // It fades in after the long rest (#56, 7).
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        super::motion::appear(self.body(), "card-in", super::motion::FAST, |c, v| {
+            c.opacity(v)
+        })
+    }
+}
+
+impl PersonCard {
+    fn body(&mut self) -> gpui::Div {
         let login = self.login.clone();
         let ws = self.ws.clone();
         let url = self.url.clone();
@@ -450,7 +468,16 @@ pub struct BranchCard {
 }
 
 impl Render for BranchCard {
+    // It fades in after the long rest (#56, 7).
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        super::motion::appear(self.body(), "card-in", super::motion::FAST, |c, v| {
+            c.opacity(v)
+        })
+    }
+}
+
+impl BranchCard {
+    fn body(&mut self) -> gpui::Div {
         frame()
             .child(
                 div()

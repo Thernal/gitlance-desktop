@@ -235,6 +235,16 @@ impl Workspace {
         if !self.page.set_source(path, source) {
             return;
         }
+        // The other form fades in: Source's rows as a file just opened, the page as a page
+        // (#56, 15).
+        if let Some(ix) = self
+            .diff
+            .as_ref()
+            .and_then(|d| d.files.iter().position(|f| f.path() == path))
+        {
+            self.mark_motion(&format!("file-{ix}"), cx);
+            self.mark_motion(&format!("page-{ix}"), cx);
+        }
         self.sync_stack();
         self.build_stack(cx);
         if self.stack.is_none() {
@@ -381,16 +391,22 @@ impl Workspace {
     /// File `ix` as a page in the list of every file: Unified or Split as the toolbar says.
     pub(super) fn render_page(&self, ix: usize, this: WeakEntity<Self>) -> AnyElement {
         let blocks = self.page_blocks(ix, this);
-        page_text(div().w_full().py(px(16.)).pl(px(44.)).pr(px(24.)))
-            .child(
-                div()
-                    .when(self.options.unified, |s| s.max_w(px(880.)))
-                    .flex()
-                    .flex_col()
-                    .gap(px(12.))
-                    .children(blocks.into_iter().map(|(b, _)| b)),
-            )
+        let page = page_text(div().w_full().py(px(16.)).pl(px(44.)).pr(px(24.))).child(
+            div()
+                .when(self.options.unified, |s| s.max_w(px(880.)))
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .children(blocks.into_iter().map(|(b, _)| b)),
+        );
+        if self.motion.recent(&format!("page-{ix}")) {
+            super::motion::appear(page, ("page-coming", ix), super::motion::FAST, |page, v| {
+                page.opacity(v)
+            })
             .into_any_element()
+        } else {
+            page.into_any_element()
+        }
     }
 
     /// File `ix` alone as a page that scrolls on its own, its blocks its children, so n / p can
@@ -560,8 +576,15 @@ impl Workspace {
                 let open = self.page.open.contains(&key);
                 out.push((fold_line(&names, open, key, ctx.this.clone(), k), true));
                 if open {
+                    // Opened, its blocks fade in (#56, 15).
                     for (n, r) in rows[k..end].iter().enumerate() {
-                        out.push((ctx.block(r, true, old_pics, k + n, true), false));
+                        let block = super::motion::appear(
+                            div().child(ctx.block(r, true, old_pics, k + n, true)),
+                            ("removed-opening", k + n),
+                            super::motion::BASE,
+                            |block, v| block.opacity(v),
+                        );
+                        out.push((block.into_any_element(), false));
                     }
                 }
                 k = end;

@@ -604,92 +604,106 @@ impl Workspace {
                 };
                 let (pick, up, down) = (this.clone(), this.clone(), this.clone());
                 let order_kind = f.kind == FormKind::Order;
-                Some(
-                    div()
-                        .id(("form-option", id as usize * 64 + i))
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.))
-                        .px(px(8.))
-                        .py(px(6.))
-                        .rounded(px(ROW_RADIUS))
-                        .cursor_pointer()
-                        .when(on, |s| s.bg(theme::agent_bg()))
-                        .hover(|s| s.bg(theme::hover()))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.))
-                                .child(
-                                    div()
-                                        .w(px(16.))
-                                        .text_size(px(11.))
-                                        .text_color(theme::faint())
-                                        .child((place + 1).to_string()),
-                                )
-                                .children((!order_kind).then(|| mark(on, many)))
-                                .child(div().flex_1().child(o.label.clone()))
-                                .children((!o.detail.is_empty()).then(|| {
-                                    div()
-                                        .text_size(px(12.))
-                                        .text_color(theme::muted())
-                                        .child(o.detail.clone())
-                                }))
-                                .children(order_kind.then(|| {
-                                    div()
-                                        .flex()
-                                        .gap(px(2.))
-                                        .child(
-                                            div()
-                                                .id(("form-up", id as usize * 64 + i))
-                                                .px(px(6.))
-                                                .rounded(px(4.))
-                                                .hover(|s| s.bg(theme::selected()))
-                                                .child("↑")
-                                                .on_click(move |_, _, cx| {
-                                                    cx.stop_propagation();
-                                                    up.update(cx, |this, cx| {
-                                                        this.move_answer(id, place, true, cx)
-                                                    })
-                                                    .ok();
-                                                }),
-                                        )
-                                        .child(
-                                            div()
-                                                .id(("form-down", id as usize * 64 + i))
-                                                .px(px(6.))
-                                                .rounded(px(4.))
-                                                .hover(|s| s.bg(theme::selected()))
-                                                .child("↓")
-                                                .on_click(move |_, _, cx| {
-                                                    cx.stop_propagation();
-                                                    down.update(cx, |this, cx| {
-                                                        this.move_answer(id, place, false, cx)
-                                                    })
-                                                    .ok();
-                                                }),
-                                        )
-                                })),
-                        )
-                        .children((!o.code.is_empty()).then(|| {
-                            div()
-                                .ml(px(38.))
-                                .px(px(10.))
-                                .py(px(6.))
-                                .rounded(px(6.))
-                                .bg(theme::editor())
-                                .font_family(theme::CODE_FONT)
-                                .text_size(px(12.))
-                                .children(o.code.iter().map(|l| div().child(l.clone())))
-                        }))
-                        .when(!order_kind, |s| {
-                            s.on_click(move |_, _, cx| {
-                                pick.update(cx, |this, cx| this.pick_answer(id, Some(i), cx))
-                                    .ok();
-                            })
+                let row = div()
+                    .id(("form-option", id as usize * 64 + i))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .px(px(8.))
+                    .py(px(6.))
+                    .rounded(px(ROW_RADIUS))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::hover()))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .w(px(16.))
+                                    .text_size(px(11.))
+                                    .text_color(theme::faint())
+                                    .child((place + 1).to_string()),
+                            )
+                            .children((!order_kind).then(|| mark(on, many)))
+                            .child(div().flex_1().child(o.label.clone()))
+                            .children((!o.detail.is_empty()).then(|| {
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(theme::muted())
+                                    .child(o.detail.clone())
+                            }))
+                            .children(order_kind.then(|| {
+                                div()
+                                    .flex()
+                                    .gap(px(2.))
+                                    .child(
+                                        div()
+                                            .id(("form-up", id as usize * 64 + i))
+                                            .px(px(6.))
+                                            .rounded(px(4.))
+                                            .hover(|s| s.bg(theme::selected()))
+                                            .child("↑")
+                                            .on_click(move |_, _, cx| {
+                                                cx.stop_propagation();
+                                                up.update(cx, |this, cx| {
+                                                    this.move_answer(id, place, true, cx)
+                                                })
+                                                .ok();
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .id(("form-down", id as usize * 64 + i))
+                                            .px(px(6.))
+                                            .rounded(px(4.))
+                                            .hover(|s| s.bg(theme::selected()))
+                                            .child("↓")
+                                            .on_click(move |_, _, cx| {
+                                                cx.stop_propagation();
+                                                down.update(cx, |this, cx| {
+                                                    this.move_answer(id, place, false, cx)
+                                                })
+                                                .ok();
+                                            }),
+                                    )
+                            })),
+                    )
+                    .children((!o.code.is_empty()).then(|| {
+                        div()
+                            .ml(px(38.))
+                            .px(px(10.))
+                            .py(px(6.))
+                            .rounded(px(6.))
+                            .bg(theme::editor())
+                            .font_family(theme::CODE_FONT)
+                            .text_size(px(12.))
+                            .children(o.code.iter().map(|l| div().child(l.clone())))
+                    }))
+                    .when(!order_kind, |s| {
+                        s.on_click(move |_, _, cx| {
+                            pick.update(cx, |this, cx| this.pick_answer(id, Some(i), cx))
+                                .ok();
                         })
-                        .into_any_element(),
+                    });
+                // The option picked lights up (#56, 17).
+                let tint = theme::agent_bg();
+                Some(
+                    super::motion::toward(
+                        row,
+                        ("form-option-on", id as usize * 64 + i),
+                        on,
+                        false,
+                        super::motion::FAST,
+                        move |row, v| {
+                            row.bg(gpui::Rgba {
+                                a: tint.a * v,
+                                ..tint
+                            })
+                        },
+                    )
+                    .into_any_element(),
                 )
             })
             .collect()

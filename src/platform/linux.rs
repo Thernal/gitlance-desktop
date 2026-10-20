@@ -10,6 +10,11 @@ pub const TITLEBAR_INSET: f32 = 12.;
 /// The desktop file names the icon (the window's app id is `gitlance`).
 pub fn set_icon() {}
 
+/// The system's "reduce motion" is not read here yet; Settings → Appearance → Animations is (#56).
+pub fn reduce_motion() -> bool {
+    false
+}
+
 pub fn data_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)

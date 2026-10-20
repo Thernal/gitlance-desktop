@@ -14,6 +14,8 @@ const MOST: usize = 4;
 struct Toast {
     id: u64,
     text: SharedString,
+    /// Dismissed: drawn on its way out until it is removed (#56, 8).
+    leaving: bool,
     /// Dismisses it when `SHOWN` is up; dropping it (✕, the same text again) cancels that.
     _timer: Task<()>,
 }
@@ -44,14 +46,34 @@ impl Workspace {
         self.toasts.list.push(Toast {
             id,
             text,
+            leaving: false,
             _timer: timer,
         });
         let over = self.toasts.list.len().saturating_sub(MOST);
         self.toasts.list.drain(..over);
     }
 
+    /// It slides out, then it is gone.
     fn dismiss(&mut self, id: u64, cx: &mut Context<Self>) {
-        self.toasts.list.retain(|t| t.id != id);
+        let Some(toast) = self
+            .toasts
+            .list
+            .iter_mut()
+            .find(|t| t.id == id && !t.leaving)
+        else {
+            return;
+        };
+        toast.leaving = true;
+        toast._timer = cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(super::motion::BASE + Duration::from_millis(40))
+                .await;
+            this.update(cx, |this, cx| {
+                this.toasts.list.retain(|t| t.id != id);
+                cx.notify();
+            })
+            .ok();
+        });
         cx.notify();
     }
 
@@ -62,7 +84,8 @@ impl Workspace {
         }
         let toasts = self.toasts.list.iter().map(|t| {
             let id = t.id;
-            div()
+            let leaving = t.leaving;
+            let toast = div()
                 .id(("toast", id as usize))
                 .occlude()
                 .w(px(360.))
@@ -109,7 +132,16 @@ impl Workspace {
                         .on_click(
                             cx.listener(move |this, _: &ClickEvent, _, cx| this.dismiss(id, cx)),
                         ),
-                )
+                );
+            // In from the right as it fades in, and out the same way (#56, 8).
+            super::motion::toward(
+                toast,
+                ("toast-motion", id as usize),
+                !leaving,
+                true,
+                super::motion::BASE,
+                |toast, v| toast.relative().left(px(24. * (1. - v))).opacity(v),
+            )
         });
         Some(
             gpui::deferred(

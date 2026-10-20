@@ -1202,7 +1202,16 @@ impl Workspace {
                     .into_any_element(),
             );
             if selected {
-                list.push(self.render_token_open(i, cx));
+                // The token's panel opens under it (#56, 14).
+                list.push(
+                    super::motion::appear(
+                        div().overflow_hidden().child(self.render_token_open(i, cx)),
+                        ("token-open", i),
+                        super::motion::BASE,
+                        |panel, v| panel.max_h(px(260. * v)).opacity(v),
+                    )
+                    .into_any_element(),
+                );
             }
         }
         let set = t.own.len();

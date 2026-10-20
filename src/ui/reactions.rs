@@ -95,6 +95,8 @@ impl Workspace {
 
     /// Adds your reaction `name` to note `note`, or takes it back.
     pub(super) fn toggle_reaction(&mut self, note: u64, name: &str, cx: &mut Context<Self>) {
+        // A pill added pops in (#56, 11).
+        self.mark_motion(&format!("award-{note}-{name}"), cx);
         let (Some(remote), Some(iid)) = (self.web.clone(), self.requests.current) else {
             return;
         };
@@ -201,7 +203,8 @@ impl Workspace {
                     let tip: gpui::SharedString = format!(":{name}: {}", who.join(", ")).into();
                     let this = this.clone();
                     let toggle = name.clone();
-                    div()
+                    let pops = self.motion.recent(&format!("award-{note}-{name}"));
+                    let pill = div()
                         .id(("reaction", note as usize * 64 + i))
                         .h(px(24.))
                         .px(px(8.))
@@ -231,7 +234,18 @@ impl Workspace {
                         .on_click(move |_, _, cx| {
                             this.update(cx, |this, cx| this.toggle_reaction(note, &toggle, cx))
                                 .ok();
-                        })
+                        });
+                    if pops {
+                        super::motion::appear(
+                            pill,
+                            ("reaction-pop", note as usize * 64 + i),
+                            super::motion::FAST,
+                            |pill, v| pill.px(px(super::motion::mix(4., 8., v))).opacity(v),
+                        )
+                        .into_any_element()
+                    } else {
+                        pill.into_any_element()
+                    }
                 }))
                 .into_any_element(),
         )
@@ -352,6 +366,16 @@ impl Workspace {
                 )
                 .into_any_element(),
         )
+        // It fades in on the hovered note (#56, 11).
+        .map(|bar| {
+            super::motion::appear(
+                div().child(bar),
+                ("bar-coming", note as usize),
+                super::motion::FAST,
+                |bar, v| bar.opacity(v),
+            )
+            .into_any_element()
+        })
     }
 
     /// ⇧E: ☺+ on the newest note of the selected discussion, its search taking the keyboard.

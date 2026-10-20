@@ -10,6 +10,11 @@ pub const TITLEBAR_INSET: f32 = 12.;
 /// The executable carries no icon resource yet; the taskbar shows the default one.
 pub fn set_icon() {}
 
+/// The system's "reduce motion" is not read here yet; Settings → Appearance → Animations is (#56).
+pub fn reduce_motion() -> bool {
+    false
+}
+
 pub fn data_dir() -> Option<PathBuf> {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)

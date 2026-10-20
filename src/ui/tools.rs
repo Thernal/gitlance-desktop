@@ -86,6 +86,12 @@ impl Workspace {
     /// Opens `tool` (and gives it the keyboard), or closes the one open.
     pub(super) fn set_tool(&mut self, tool: Option<Tool>, cx: &mut Context<Self>) {
         let name = tool.map_or("", Tool::name);
+        // Opened or closed, it slides (#56, 3); one tool for another is no motion.
+        let was = self.tool();
+        if was.is_some() != tool.is_some() {
+            self.last_tool = was.or(tool);
+            self.mark_motion("tool", cx);
+        }
         if self.layout.tool != name {
             self.layout.tool = name.to_owned();
             self.layout.save();
@@ -124,7 +130,8 @@ impl Workspace {
 
     /// The icon stripe on the right edge.
     pub(super) fn render_stripe(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        if self.root.is_none() || self.zen.is_some() || self.settings_open {
+        let zen = self.zen.is_some() && !self.motion.recent("zen");
+        if self.root.is_none() || zen || self.settings_open {
             return None;
         }
         let open = self.tool();
@@ -231,12 +238,15 @@ impl Workspace {
 
     /// The tool window, after the splitter that resizes it.
     pub(super) fn render_tool(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        if !self.tool_shown() {
+        // Closed a moment ago, it is drawn on its way out (#56, 3).
+        let shown = self.tool_shown();
+        let leaving = !shown && self.zen.is_none() && self.motion.recent("tool");
+        if !shown && !leaving {
             return None;
         }
         let view = match self.submit_tool(cx) {
             Some(view) => view,
-            None => match self.tool()? {
+            None => match self.tool().or(self.last_tool.filter(|_| leaving))? {
                 Tool::Details => self.details_tool(cx),
                 Tool::Discussions => self.discussions_tool(cx),
                 Tool::Agents => self.agents_tool(cx),
@@ -272,66 +282,78 @@ impl Workspace {
             }));
         // A narrow window has no room beside the diff: the window floats over its right edge.
         let over = self.tool_floats();
-        Some(
-            div()
-                .flex_none()
-                .flex()
-                .when(over, |s| {
-                    s.absolute()
-                        .top(px(0.))
-                        .bottom(px(0.))
-                        .right(px(0.))
-                        .shadow_lg()
-                })
-                .when(!over, |s| s.child(self.handle(Split::Tool, cx)))
-                .child(
-                    island()
-                        .w(px(self.layout.tool_width))
-                        .h_full()
-                        .border_color(self.zone_border(Zone::Tool))
-                        .child(
-                            div()
-                                .flex_none()
-                                .h(px(38.))
-                                .pl(px(14.))
-                                .pr(px(8.))
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .border_b_1()
-                                .border_color(theme::island_border())
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .flex()
-                                        .items_baseline()
-                                        .gap(px(6.))
-                                        .child(
-                                            div()
-                                                .flex_none()
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .child(view.title),
-                                        )
-                                        .children(view.count.map(|c| {
-                                            div().truncate().text_color(theme::faint()).child(c)
-                                        })),
-                                )
-                                .children(view.actions)
-                                .child(close),
-                        )
-                        .child(div().flex_1().min_h_0().flex().flex_col().child(view.body))
-                        .children(view.foot.map(|foot| {
-                            div()
-                                .flex_none()
-                                .px(px(14.))
-                                .py(px(10.))
-                                .border_t_1()
-                                .border_color(theme::island_border())
-                                .child(foot)
-                        })),
-                ),
-        )
+        let room = self.layout.tool_width + 12.;
+        let pane = div()
+            .flex_none()
+            .flex()
+            .overflow_hidden()
+            .when(over, |s| {
+                s.absolute()
+                    .top(px(0.))
+                    .bottom(px(0.))
+                    .right(px(0.))
+                    .shadow_lg()
+            })
+            .when(!over, |s| s.child(self.handle(Split::Tool, cx)))
+            .child(
+                island()
+                    .w(px(self.layout.tool_width))
+                    .h_full()
+                    .border_color(self.zone_border(Zone::Tool))
+                    .child(
+                        div()
+                            .flex_none()
+                            .h(px(38.))
+                            .pl(px(14.))
+                            .pr(px(8.))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .border_b_1()
+                            .border_color(theme::island_border())
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .items_baseline()
+                                    .gap(px(6.))
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(view.title),
+                                    )
+                                    .children(view.count.map(|c| {
+                                        div().truncate().text_color(theme::faint()).child(c)
+                                    })),
+                            )
+                            .children(view.actions)
+                            .child(close),
+                    )
+                    .child(div().flex_1().min_h_0().flex().flex_col().child(view.body))
+                    .children(view.foot.map(|foot| {
+                        div()
+                            .flex_none()
+                            .px(px(14.))
+                            .py(px(10.))
+                            .border_t_1()
+                            .border_color(theme::island_border())
+                            .child(foot)
+                    })),
+            );
+        // It comes out of the stripe and goes back into it; its content shows once it is half out.
+        Some(super::motion::toward(
+            pane,
+            "tool-pane",
+            shown,
+            self.motion.recent("tool"),
+            super::motion::BASE,
+            move |pane, v| {
+                pane.max_w(px(room * v))
+                    .opacity(((v - 0.4) / 0.6).clamp(0., 1.))
+            },
+        ))
     }
 
     /// The gap between the diff and the stripe when no tool window is open.

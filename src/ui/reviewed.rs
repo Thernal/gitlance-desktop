@@ -578,7 +578,13 @@ impl Workspace {
                 .hover(|s| s.border_color(theme::text()))
                 .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(move |_, cx| cx.new(|_| super::TipOwned(said.clone())).into())
-                .child(glyph)
+                // A new mark pops in (#56, 12).
+                .child(super::motion::appear(
+                    div().child(glyph),
+                    ("review-tick", state as usize),
+                    super::motion::FAST,
+                    |tick, v| tick.opacity(v),
+                ))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     let done = this.review_state(ix) == Some(State::Done);
@@ -663,13 +669,14 @@ impl Workspace {
                         .w_full()
                         .rounded(px(2.))
                         .bg(theme::hover())
-                        .child(
-                            div()
-                                .h_full()
-                                .rounded(px(2.))
-                                .bg(theme::added())
-                                .w(gpui::relative(done as f32 / total.max(1) as f32)),
-                        ),
+                        // It grows to the new share (#56, 12).
+                        .child(super::motion::toward_value(
+                            div().h_full().rounded(px(2.)).bg(theme::added()),
+                            "review-bar",
+                            done as f32 / total.max(1) as f32,
+                            super::motion::BASE,
+                            |bar, share| bar.w(gpui::relative(share.clamp(0., 1.))),
+                        )),
                 ),
         )
     }

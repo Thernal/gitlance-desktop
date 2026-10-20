@@ -114,11 +114,21 @@ pub fn bar(id: impl Into<ElementId>, open: bool) -> Stateful<Div> {
                 .justify_center()
                 .rounded(px(6.))
                 .hover(|s| s.bg(theme::hover()))
-                .child(
-                    super::icons::icon(if open { "chevron" } else { "chevron-right" })
+                // The chevron turns as it opens or folds (#56, 10).
+                .child(super::motion::toward(
+                    super::icons::icon("chevron")
                         .size(px(16.))
                         .text_color(theme::muted()),
-                ),
+                    "bar-chevron",
+                    open,
+                    false,
+                    super::motion::FAST,
+                    |chevron, v| {
+                        chevron.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                            -std::f32::consts::FRAC_PI_2 * (1. - v),
+                        )))
+                    },
+                )),
         )
 }
 

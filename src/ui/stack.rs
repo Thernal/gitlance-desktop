@@ -435,6 +435,8 @@ impl Workspace {
 
     /// Folds file `ix` to its header, or opens it.
     pub(super) fn flip_fold(&mut self, ix: usize, cx: &mut Context<Self>) {
+        // Its rows fade in as it opens (#56, 9).
+        self.mark_motion(&format!("file-{ix}"), cx);
         let Some(stack) = self.stack.as_mut() else {
             return;
         };
@@ -709,6 +711,7 @@ impl Workspace {
 
     /// Opens every file (`open`), or folds every file to its header.
     pub(super) fn expand_all(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.mark_motion("files", cx);
         let Some(files) = self
             .stack
             .as_ref()
@@ -874,15 +877,21 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .rounded(px(6.))
-                            .child(
-                                super::icons::icon(if folded {
-                                    "chevron-right"
-                                } else {
-                                    "chevron"
-                                })
-                                .size(px(16.))
-                                .text_color(theme::muted()),
-                            ),
+                            // The chevron turns as the card folds or opens (#56, 9).
+                            .child(super::motion::toward(
+                                super::icons::icon("chevron")
+                                    .size(px(16.))
+                                    .text_color(theme::muted()),
+                                "card-chevron",
+                                !folded,
+                                false,
+                                super::motion::FAST,
+                                |chevron, v| {
+                                    chevron.with_transformation(gpui::Transformation::rotate(
+                                        gpui::radians(-std::f32::consts::FRAC_PI_2 * (1. - v)),
+                                    ))
+                                },
+                            )),
                     )
                     .child(super::change_badge(file))
                     .child(
@@ -1030,10 +1039,14 @@ impl Workspace {
         };
         if self.body(b) == Body::Waiting {
             let rows = (file.added + file.removed + 6).min(14) as f32;
-            return line("Loading…".to_owned())
+            // Its rows are being built: a shimmer as tall as they will about be (#56, 18).
+            return line(String::new())
                 .h(px(self.row_height() * rows))
                 .items_start()
-                .text_color(theme::faint())
+                .child(super::motion::shimmer(
+                    ("card-loading", ix),
+                    (rows as usize / 2).max(2),
+                ))
                 .into_any_element();
         }
         if self.generated_folded(file) {

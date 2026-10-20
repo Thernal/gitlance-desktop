@@ -1204,10 +1204,10 @@ impl Workspace {
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| this.close_palette(cx)),
                 )
-                .child(
+                // It fades in as it grows from 98 % (#56, 6).
+                .child(super::motion::appear(
                     div()
                         .occlude()
-                        .w(px(640.))
                         .flex()
                         .flex_col()
                         .rounded(px(ISLAND_RADIUS))
@@ -1252,7 +1252,10 @@ impl Workspace {
                                 .children(empty),
                         )
                         .children(self.render_search_foot(p, cx)),
-                ),
+                    "palette-coming",
+                    super::motion::FAST,
+                    |panel, v| panel.w(px(super::motion::mix(627., 640., v))).opacity(v),
+                )),
         )
     }
 
@@ -1273,7 +1276,7 @@ impl Workspace {
                     let count = p.counts.map(|c| c[i]);
                     let none = count == Some(0);
                     let lit = scope == on;
-                    div()
+                    let tab = div()
                         .id(("search-scope", i))
                         .flex()
                         .items_center()
@@ -1282,11 +1285,6 @@ impl Workspace {
                         .pt(px(10.))
                         .pb(px(8.))
                         .border_b_2()
-                        .border_color(if lit {
-                            theme::accent()
-                        } else {
-                            gpui::transparent_black().into()
-                        })
                         .text_size(px(13.))
                         .text_color(if lit { theme::text() } else { theme::muted() })
                         .when(lit, |s| s.font_weight(gpui::FontWeight::SEMIBOLD))
@@ -1309,7 +1307,21 @@ impl Workspace {
                                 .text_color(if lit { theme::accent() } else { theme::faint() })
                                 .child(n.to_string())
                         }))
-                        .on_click(cx.listener(move |this, _, _, cx| this.search(scope, cx)))
+                        .on_click(cx.listener(move |this, _, _, cx| this.search(scope, cx)));
+                    // The underline goes from the tab left to the tab come to (#56, 6).
+                    super::motion::toward(
+                        tab,
+                        ("search-scope-line", i),
+                        lit,
+                        false,
+                        super::motion::FAST,
+                        |tab, v| {
+                            tab.border_color(gpui::Rgba {
+                                a: v,
+                                ..theme::accent()
+                            })
+                        },
+                    )
                 })),
         )
         .map(|d| d.into_any_element())

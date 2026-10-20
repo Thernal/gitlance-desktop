@@ -113,7 +113,8 @@ impl Workspace {
 
     /// The menu; None without a repository and in zen.
     pub(super) fn render_places(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        if self.root.is_none() || self.zen.is_some() {
+        // Zen just began: it slides away (#56, 16).
+        if self.root.is_none() || (self.zen.is_some() && !self.motion.recent("zen")) {
             return None;
         }
         let folded = self.places_folded();
@@ -163,13 +164,17 @@ impl Workspace {
                         .group_hover(id, |s| s.text_color(theme::text())),
                 )
                 .when(!folded, |s| {
-                    s.child(
+                    // Unfolding, the names fade in as the menu widens (#56, 2).
+                    s.child(super::motion::appear(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
                             .child(super::words::say(label).into_owned()),
-                    )
+                        (id, 1usize),
+                        super::motion::FAST,
+                        |label, v| label.opacity(v),
+                    ))
                     .children(n.map(|n| {
                         div()
                             .flex_none()
@@ -246,108 +251,119 @@ impl Workspace {
         };
         let projects = self.menu_projects();
         let nested = !projects.is_empty();
-        Some(
-            div()
-                .id("places")
-                .w(px(if folded { ICONS } else { OPEN }))
-                .flex_none()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .px(px(if folded { 6. } else { 8. }))
-                .pb(px(4.))
-                .overflow_hidden()
-                .children(
-                    requests
-                        .then(|| item(Place::Inbox, "inbox", "Inbox", Some(self.notices.unread()))),
+        let menu = div()
+            .id("places")
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .px(px(if folded { 6. } else { 8. }))
+            .pb(px(4.))
+            .overflow_hidden()
+            .children(
+                requests.then(|| item(Place::Inbox, "inbox", "Inbox", Some(self.notices.unread()))),
+            )
+            .children(requests.then(|| {
+                item(
+                    Place::Requests,
+                    "pull-request",
+                    "Merge requests",
+                    Some(count(Scope::All)),
                 )
-                .children(requests.then(|| {
-                    item(
-                        Place::Requests,
-                        "pull-request",
-                        "Merge requests",
-                        Some(count(Scope::All)),
-                    )
-                }))
-                .children((requests && me).then(|| {
-                    item(
-                        Place::ReviewRequests,
-                        "user-check",
-                        "Review requests",
-                        Some(count(Scope::ReviewMe)),
-                    )
-                }))
-                .children((requests && me).then(|| {
-                    item(
-                        Place::MyRequests,
-                        "eye",
-                        "My requests",
-                        Some(count(Scope::Mine)),
-                    )
-                }))
-                .children(nested.then(|| heading("Projects")))
-                .children(projects.into_iter().flat_map(|(ix, tab)| {
-                    let mark = super::rail::initials(&tab.title);
-                    let tint = super::rail::hue(&tab.title);
-                    let active = tab.active;
-                    let row = div()
-                        .id(("menu-project", ix))
-                        .h(px(32.))
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .gap(px(10.))
-                        .when(folded, |s| s.justify_center())
-                        .when(!folded, |s| s.px(px(6.)))
-                        .rounded(px(super::ROW_RADIUS))
-                        .cursor_pointer()
-                        .when(tab.active, |s| s.bg(theme::hover()))
-                        .hover(|s| s.bg(theme::hover()))
-                        .child(super::rail::project_mark(&mark, tint, 22.))
-                        .when(!folded, |s| {
-                            s.child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(tab.title.clone()),
-                            )
-                            .children((!tab.active && tab.unread > 0).then(|| {
-                                div()
-                                    .flex_none()
-                                    .text_size(px(11.))
-                                    .text_color(theme::accent())
-                                    .child(tab.unread.to_string())
-                            }))
-                            // Open (its places under it) or another one to switch to.
-                            .child(
-                                icons::icon(if tab.active {
-                                    "chevron"
-                                } else {
-                                    "chevron-right"
-                                })
-                                .size(px(14.))
-                                .text_color(theme::faint()),
-                            )
-                        })
-                        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            this.with_shell(window, cx, move |s, window, cx| {
-                                s.select(ix, window, cx)
-                            })
+            }))
+            .children((requests && me).then(|| {
+                item(
+                    Place::ReviewRequests,
+                    "user-check",
+                    "Review requests",
+                    Some(count(Scope::ReviewMe)),
+                )
+            }))
+            .children((requests && me).then(|| {
+                item(
+                    Place::MyRequests,
+                    "eye",
+                    "My requests",
+                    Some(count(Scope::Mine)),
+                )
+            }))
+            .children(nested.then(|| heading("Projects")))
+            .children(projects.into_iter().flat_map(|(ix, tab)| {
+                let mark = super::rail::initials(&tab.title);
+                let tint = super::rail::hue(&tab.title);
+                let active = tab.active;
+                let row = div()
+                    .id(("menu-project", ix))
+                    .h(px(32.))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(10.))
+                    .when(folded, |s| s.justify_center())
+                    .when(!folded, |s| s.px(px(6.)))
+                    .rounded(px(super::ROW_RADIUS))
+                    .cursor_pointer()
+                    .when(tab.active, |s| s.bg(theme::hover()))
+                    .hover(|s| s.bg(theme::hover()))
+                    .child(super::rail::project_mark(&mark, tint, 22.))
+                    .when(!folded, |s| {
+                        s.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(tab.title.clone()),
+                        )
+                        .children((!tab.active && tab.unread > 0).then(|| {
+                            div()
+                                .flex_none()
+                                .text_size(px(11.))
+                                .text_color(theme::accent())
+                                .child(tab.unread.to_string())
                         }))
-                        .into_any_element();
-                    let mut rows = vec![row];
-                    if active {
-                        rows.extend(places(true));
-                    }
-                    rows
-                }))
-                .when(!nested, |s| {
-                    s.child(heading("Repository")).children(places(false))
-                })
-                .child(div().flex_1())
-                .child(item(Place::Settings, "settings", "Settings", None)),
-        )
+                        // Open (its places under it) or another one to switch to.
+                        .child(
+                            icons::icon(if tab.active {
+                                "chevron"
+                            } else {
+                                "chevron-right"
+                            })
+                            .size(px(14.))
+                            .text_color(theme::faint()),
+                        )
+                    })
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.with_shell(window, cx, move |s, window, cx| s.select(ix, window, cx))
+                    }))
+                    .into_any_element();
+                let mut rows = vec![row];
+                if active {
+                    rows.extend(places(true));
+                }
+                rows
+            }))
+            .when(!nested, |s| {
+                s.child(heading("Repository")).children(places(false))
+            })
+            .child(div().flex_1())
+            .child(item(Place::Settings, "settings", "Settings", None));
+        // Folding to icons narrows it (#56, 2); zen slides it away (16).
+        let menu = super::motion::toward(
+            menu,
+            "places-fold",
+            !folded,
+            false,
+            super::motion::BASE,
+            |menu, v| menu.w(px(super::motion::mix(ICONS, OPEN, v))),
+        );
+        Some(super::motion::toward(
+            div().flex_none().flex().overflow_hidden().child(menu),
+            "places-zen",
+            self.zen.is_none(),
+            self.motion.recent("zen"),
+            super::motion::BASE,
+            |menu, v| menu.max_w(px(OPEN * v)),
+        ))
     }
 }

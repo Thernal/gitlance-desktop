@@ -7,6 +7,16 @@ use super::menu::{Act, Entry};
 use super::shell::TabInfo;
 use super::{TipOwned, Workspace, icons, px, theme};
 use crate::storage::Projects;
+use gpui::AnimationExt as _;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+/// The project the rail last marked: a rail drawn after a switch slides its marker from there.
+static MARKED: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Where a project's marker sits in the rail: its top, from the rail's.
+fn marker_top(ix: usize) -> f32 {
+    4. + 48. * ix as f32 + 9.
+}
 use gpui::{
     ClickEvent, Context, FontWeight, MouseButton, MouseDownEvent, Rgba, Window, div, prelude::*,
 };
@@ -71,11 +81,14 @@ impl Workspace {
         &self,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
-        if super::projects() != Projects::Rail || self.zen.is_some() {
+        // Zen just began: it is drawn on its way out (#56, 16).
+        if super::projects() != Projects::Rail || (self.zen.is_some() && !self.motion.recent("zen"))
+        {
             return None;
         }
         let tabs = self.tabs.borrow().clone();
         let n = tabs.len();
+        let active = tabs.iter().position(|t| t.active);
         let items = tabs.into_iter().enumerate().map(|(ix, tab)| {
             let mark = initials(&tab.title);
             let tint = hue(&tab.title);
@@ -109,19 +122,9 @@ impl Workspace {
                 .when(!tab.active, |s| s.hover(|s| s.bg(theme::hover())))
                 .drag_over::<DragProject>(|s, _, _, _| s.bg(theme::selected()))
                 .child(project_mark(&mark, tint, 30.))
-                // The project you are in has a bar at the rail's edge.
-                .children(tab.active.then(|| {
-                    div()
-                        .absolute()
-                        .left(px(-7.))
-                        .top(px(9.))
-                        .w(px(3.))
-                        .h(px(18.))
-                        .rounded_full()
-                        .bg(theme::text())
-                }))
+                // A new count pops in (#56, 13).
                 .children((!tab.active && tab.unread > 0).then(|| {
-                    div()
+                    let badge = div()
                         .absolute()
                         .top(px(-4.))
                         .right(px(-4.))
@@ -136,7 +139,13 @@ impl Workspace {
                         .text_size(px(10.))
                         .font_weight(FontWeight::BOLD)
                         .text_color(theme::base())
-                        .child(tab.unread.min(99).to_string())
+                        .child(tab.unread.min(99).to_string());
+                    super::motion::appear(
+                        badge,
+                        ("rail-badge", tab.unread.min(99)),
+                        super::motion::FAST,
+                        |badge, v| badge.opacity(v),
+                    )
                 }))
                 .children((!tab.active && tab.unread == 0 && tab.news).then(|| {
                     div()
@@ -169,8 +178,29 @@ impl Workspace {
                     this.with_shell(window, cx, move |s, _, cx| s.move_tab(from, ix, cx));
                 }))
         });
+        // The project you are in has a bar at the rail's edge; it slides to the one switched to
+        // (#56, 13).
+        let marker = active.map(|ix| {
+            let from = MARKED.swap(ix, Relaxed);
+            let from = if from < n { from } else { ix };
+            div()
+                .absolute()
+                .left(px(-2.))
+                .w(px(3.))
+                .h(px(18.))
+                .rounded_full()
+                .bg(theme::text())
+                .with_spring(
+                    "rail-marker",
+                    gpui::SpringAnimation::new(super::motion::spring(super::motion::BASE))
+                        .to(marker_top(ix))
+                        .from(marker_top(from)),
+                    |marker, top| marker.top(px(top)),
+                )
+        });
         Some(
             div()
+                .relative()
                 .w(px(48.))
                 .flex_none()
                 .flex()
@@ -178,6 +208,7 @@ impl Workspace {
                 .items_center()
                 .gap(px(10.))
                 .pt(px(4.))
+                .children(marker)
                 .children(items)
                 .child(
                     div()

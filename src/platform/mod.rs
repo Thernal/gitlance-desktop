@@ -19,7 +19,7 @@ use linux as os;
 
 use std::path::PathBuf;
 
-pub use os::{TRANSPARENT_TITLEBAR, alive, owner_only, set_icon};
+pub use os::{TRANSPARENT_TITLEBAR, alive, owner_only, reduce_motion, set_icon};
 
 /// Whether this is macOS, where the primary modifier is ⌘; elsewhere it is Ctrl.
 pub const MAC: bool = os::MAC;

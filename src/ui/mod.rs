@@ -28,6 +28,7 @@ mod lists;
 mod markdown;
 mod md_page;
 mod menu;
+mod motion;
 mod notifications;
 mod opening;
 mod outdated;
@@ -408,6 +409,7 @@ pub fn run(path: Option<PathBuf>) {
         .run(move |cx: &mut App| {
             keymap::install(default_bindings(), cx);
             theme::load();
+            motion::set(Settings::load().animations, cx);
             // The themes folder is read again when it changes, with a repository open or not (X52).
             cx.spawn(async move |cx| {
                 loop {
@@ -417,6 +419,8 @@ pub fn run(path: Option<PathBuf>) {
                     if theme::reload_if_changed() {
                         cx.update(|cx| cx.refresh_windows());
                     }
+                    // Reduce motion may have been turned on or off in System Settings.
+                    cx.update(motion::refresh);
                 }
             })
             .detach();
@@ -1005,18 +1009,32 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
         if let Ok(keys) = std::env::var("GITLANCE_SNAPSHOT_KEYS") {
             // Keystrokes sent to the window itself (not the keyboard), e.g. `right right cmd-t`.
             // `wait` gives a diff a second to load before the next key.
-            for key in keys.split_whitespace() {
-                if key == "wait" {
+            // Showing motion (#56): a frame right after each key, as a shown window draws one,
+            // and none of the usual pause after the last.
+            let motion = std::env::var_os("GITLANCE_SNAPSHOT_MOTION").is_some();
+            if motion {
+                // What the keys move must be on screen before them.
+                cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+                    .ok();
+            }
+            let keys: Vec<&str> = keys.split_whitespace().collect();
+            for (n, key) in keys.iter().enumerate() {
+                if *key == "wait" {
                     wait(1000).await;
                     continue;
                 }
                 if let Ok(keystroke) = gpui::Keystroke::parse(key) {
                     cx.update_window(window.into(), |_, window, cx| {
                         window.dispatch_keystroke(keystroke, cx);
+                        if motion {
+                            window.draw(cx).clear(cx);
+                        }
                     })
                     .ok();
                 }
-                wait(400).await;
+                if !(motion && n + 1 == keys.len()) {
+                    wait(400).await;
+                }
             }
         }
         // The pointer resting at `x,y` (window points) long enough for a tooltip or a card (#53).
@@ -1071,9 +1089,16 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
         }
         // A hidden window gets no display-link frames: draw one by hand. Images start decoding
         // in the background at a draw, so a first draw, a pause, then the one that is saved.
-        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
-            .ok();
-        wait(800).await;
+        // `GITLANCE_SNAPSHOT_MOTION=<ms>` keeps motion on (#56) and saves the frame that many
+        // milliseconds after that first draw, midway through what the keys set moving.
+        let midway = std::env::var("GITLANCE_SNAPSHOT_MOTION")
+            .ok()
+            .and_then(|ms| ms.parse().ok());
+        if midway.is_none() {
+            cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+                .ok();
+        }
+        wait(midway.unwrap_or(800)).await;
         // `update_window` leaves the root view free for the draw to render.
         let saved = cx.update_window(window.into(), |_, window, cx| {
             window.draw(cx).clear(cx);
@@ -1298,6 +1323,12 @@ pub struct Workspace {
     blame_tip: Option<annotate::BlameTip>,
     /// A mention in comment text under the pointer, and its card (X62).
     mention_hover: Option<hover::MentionHover>,
+    /// When panes last opened or closed, to draw them coming and going (#56).
+    motion: motion::Marks,
+    /// The tool window last open, drawn on its way out.
+    last_tool: Option<tools::Tool>,
+    /// The menu just closed, drawn fading out.
+    menu_leaving: Option<menu::CtxMenu>,
     /// A file the diff does not change, shown in its place (D18), and its read.
     file_view: Option<file_view::FileView>,
     file_reading: file_view::Reading,
@@ -1526,6 +1557,9 @@ impl Workspace {
             mention_hover: None,
             file_view: None,
             file_reading: None,
+            motion: Default::default(),
+            last_tool: None,
+            menu_leaving: None,
             ffind: None,
             reviewed: reviewed::Store::load(),
             done_card: false,
@@ -2553,7 +2587,21 @@ impl Workspace {
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
         self.layout.show_sidebar = !self.layout.show_sidebar;
         self.layout.save();
+        self.mark_motion("side", cx);
         cx.notify();
+    }
+
+    /// `key` opened or closed now: drawn on its way in or out, and the window drawn again once its
+    /// motion is over, when what left is gone (#56).
+    fn mark_motion(&mut self, key: &str, cx: &mut Context<Self>) {
+        self.motion.mark(key);
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(motion::BASE + std::time::Duration::from_millis(120))
+                .await;
+            this.update(cx, |_, cx| cx.notify()).ok();
+        })
+        .detach();
     }
 
     /// ⌥⌘2: folds or opens the side panel's Changes.
@@ -2620,6 +2668,9 @@ impl Workspace {
             }
         }
         self.layout.save();
+        // The panels slide out and back in (#56, 16).
+        self.mark_motion("side", cx);
+        self.mark_motion("zen", cx);
         cx.notify();
     }
 
@@ -2773,18 +2824,22 @@ impl Workspace {
                 .into_any_element();
         }
         let Some(diff) = &self.diff else {
-            let message = if self.diff_task.is_some() {
-                "Loading…"
-            } else {
-                "Select a commit or a version."
-            };
+            // Loading: a shimmer of lines where the diff will be (#56, 18).
+            if self.diff_task.is_some() {
+                return island()
+                    .flex_1()
+                    .bg(theme::editor())
+                    .p(px(24.))
+                    .child(motion::shimmer("diff-loading", 9))
+                    .into_any_element();
+            }
             return island()
                 .flex_1()
                 .items_center()
                 .justify_center()
                 .bg(theme::editor())
                 .text_color(theme::muted())
-                .child(message)
+                .child("Select a commit or a version.")
                 .into_any_element();
         };
         let commits_tab = matches!(diff.header, Header::Versions { .. })
@@ -3764,6 +3819,20 @@ impl Workspace {
             match &workspace.stack {
                 Some(stack) if stack.locate(ix).1 > 0 => {
                     let file = stack.blocks[stack.locate(ix).0].file;
+                    // A file just opened: its rows fade in (#56, 9).
+                    let element = if workspace.motion.recent(&format!("file-{file}"))
+                        || workspace.motion.recent("files")
+                    {
+                        motion::appear(
+                            div().w_full().child(element),
+                            ("row-opening", ix),
+                            motion::BASE,
+                            |row, v| row.opacity(v),
+                        )
+                        .into_any_element()
+                    } else {
+                        element
+                    };
                     workspace.card_row(element, file, stack.last_of_block(ix))
                 }
                 _ => element,
@@ -4092,7 +4161,7 @@ struct TipOwned(SharedString);
 
 impl Render for TipOwned {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
+        let tip = div()
             .mt(px(6.))
             // Long text wraps rather than leaving the window.
             .max_w(px(440.))
@@ -4104,13 +4173,15 @@ impl Render for TipOwned {
             .bg(theme::hover())
             .text_size(px(11.))
             .text_color(theme::text())
-            .child(SharedString::from(keys::text(&self.0).into_owned()))
+            .child(SharedString::from(keys::text(&self.0).into_owned()));
+        // It fades in after the long rest (#56, 7).
+        motion::appear(tip, "tip-in", motion::FAST, |tip, v| tip.opacity(v))
     }
 }
 
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
+        let tip = div()
             .mt(px(6.))
             .px_2()
             .py_1()
@@ -4120,7 +4191,8 @@ impl Render for Tip {
             .bg(theme::hover())
             .text_size(px(11.))
             .text_color(theme::text())
-            .child(keys::text(self.0).into_owned())
+            .child(keys::text(self.0).into_owned());
+        motion::appear(tip, "tip-in", motion::FAST, |tip, v| tip.opacity(v))
     }
 }
 

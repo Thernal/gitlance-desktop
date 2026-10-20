@@ -1156,7 +1156,17 @@ impl Render for Workspace {
                     // The stripe sits on the window's right edge; zen has none.
                     .pr(px(if self.zen.is_some() { gap() } else { 0. }))
                     .pb(px(gap()))
-                    .children(self.render_project_rail(cx))
+                    // Zen slides the rail away and back (#56, 16).
+                    .children(self.render_project_rail(cx).map(|rail| {
+                        motion::toward(
+                            div().flex_none().flex().overflow_hidden().child(rail),
+                            "rail-zen",
+                            self.zen.is_none(),
+                            self.motion.recent("zen"),
+                            motion::BASE,
+                            |rail, v| rail.max_w(px(48. * v)),
+                        )
+                    }))
                     .children(self.render_places(cx))
                     // The header row over the panes, then the panes: side panel, diff, tool window.
                     .child(
@@ -1214,11 +1224,21 @@ impl Render for Workspace {
                                     .min_h_0()
                                     .flex()
                                     .children(self.render_side(cx).map(|side| {
-                                        div()
-                                            .flex()
-                                            .flex_none()
-                                            .child(side)
-                                            .child(self.handle(Split::Sidebar, cx))
+                                        // It slides in and out at its width (#56, 4, 16).
+                                        let room = self.layout.sidebar + 12.;
+                                        motion::toward(
+                                            div()
+                                                .flex()
+                                                .flex_none()
+                                                .overflow_hidden()
+                                                .child(side)
+                                                .child(self.handle(Split::Sidebar, cx)),
+                                            "side-pane",
+                                            self.layout.show_sidebar,
+                                            self.motion.recent("side"),
+                                            motion::BASE,
+                                            move |pane, v| pane.max_w(px(room * v)),
+                                        )
                                     }))
                                     .child(
                                         div()
@@ -1238,7 +1258,16 @@ impl Render for Workspace {
                             })),
                     )
                     .children(self.stripe_gap())
-                    .children(self.render_stripe(cx))
+                    .children(self.render_stripe(cx).map(|stripe| {
+                        motion::toward(
+                            div().flex_none().flex().overflow_hidden().child(stripe),
+                            "stripe-zen",
+                            self.zen.is_none(),
+                            self.motion.recent("zen"),
+                            motion::BASE,
+                            |stripe, v| stripe.max_w(px(44. * v)),
+                        )
+                    }))
                     .into_any_element(),
             })
             // Last, so it paints over everything.

@@ -25,6 +25,11 @@ pub fn set_icon() {
     }
 }
 
+/// Whether System Settings → Accessibility → Display → Reduce motion is on (#56).
+pub fn reduce_motion() -> bool {
+    objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+}
+
 pub fn data_dir() -> Option<PathBuf> {
     Some(std::env::home_dir()?.join("Library/Application Support/GitLance"))
 }
