@@ -82,6 +82,8 @@ actions!(
     [
         Open,
         SaveTheme,
+        ToggleAgents,
+        FoldMenu,
         Refresh,
         PreviousCommit,
         NextCommit,
@@ -258,7 +260,15 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
             Some("Workspace && !Typing"),
         ),
         KeyBinding::new(&k("cmd-alt-m"), CreateRequest, Some("Workspace && !Typing")),
-        KeyBinding::new(&k("cmd-shift-a"), SendToAgent, Some("Workspace && !Typing")),
+        // ⇧⌘A the Agents window as Design gives it, ⌥⌘A sends to an agent (D12, X3).
+        KeyBinding::new(&k("cmd-alt-a"), SendToAgent, Some("Workspace && !Typing")),
+        KeyBinding::new(
+            &k("cmd-shift-a"),
+            ToggleAgents,
+            Some("Workspace && !Typing"),
+        ),
+        // ⌘0 stays zoom reset; the menu of places folds with ⌥⌘0 (D12, X8).
+        KeyBinding::new(&k("cmd-alt-0"), FoldMenu, Some("Workspace")),
         KeyBinding::new(&k("a"), ApproveRequest, Some("Workspace && !Typing")),
         KeyBinding::new(&k("cmd-b"), SwitchTo, Some("Workspace && !Typing")),
         KeyBinding::new(&k("cmd-shift-n"), ToggleNotifications, Some("Workspace")),
@@ -517,6 +527,8 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
             MenuItem::action("Show Branches and Commits", ToggleSidebar),
             MenuItem::action("Show Files", ToggleFiles),
             MenuItem::action("Focus on the Diff", FocusDiff),
+            MenuItem::action("Fold the Menu to Icons", FoldMenu),
+            MenuItem::action("Agents", ToggleAgents),
             MenuItem::separator(),
             MenuItem::action("Zoom In", ZoomIn),
             MenuItem::action("Zoom Out", ZoomOut),
@@ -2142,11 +2154,13 @@ impl Workspace {
                 Some("Panels"),
                 vec![
                     Entry::new("Fold the menu to icons", Act::FoldPlaces)
+                        .key("⌥⌘0")
                         .checked(self.places_folded()),
                     Entry::new("Discussions", Act::Tool(tools::Tool::Discussions))
                         .key("⌘⇧D")
                         .checked(tool == Some(tools::Tool::Discussions)),
                     Entry::new("Agents", Act::Tool(tools::Tool::Agents))
+                        .key("⇧⌘A")
                         .checked(tool == Some(tools::Tool::Agents)),
                 ],
             ),

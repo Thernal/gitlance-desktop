@@ -59,7 +59,8 @@ impl Preset {
                 ("SearchFiles", &["cmd-shift-o"]),
                 ("SearchActions", &["cmd-shift-a"]),
                 ("ShowStructure", &["cmd-f12"]),
-                ("SendToAgent", &["cmd-alt-a"]),
+                // ⇧⌘A is Find Action there: the Agents window takes ⌥⇧⌘A.
+                ("ToggleAgents", &["cmd-alt-shift-a"]),
                 ("FindInFiles", &["cmd-shift-f"]),
                 ("FindCommits", &[]),
                 ("FocusDiff", &["cmd-shift-f12"]),

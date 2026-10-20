@@ -50,7 +50,7 @@ impl Tool {
         match self {
             Tool::Details => "Request details  ⌘I",
             Tool::Discussions => "Discussions  ⌘⇧D",
-            Tool::Agents => "Agents",
+            Tool::Agents => "Agents  ⇧⌘A",
             Tool::Notifications => "Notifications  ⌘⇧N",
         }
     }

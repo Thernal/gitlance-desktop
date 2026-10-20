@@ -181,10 +181,14 @@ impl Workspace {
             || "GitLance".to_owned(),
             |n| n.to_string_lossy().into_owned(),
         );
+        // In Tabs mode the tabs take the repository's and the branch's place (D21).
+        let tabs = self.render_title_tabs(cx);
         let branch = self
             .branch
             .and_then(|ix| self.branches.get(ix))
-            .map(|b| b.name.clone());
+            .map(|b| b.name.clone())
+            .filter(|_| tabs.is_none());
+        let repo = tabs.is_none().then_some(repo);
         div()
             .h(px(TITLE_BAR))
             .flex_none()
@@ -198,8 +202,13 @@ impl Workspace {
                     .flex()
                     .gap(px(2.))
                     .children(self.root.is_some().then(|| {
-                        nav_button("fold-places", "sidebar", "Fold the menu to icons", true)
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_places(cx)))
+                        nav_button(
+                            "fold-places",
+                            "sidebar",
+                            "Fold the menu to icons  ⌥⌘0",
+                            true,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_places(cx)))
                     }))
                     .child(
                         nav_button("go-back", "back", "Back  ⌘[", self.history.can_back())
@@ -215,7 +224,8 @@ impl Workspace {
                         .on_click(cx.listener(|this, _, _, cx| this.go_forward(cx))),
                     ),
             )
-            .child(
+            .children(tabs)
+            .children(repo.map(|repo| {
                 // The repository is a menu: open, refresh and the recent repositories.
                 div()
                     .id("repo-menu")
@@ -234,8 +244,8 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.repo_menu = !this.repo_menu;
                         cx.notify();
-                    })),
-            )
+                    }))
+            }))
             .child(
                 // The empty part of the bar: a double click zooms the window, as in other apps.
                 // It gives way first when the window is narrow: the request's title shortens, the
@@ -997,6 +1007,10 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
                 this.toggle_tool(tools::Tool::Discussions, cx)
             }))
+            .on_action(cx.listener(|this, _: &ToggleAgents, _, cx| {
+                this.toggle_tool(tools::Tool::Agents, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FoldMenu, _, cx| this.toggle_places(cx)))
             .on_action(cx.listener(|this, _: &NextZone, _, cx| this.step_zone(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousZone, _, cx| this.step_zone(false, cx)))
             .on_action(cx.listener(|this, _: &Activate, _, cx| this.activate(cx)))
@@ -1130,7 +1144,6 @@ impl Render for Workspace {
             .font_family(theme::UI_FONT)
             .text_size(px(13.))
             .child(self.render_title_bar(cx))
-            .children(self.render_tab_strip(cx))
             .children(self.render_toasts(cx))
             .child(match self.root {
                 _ if self.settings_open => self.render_settings(cx).into_any_element(),

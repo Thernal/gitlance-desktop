@@ -1,5 +1,5 @@
 //! Sending the review to an agent's chat (`crate::agents`): the reviewer's comments stay drafts
-//! until *Send to agent* (⇧⌘A); a card then lists this repository's chats — those listening first,
+//! until *Send to agent* (⌥⌘A); a card then lists this repository's chats — those listening first,
 //! then Claude Code's recent ones, which get the comments when they listen — and a new chat. The
 //! agent's answers come back every couple of seconds, and the reviewer resolves or reopens each.
 
@@ -928,7 +928,7 @@ impl Workspace {
                 } else {
                     "Send".to_owned()
                 })
-                .child(keys::caps("⇧⌘A", On::Filled))
+                .child(keys::caps("⌥⌘A", On::Filled))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     let ids = this.agent_drafts();
                     this.send_agent(ids, cx)
@@ -1198,7 +1198,7 @@ impl Workspace {
             .flex_col()
             .child(super::settings::item(
                 "Claude Code",
-                "Adds GitLance's MCP server to every Claude Code profile. A chat then starts GitLance's watcher in the background on its own, shows up in Send to agent (⇧⌘A), and answers each comment; you resolve them here. A chat that was already open needs a restart, or ask it to “listen to GitLance”.",
+                "Adds GitLance's MCP server to every Claude Code profile. A chat then starts GitLance's watcher in the background on its own, shows up in Send to agent (⌥⌘A), and answers each comment; you resolve them here. A chat that was already open needs a restart, or ask it to “listen to GitLance”.",
                 connect,
             ))
             .children(self.agent_setup.clone().map(|text| {

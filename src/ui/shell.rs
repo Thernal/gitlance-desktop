@@ -1,6 +1,6 @@
 //! Repository tabs: several workspaces in one window, each with its own repository, selection,
 //! filter and scroll position. `⌘T` opens one, `⌘W` closes, `⌘1…9` switch, `⌘⇧T` reopens the last
-//! closed. The strip sits under the title bar and shows only with two or more tabs.
+//! closed. In Tabs mode they sit in the title bar (D12, D21).
 
 use super::px;
 use super::{ROW_RADIUS, Workspace, theme};
@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-/// What a workspace's tab strip needs to know about each tab.
+/// What a workspace's tabs need to know about each tab.
 #[derive(Clone)]
 pub struct TabInfo {
     pub title: String,
@@ -262,36 +262,68 @@ impl Workspace {
         }
     }
 
-    /// The strip of tabs, under the title bar; absent with a single tab.
-    pub(super) fn render_tab_strip(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    /// The tabs in the title bar (Design `shell.js`, D12, X10): each project's mark, name and unread
+    /// count, a dot when it has news, ✕ on the active one (on the others under the pointer), + to
+    /// open another. None unless Settings → Appearance chose Tabs.
+    pub(super) fn render_title_tabs(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if super::projects() != crate::storage::Projects::Tabs {
+            return None;
+        }
         let tabs = self.tabs.borrow().clone();
-        (tabs.len() > 1 && super::projects() == crate::storage::Projects::Tabs).then(|| {
+        Some(
             div()
                 .flex_none()
-                .h(px(30.))
+                .min_w_0()
+                .max_w(px(760.))
+                .overflow_hidden()
                 .flex()
                 .items_center()
                 .gap(px(4.))
-                .px(px(super::GAP))
-                .pb(px(super::GAP / 2.))
                 .children(tabs.into_iter().enumerate().map(|(ix, tab)| {
+                    let mark = super::rail::initials(&tab.title);
+                    let hue = super::rail::hue(&tab.title);
+                    let group: gpui::SharedString = format!("tab-{ix}").into();
                     div()
                         .id(("tab", ix))
+                        .group(group.clone())
+                        .flex_shrink(1.)
+                        .min_w(px(60.))
+                        .max_w(px(220.))
+                        .h(px(28.))
                         .flex()
                         .items_center()
-                        .gap_2()
-                        .h(px(26.))
-                        .max_w(px(200.))
-                        .pl(px(10.))
+                        .gap(px(8.))
+                        .pl(px(6.))
                         .pr(px(4.))
                         .rounded(px(ROW_RADIUS))
                         .cursor_pointer()
-                        .when(tab.active, |s| s.bg(theme::selected()))
+                        .when(tab.active, |s| {
+                            s.bg(theme::panel())
+                                .border_1()
+                                .border_color(theme::island_border())
+                        })
                         .when(!tab.active, |s| {
                             s.text_color(theme::muted())
                                 .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
                         })
-                        .child(super::hover::cut(("tab-title", ix), tab.title))
+                        .child(super::rail::project_mark(&mark, hue, 18.))
+                        .child(super::hover::cut(("tab-title", ix), tab.title).flex_1())
+                        .children((!tab.active && tab.unread > 0).then(|| {
+                            div()
+                                .flex_none()
+                                .min_w(px(16.))
+                                .h(px(16.))
+                                .px(px(4.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .bg(theme::accent())
+                                .text_size(px(10.))
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_color(theme::on_accent())
+                                .child(tab.unread.to_string())
+                        }))
                         .children(tab.news.then(|| {
                             div()
                                 .flex_none()
@@ -311,6 +343,9 @@ impl Workspace {
                                 .rounded(px(4.))
                                 .text_size(px(12.))
                                 .text_color(theme::faint())
+                                .when(!tab.active, |s| {
+                                    s.invisible().group_hover(group, |s| s.visible())
+                                })
                                 .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
                                 .child("×")
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -329,6 +364,7 @@ impl Workspace {
                 .child(
                     div()
                         .id("tab-new")
+                        .flex_none()
                         .w(px(26.))
                         .h(px(26.))
                         .flex()
@@ -338,11 +374,14 @@ impl Workspace {
                         .text_color(theme::muted())
                         .cursor_pointer()
                         .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                        .tooltip_show_delay(super::hover::LONG)
+                        .tooltip(|_, cx| cx.new(|_| super::Tip("Open a repository  ⌘T")).into())
                         .child("+")
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                             this.with_shell(window, cx, |s, window, cx| s.new_tab(window, cx))
                         })),
                 )
-        })
+                .into_any_element(),
+        )
     }
 }
