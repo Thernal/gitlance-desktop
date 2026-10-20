@@ -651,11 +651,12 @@ pub fn parse_checks(runs: &Value, statuses: &Value, url: String) -> Option<Pipel
     if all.is_empty() {
         return None;
     }
-    let failed = all
+    let failed: Vec<(String, String)> = all
         .iter()
-        .find(|c| c.1 == "failed")
-        .map(|c| (c.0.clone(), c.2.clone()));
-    let status = if failed.is_some() {
+        .filter(|c| c.1 == "failed")
+        .map(|c| (c.0.clone(), c.2.clone()))
+        .collect();
+    let status = if !failed.is_empty() {
         "failed"
     } else if all.iter().any(|c| c.1 == "running") {
         "running"
@@ -1270,7 +1271,7 @@ mod tests {
         ]);
         let p = parse_checks(&runs, &json!([]), "page".into()).unwrap();
         assert_eq!(p.status, "failed");
-        assert_eq!(p.failed, Some(("test".into(), "u2".into())));
+        assert_eq!(p.failed, [("test".to_owned(), "u2".to_owned())]);
         let running = json!([{"name": "build", "status": "in_progress"}]);
         assert_eq!(
             parse_checks(&running, &json!([]), String::new())

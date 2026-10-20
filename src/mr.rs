@@ -71,8 +71,8 @@ pub struct Pipeline {
     pub url: String,
     /// Seconds since the epoch, when it last changed.
     pub updated: i64,
-    /// The first failed job: its name and its page.
-    pub failed: Option<(String, String)>,
+    /// The jobs that failed, each with its page; the first is the one the pill names.
+    pub failed: Vec<(String, String)>,
 }
 
 /// A comment of one's own that is not published yet: only its author sees it until the review is
@@ -673,7 +673,7 @@ pub fn pipeline(remote: &WebRemote, iid: u64) -> Result<Option<Pipeline>> {
     let Some(mut pipeline) = parse_pipeline(&value) else {
         return Ok(None);
     };
-    if pipeline.status == "failed" && pipeline.failed.is_none() && fixture().is_none() {
+    if pipeline.status == "failed" && fixture().is_none() {
         let id = value
             .as_array()
             .and_then(|a| a.first())
@@ -682,7 +682,10 @@ pub fn pipeline(remote: &WebRemote, iid: u64) -> Result<Option<Pipeline>> {
         if let Some(id) = id
             && let Ok(jobs) = get(remote, &format!("pipelines/{id}/jobs?scope[]=failed"))
         {
-            pipeline.failed = parse_failed_job(&jobs);
+            let jobs = parse_failed_jobs(&jobs);
+            if !jobs.is_empty() {
+                pipeline.failed = jobs;
+            }
         }
     }
     Ok(Some(pipeline))
@@ -699,16 +702,22 @@ pub fn parse_pipeline(value: &Value) -> Option<Pipeline> {
         status,
         url: text(p, "web_url"),
         updated: epoch(&text(p, "updated_at")),
-        failed: p.get("failed_job").and_then(|j| {
-            let name = text(j, "name");
-            (!name.is_empty()).then(|| (name, text(j, "web_url")))
-        }),
+        // A fixture names them; GitLab's answer is read again for its jobs.
+        failed: match (p.get("failed_jobs"), p.get("failed_job")) {
+            (Some(jobs), _) => parse_failed_jobs(jobs),
+            (None, Some(job)) => parse_failed_jobs(&Value::Array(vec![job.clone()])),
+            (None, None) => Vec::new(),
+        },
     })
 }
 
-fn parse_failed_job(jobs: &Value) -> Option<(String, String)> {
-    let job = jobs.as_array()?.first()?;
-    Some((text(job, "name"), text(job, "web_url")))
+fn parse_failed_jobs(jobs: &Value) -> Vec<(String, String)> {
+    jobs.as_array()
+        .into_iter()
+        .flatten()
+        .map(|j| (text(j, "name"), text(j, "web_url")))
+        .filter(|(name, _)| !name.is_empty())
+        .collect()
 }
 
 /// The versions (pushes) of a merge request, oldest first.
@@ -1720,9 +1729,11 @@ mod tests {
         );
         let one = json!({"status": "failed", "web_url": "u", "failed_job": {"name": "test:unit", "web_url": "j"}});
         assert_eq!(
-            parse_pipeline(&one).and_then(|p| p.failed),
-            Some(("test:unit".to_owned(), "j".to_owned()))
+            parse_pipeline(&one).map(|p| p.failed),
+            Some(vec![("test:unit".to_owned(), "j".to_owned())])
         );
+        let two = json!({"status": "failed", "failed_jobs": [{"name": "lint", "web_url": "a"}, {"name": "test", "web_url": "b"}]});
+        assert_eq!(parse_pipeline(&two).map(|p| p.failed.len()), Some(2));
         assert!(parse_pipeline(&json!([])).is_none());
     }
 

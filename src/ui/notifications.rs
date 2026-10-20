@@ -561,12 +561,12 @@ impl Workspace {
                                 .items_center()
                                 .gap_2()
                                 .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .when(fresh, |s| s.font_weight(FontWeight::SEMIBOLD))
-                                        .child(format!("{} {}", n.who, n.kind.verb())),
+                                    super::hover::cut(
+                                        gpui::SharedString::from(format!("note-who-{}", n.created)),
+                                        format!("{} {}", n.who, n.kind.verb()),
+                                    )
+                                    .flex_1()
+                                    .when(fresh, |s| s.font_weight(FontWeight::SEMIBOLD)),
                                 )
                                 .child(
                                     super::hover::ago(
@@ -578,18 +578,22 @@ impl Workspace {
                                 ),
                         )
                         .child(
-                            div()
-                                .truncate()
-                                .text_size(px(12.))
-                                .text_color(theme::accent())
-                                .child(format!("{} {}", super::words::number(n.iid), n.title)),
+                            super::hover::cut(
+                                gpui::SharedString::from(format!("note-title-{}", n.created)),
+                                format!("{} {}", super::words::number(n.iid), n.title),
+                            )
+                            .text_size(px(12.))
+                            .text_color(theme::accent()),
                         )
+                        // A long hover reads what was written, whole (X59).
                         .children((!n.text.trim().is_empty()).then(|| {
-                            div()
-                                .line_clamp(2)
-                                .text_size(px(12.))
-                                .text_color(theme::muted())
-                                .child(self.one_line(&n.text))
+                            super::hover::cut_to(
+                                gpui::SharedString::from(format!("note-text-{}", n.created)),
+                                self.one_line(&n.text),
+                                2,
+                            )
+                            .text_size(px(12.))
+                            .text_color(theme::muted())
                         })),
                 )
                 .children(fresh.then(|| {

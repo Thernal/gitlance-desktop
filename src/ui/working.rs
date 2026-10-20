@@ -50,6 +50,7 @@ impl Workspace {
         if !changed {
             return;
         }
+        self.blames.working_changed();
         if self.selection == Selection::WorkingTree {
             // Reload in place: the selected file stays.
             let keep = self.current_path();

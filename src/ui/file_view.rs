@@ -1,0 +1,263 @@
+//! A file the diff does not change, opened from search everywhere's Files tab (D18, X53): shown in
+//! the diff's place, read only, as of the revision on screen (`HEAD` when there is none, the file
+//! on disk for the working tree), highlighted, with its line numbers. Open in editor; esc goes back
+//! to the diff.
+
+use super::{Header, ROW_RADIUS, Workspace, format, island, px, theme};
+use crate::git::Repo;
+use crate::highlight::{self, Span};
+use gpui::{
+    ClickEvent, Context, FontStyle, HighlightStyle, SharedString, StyledText, Task,
+    UniformListScrollHandle, div, prelude::*, uniform_list,
+};
+
+pub struct FileView {
+    pub path: String,
+    /// What it was read at: a short id, or the working tree.
+    at: String,
+    lines: Vec<String>,
+    spans: Vec<Vec<Span>>,
+    scroll: UniformListScrollHandle,
+}
+
+/// The file being read for the view.
+pub type Reading = Option<Task<()>>;
+
+impl Workspace {
+    /// Shows `path` as it is in the version on screen, in the diff's place.
+    pub(super) fn open_file_view(&mut self, path: String, cx: &mut Context<Self>) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let working = matches!(
+            self.diff.as_ref().map(|d| &d.header),
+            Some(Header::WorkingTree { .. })
+        );
+        let rev = self.viewed_rev();
+        let file = path.clone();
+        self.file_reading = Some(cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    let text: Option<(String, String)> = if working {
+                        std::fs::read_to_string(root.join(&file))
+                            .ok()
+                            .map(|t| (t, "the working tree".to_owned()))
+                    } else {
+                        let repo = Repo::open(&root).ok()?;
+                        let rev = match rev {
+                            Some(rev) => rev,
+                            None => repo.resolve("HEAD").ok()?,
+                        };
+                        repo.file_at(rev, &file).map(|t| (t, format::short(rev)))
+                    };
+                    let (text, at) = text?;
+                    let spans = highlight::highlight(&file, &text);
+                    let lines = text.lines().map(str::to_owned).collect();
+                    Some((lines, spans, at))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.file_reading = None;
+                match read {
+                    Some((lines, spans, at)) => {
+                        this.file_view = Some(FileView {
+                            path,
+                            at,
+                            lines,
+                            spans,
+                            scroll: UniformListScrollHandle::new(),
+                        });
+                    }
+                    None => {
+                        this.error =
+                            Some(format!("{path} is not text, or not in this version.").into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// Back to the diff.
+    pub(super) fn close_file_view(&mut self, cx: &mut Context<Self>) {
+        if self.file_view.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn render_file_view(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let view = self.file_view.as_ref()?;
+        let size = self.code_size();
+        let row = (size * 1.55).round();
+        let digits = view.lines.len().max(1).to_string().len() as f32;
+        let gutter = digits * size * 0.62 + 20.;
+        let lines: Vec<(SharedString, Vec<Span>)> = view
+            .lines
+            .iter()
+            .enumerate()
+            .map(|(n, l)| widen(l, view.spans.get(n).map_or(&[][..], Vec::as_slice)))
+            .collect();
+        let path = view.path.clone();
+        let body = uniform_list("file-view", lines.len(), move |range, _, _| {
+            range
+                .map(|n| {
+                    let (text, spans) = &lines[n];
+                    let highlights = spans
+                        .iter()
+                        .filter(|s| s.range.end <= text.len())
+                        .map(|s| {
+                            (
+                                s.range.clone(),
+                                HighlightStyle {
+                                    color: Some(theme::code(s.color)),
+                                    font_style: s.italic.then_some(FontStyle::Italic),
+                                    ..Default::default()
+                                },
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    div()
+                        .h(px(row))
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .w(px(gutter))
+                                .flex_none()
+                                .flex()
+                                .justify_end()
+                                .pr_2()
+                                .text_color(theme::muted())
+                                .child((n + 1).to_string()),
+                        )
+                        .child(
+                            div()
+                                .pl_2()
+                                .whitespace_nowrap()
+                                .text_color(theme::code_text())
+                                .child(StyledText::new(text.clone()).with_highlights(highlights)),
+                        )
+                })
+                .collect()
+        })
+        .track_scroll(&view.scroll)
+        .flex_1()
+        .font_family(theme::CODE_FONT)
+        .text_size(px(size));
+        let header = div()
+            .flex_none()
+            .h(px(44.))
+            .px(px(14.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .border_b_1()
+            .border_color(theme::island_border())
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(view.path.clone()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .px(px(8.))
+                    .rounded_full()
+                    .bg(theme::hover())
+                    .text_size(px(11.))
+                    .text_color(theme::muted())
+                    .child(format!("Not changed here · as of {}", view.at)),
+            )
+            .child(div().flex_1())
+            .children(crate::editor::pick(self.settings.editor).map(|e| {
+                let path = path.clone();
+                div()
+                    .id("file-view-editor")
+                    .flex_none()
+                    .px(px(10.))
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(ROW_RADIUS))
+                    .border_1()
+                    .border_color(theme::island_border())
+                    .text_size(px(12.))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::hover()))
+                    .child(format!("Open in {} ↗", e.label()))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        let line = 1;
+                        this.run_act(
+                            super::menu::Act::OpenEditor {
+                                path: path.clone(),
+                                line,
+                            },
+                            cx,
+                        )
+                    }))
+            }))
+            .child(
+                super::button("file-view-close", "Back to the diff", "esc")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_file_view(cx))),
+            );
+        Some(
+            island()
+                .flex_1()
+                .min_w_0()
+                .bg(theme::editor())
+                .child(header)
+                .child(div().flex_1().min_h_0().flex().py(px(6.)).child(body))
+                .into_any_element(),
+        )
+    }
+}
+
+/// A line with its tabs as four spaces, and its spans moved to match; an empty line is a space.
+fn widen(line: &str, spans: &[Span]) -> (SharedString, Vec<Span>) {
+    let mut out = String::with_capacity(line.len());
+    // Where each byte of `line` (and its end) lands in `out`.
+    let mut at = Vec::with_capacity(line.len() + 1);
+    for (i, c) in line.char_indices() {
+        at.resize(i + 1, out.len());
+        if c == '\t' {
+            out.push_str("    ");
+        } else {
+            out.push(c);
+        }
+    }
+    at.resize(line.len() + 1, out.len());
+    let spans = spans
+        .iter()
+        .filter(|s| s.range.end <= line.len())
+        .map(|s| Span {
+            range: at[s.range.start]..at[s.range.end],
+            ..s.clone()
+        })
+        .collect();
+    if out.is_empty() {
+        out.push(' ');
+    }
+    (out.into(), spans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tabs_widen_and_the_colours_follow() {
+        let span = |r: std::ops::Range<usize>| Span {
+            range: r,
+            color: 1,
+            italic: false,
+        };
+        let (text, spans) = widen("\tfn x", &[span(1..3)]);
+        assert_eq!(text.as_ref(), "    fn x");
+        assert_eq!(spans[0].range, 4..6);
+        assert_eq!(widen("", &[]).0.as_ref(), " ");
+    }
+}

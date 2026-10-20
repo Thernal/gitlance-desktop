@@ -789,10 +789,7 @@ impl Workspace {
         let item = match self.commit_card(ix) {
             Some(card) => {
                 let card = std::rc::Rc::new(card);
-                item.card(move |_, cx| {
-                    let c = card.clone();
-                    cx.new(|_| hover::CommitCard::clone_of(&c)).into()
-                })
+                item.card(move |_, cx| hover::CommitCard::show(&card, cx))
             }
             None => item,
         };
@@ -1106,7 +1103,10 @@ impl Render for Workspace {
                     this.request_open(path.clone(), None, cx);
                 }
             }))
-            .on_mouse_move(cx.listener(|this, event, _, cx| this.drag_move(event, cx)))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                this.mention_pointer(event.position, cx);
+                this.drag_move(event, cx)
+            }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -1231,6 +1231,8 @@ impl Render for Workspace {
             // Last, so it paints over everything.
             .children(self.repo_menu.then(|| self.render_repo_menu(cx)))
             .children(self.render_ctx_menu(window.viewport_size(), cx))
+            .children(self.render_mention_card(cx))
+            .children(self.render_blame_tip())
             .children(self.render_picker(cx))
             .children(self.render_find_files(cx))
             .children(self.render_open_ask(cx))

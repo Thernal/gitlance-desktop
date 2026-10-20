@@ -98,6 +98,8 @@ type OnPress = Box<dyn Fn(bool, u32, usize, usize, bool, &mut App)>;
 type OnDrag = Box<dyn Fn(bool, u32, usize, &mut App)>;
 /// … with a window position.
 type OnContext = Box<dyn Fn(bool, u32, Point<Pixels>, &mut App)>;
+/// … the pointer on its number (at a window position) or off it.
+type OnBlame = Box<dyn Fn(bool, u32, Option<Point<Pixels>>, &mut App)>;
 
 /// What a row reports back.
 pub struct Events {
@@ -113,6 +115,8 @@ pub struct Events {
     pub drag: OnDrag,
     /// A right click on a line, at a window position.
     pub context: OnContext,
+    /// A long hover on a line number: who wrote that line (D19).
+    pub blame: OnBlame,
 }
 
 pub type OnEvents = Rc<Events>;
@@ -177,12 +181,19 @@ pub fn row(
                 .when_some(line_bg, |s, bg| s.bg(bg))
                 .group("diff-row")
                 .children(annot_col(style, new_line, events.clone()))
-                .child(gutter(old_line, gutter_bg, style, None))
+                .child(gutter(
+                    old_line,
+                    gutter_bg,
+                    style,
+                    None,
+                    Some((true, events.clone())),
+                ))
                 .child(gutter(
                     new_line,
                     gutter_bg,
                     style,
                     Some((old, cell.line, events.clone())),
+                    Some((false, events.clone())),
                 ))
                 .child(
                     div()
@@ -221,6 +232,7 @@ fn half(
             gutter_bg,
             style,
             Some((old, cell.line, events.clone())),
+            Some((old, events.clone())),
         ))
         .child(code(side, cell, old, style, events))
 }
@@ -257,14 +269,19 @@ fn annot_col(style: RowStyle<'_>, line: Option<u32>, events: OnEvents) -> Option
     )
 }
 
-/// A line-number column; `comment` adds a + that appears on hover and starts a comment on that line.
+/// A line-number column; `comment` adds a + that appears on hover and starts a comment on that line,
+/// `blame` (the side) a long hover on the column saying who wrote the line.
 fn gutter(
     line: Option<u32>,
     bg: Option<Rgba>,
     style: RowStyle<'_>,
     comment: Option<(bool, u32, OnEvents)>,
+    blame: Option<(bool, OnEvents)>,
 ) -> impl IntoElement + use<> {
+    let side = blame.as_ref().is_some_and(|b| b.0);
+    let blame = line.zip(blame);
     div()
+        .id(("gutter", u64::from(side)))
         .w(px(style.gutter))
         .flex_none()
         .relative()
@@ -273,6 +290,12 @@ fn gutter(
         .pr_2()
         .when_some(bg, |s, bg| s.bg(bg))
         .text_color(theme::muted())
+        // The workspace draws the tip: GPUI's tooltip shows on a row's first gutter only.
+        .when_some(blame, |s, (l, (old, events))| {
+            s.on_hover(move |on, window, cx| {
+                (events.blame)(old, l, on.then(|| window.mouse_position()), cx)
+            })
+        })
         .children(line.map(|l| l.to_string()))
         .children(comment.clone().and_then(|(old, line, events)| {
             let note = style

@@ -291,7 +291,7 @@ impl Workspace {
                             s.text_color(theme::muted())
                                 .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
                         })
-                        .child(div().min_w_0().truncate().child(tab.title))
+                        .child(super::hover::cut(("tab-title", ix), tab.title))
                         .children(tab.news.then(|| {
                             div()
                                 .flex_none()

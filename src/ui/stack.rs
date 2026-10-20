@@ -886,17 +886,14 @@ impl Workspace {
                     )
                     .child(super::change_badge(file))
                     .child(
-                        div()
+                        super::hover::cut(("file-path", ix), path)
                             .flex_1()
-                            .min_w_0()
-                            .truncate()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(if state == Some(State::Done) {
                                 theme::muted()
                             } else {
                                 theme::text()
-                            })
-                            .child(path),
+                            }),
                     )
                     .children(self.page_switch(file, true, this))
                     .child(

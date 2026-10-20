@@ -720,9 +720,23 @@ impl Workspace {
             }))
             .children(t.resolvable.then(|| discussion::state(t.resolved)))
             .tooltip_show_delay(crate::ui::hover::LONG)
-            .tooltip(move |_, cx| {
-                cx.new(|_| super::Tip(if open { "Collapse  O" } else { "Expand  O" }))
-                    .into()
+            // Folded, a long hover reads its start and how many replied (X59).
+            .tooltip({
+                let said: gpui::SharedString = if open {
+                    "Collapse  O".into()
+                } else {
+                    let text = crate::markdown::plain(&first.body);
+                    let start = match text.char_indices().nth(280) {
+                        Some((at, _)) => format!("{}…", &text[..at]),
+                        None => text,
+                    };
+                    let replies = match t.notes.len() - 1 {
+                        0 => "no replies".to_owned(),
+                        n => plural(n, "reply"),
+                    };
+                    format!("{start}\n{} · {replies}\nExpand  O", first.author).into()
+                };
+                move |_, cx| cx.new(|_| super::TipOwned(said.clone())).into()
             })
             .on_click(move |_, _, cx| {
                 fold.update(cx, |this, cx| {
@@ -1893,9 +1907,11 @@ impl Workspace {
                 "success" => ("✓", "passed".to_owned(), theme::added()),
                 "failed" => (
                     "✗",
-                    p.failed
-                        .as_ref()
-                        .map_or("failed".to_owned(), |(job, _)| format!("{job} failed")),
+                    match p.failed.as_slice() {
+                        [] => "failed".to_owned(),
+                        [(job, _)] => format!("{job} failed"),
+                        [(job, _), rest @ ..] => format!("{job} +{} failed", rest.len()),
+                    },
                     theme::removed(),
                 ),
                 "running" => ("●", "running".to_owned(), theme::warning()),
@@ -1908,11 +1924,29 @@ impl Workspace {
             // A failure opens the job that failed; the rest open the pipeline.
             let url = p
                 .failed
-                .as_ref()
+                .first()
                 .map(|(_, u)| u.clone())
                 .filter(|u| !u.is_empty())
                 .unwrap_or_else(|| p.url.clone());
             let ago = (p.updated > 0).then(|| format::ago(p.updated));
+            // A long hover: every job that failed, and when (X59).
+            let host = super::words::say("GitLab").into_owned();
+            let tip: SharedString = {
+                let when = if p.updated > 0 {
+                    format!(" · {}", super::hover::full_date(p.updated))
+                } else {
+                    String::new()
+                };
+                let jobs: Vec<&str> = p.failed.iter().map(|(name, _)| name.as_str()).collect();
+                match (p.status.as_str(), jobs.is_empty()) {
+                    ("failed", false) => format!(
+                        "Pipeline failed{when}\nFailed: {}\nClick opens the first failed job on {host}",
+                        jobs.join(", ")
+                    ),
+                    _ => format!("Pipeline {word}{when}\nClick opens it on {host}"),
+                }
+            }
+            .into();
             div()
                 .id("pipeline-pill")
                 .flex_none()
@@ -1929,7 +1963,7 @@ impl Workspace {
                 .cursor_pointer()
                 .hover(|s| s.bg(theme::hover()))
                 .tooltip_show_delay(crate::ui::hover::LONG)
-                .tooltip(|_, cx| cx.new(|_| super::Tip("Open the pipeline on GitLab")).into())
+                .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
                 .child(format!("{glyph} {word}"))
                 .children(ago.map(|a| div().text_color(theme::faint()).child(a)))
                 .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url)))
@@ -1949,14 +1983,43 @@ impl Workspace {
             } else {
                 String::new()
             };
-            let tip: SharedString = match (a.by.is_empty(), a.mine, a.can) {
-                (_, true, _) => format!("Approved by {} — a takes yours back", a.by.join(", ")),
-                (true, false, true) => "Approve this merge request  a".to_owned(),
-                (false, false, true) => format!("Approved by {} — a approves", a.by.join(", ")),
-                (true, false, false) => "No approvals yet".to_owned(),
-                (false, false, false) => format!("Approved by {}", a.by.join(", ")),
+            let action = match (a.mine, a.can) {
+                (true, _) => "a takes yours back",
+                (false, true) => "a approves",
+                (false, false) => "",
+            };
+            // A long hover: who approved, who asked for changes, who is still asked (X59).
+            let d = self.requests.details.clone().unwrap_or_default();
+            let waiting: Vec<&str> = d
+                .reviewers
+                .iter()
+                .filter(|r| !a.by.contains(r) && !d.changes_requested.contains(r))
+                .map(String::as_str)
+                .collect();
+            let mut lines = vec![if a.by.is_empty() {
+                "No approvals yet".to_owned()
+            } else {
+                format!("Approved by {}", a.by.join(", "))
+            }];
+            if !d.changes_requested.is_empty() {
+                lines.push(format!(
+                    "Changes requested by {}",
+                    d.changes_requested.join(", ")
+                ));
             }
-            .into();
+            if !waiting.is_empty() {
+                lines.push(format!("Still asked: {}", waiting.join(", ")));
+            }
+            if a.left > 0 {
+                lines.push(format!(
+                    "{} more needed",
+                    plural(a.left as usize, "approval")
+                ));
+            }
+            if !action.is_empty() {
+                lines.push(action.to_owned());
+            }
+            let tip: SharedString = super::words::say(&lines.join("\n")).into_owned().into();
             let (label, color) = if a.mine {
                 ("✓ Approved", theme::added())
             } else if a.can {

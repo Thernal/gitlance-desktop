@@ -175,6 +175,24 @@ impl Workspace {
             (None, false, Some(t)) => (format!("Fetched {}", format::ago(t)), theme::muted()),
             (None, false, None) => ("Fetch waiting".to_owned(), theme::muted()),
         };
+        // A long hover: the whole message, when it last fetched and from where (X59).
+        let mut lines: Vec<String> = Vec::new();
+        if let Some(e) = &self.fetch.error {
+            lines.push(format!("Fetch failed: {e}"));
+        }
+        lines.push(match self.fetch.last {
+            Some(t) => format!("Last fetched {}", super::hover::full_date(t)),
+            None => "Not fetched yet".to_owned(),
+        });
+        lines.push(match &self.web {
+            Some(w) => format!(
+                "git fetch --all --prune: every remote, origin at {}",
+                w.base
+            ),
+            None => "git fetch --all --prune: every remote".to_owned(),
+        });
+        lines.push("Every 5 minutes and when the window comes back · a click fetches now".into());
+        let tip: gpui::SharedString = lines.join("\n").into();
         Some(
             div()
                 .id("fetch-status")
@@ -190,6 +208,8 @@ impl Workspace {
                 .text_color(color)
                 .cursor_pointer()
                 .hover(|s| s.bg(theme::hover()))
+                .tooltip_show_delay(super::hover::LONG)
+                .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
                 .child(text)
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.fetch_now(cx))),
         )

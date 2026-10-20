@@ -86,8 +86,9 @@ pub enum Press {
 pub type OnPress = Rc<dyn Fn(Press, &mut App)>;
 /// A link clicked in a comment: `true` when the app followed it itself.
 pub type OnLink = Rc<dyn Fn(&str, &mut App) -> bool>;
-/// The card of the person a `@login` mention names, on a long hover (#51).
-pub type OnMention = Rc<dyn Fn(&str, &mut App) -> Option<gpui::AnyView>>;
+/// The `@login` mention under the pointer and where it is drawn, or `None` off every mention: the
+/// workspace shows the person's card when the pointer rests there (#51, X62).
+pub type OnMention = Rc<dyn Fn(Option<(String, gpui::Bounds<gpui::Pixels>)>, &mut App)>;
 
 /// Selecting in comments: the selection now, and where presses go.
 #[derive(Clone)]
@@ -747,6 +748,7 @@ fn inline(i: &Inline, ctx: &mut Ctx) -> AnyElement {
     let (ranges, urls): (Vec<_>, Vec<_>) = links.into_iter().unzip();
     let here = ctx.sel.as_ref().map(|s| s.link.clone());
     let card = ctx.sel.as_ref().map(|s| s.mention.clone());
+    let spot = layout.clone();
     let linked = InteractiveText::new(id, styled)
         .on_click(ranges, move |ix, window, cx| {
             if let Some(url) = urls.get(ix) {
@@ -756,11 +758,34 @@ fn inline(i: &Inline, ctx: &mut Ctx) -> AnyElement {
                 }
             }
         })
-        .tooltip(move |at, _, cx| {
-            let (_, login) = tagged.iter().find(|(r, _)| r.contains(&at))?;
-            card.as_ref().and_then(|card| card(login, cx))
+        .on_hover(move |at, event, _, cx| {
+            let Some(card) = card.as_ref() else {
+                return;
+            };
+            let hit = at
+                .and_then(|at| tagged.iter().find(|(r, _)| r.contains(&at)))
+                .map(|(r, login)| {
+                    let around = gpui::Bounds::new(
+                        event.position - gpui::point(gpui::px(8.), gpui::px(8.)),
+                        gpui::size(gpui::px(16.), gpui::px(16.)),
+                    );
+                    (login.clone(), mention_spot(&spot, r).unwrap_or(around))
+                });
+            card(hit, cx);
         });
     text_block(linked.into_any_element(), layout, &i.text, ctx)
+}
+
+/// Where text range `r` is drawn: the box from its start to its end, a line high.
+fn mention_spot(layout: &gpui::TextLayout, r: &Range<usize>) -> Option<gpui::Bounds<gpui::Pixels>> {
+    let (a, b) = (
+        layout.position_for_index(r.start)?,
+        layout.position_for_index(r.end)?,
+    );
+    Some(gpui::Bounds::from_corners(
+        gpui::point(a.x.min(b.x), a.y.min(b.y)),
+        gpui::point(a.x.max(b.x), a.y.max(b.y) + layout.line_height()),
+    ))
 }
 
 /// The icon and the name (with its key, if it has one) of a composer helper.

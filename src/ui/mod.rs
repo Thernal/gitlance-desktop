@@ -11,6 +11,7 @@ mod details;
 mod diff_view;
 mod discussion;
 mod fetch;
+mod file_view;
 mod find;
 mod findfiles;
 mod format;
@@ -900,6 +901,13 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.start_field(Field::Keys, cx);
                             continue;
                         }
+                        // Settings → Keyboard waiting for keys to filter by (X55).
+                        "keys-by" => {
+                            this.open_settings(cx);
+                            this.settings_section = settings::Section::Keyboard;
+                            this.recording = Some(settings::BY_KEYS);
+                            continue;
+                        }
                         "wrap" => Opt::Wrap,
                         "all-lines" => Opt::FullContext,
                         "whitespace" => Opt::Whitespace,
@@ -1004,6 +1012,9 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
             && let Some((x, y)) = at.split_once(',')
             && let (Ok(x), Ok(y)) = (x.trim().parse::<f32>(), y.trim().parse::<f32>())
         {
+            // The keys' results drawn first: a hover reads the frame on screen.
+            cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+                .ok();
             for dx in [0., 1.] {
                 cx.update_window(window.into(), |_, window, cx| {
                     window.dispatch_event(
@@ -1196,6 +1207,8 @@ pub struct Workspace {
     theme_value: String,
     /// What Settings → Keyboard is filtered by.
     keys_filter: String,
+    /// The filter is a key pressed (By keys): rows with exactly that key.
+    keys_exact: bool,
     /// Settings → Keyboard lists only the keys the user changed.
     keys_changed_only: bool,
     /// The part of Settings shown.
@@ -1268,6 +1281,14 @@ pub struct Workspace {
     annotate: bool,
     annotations: Vec<diff_view::AnnCell>,
     annot_task: Option<Task<()>>,
+    /// Blame for a long hover on a line number (D19), and the tip shown.
+    blames: annotate::Blames,
+    blame_tip: Option<annotate::BlameTip>,
+    /// A mention in comment text under the pointer, and its card (X62).
+    mention_hover: Option<hover::MentionHover>,
+    /// A file the diff does not change, shown in its place (D18), and its read.
+    file_view: Option<file_view::FileView>,
+    file_reading: file_view::Reading,
     /// The search over all files of the diff, while it is open.
     ffind: Option<findfiles::FindFiles>,
     /// The marks of files read, and the scope and file fingerprints of the open diff.
@@ -1440,6 +1461,7 @@ impl Workspace {
             note_sel: None,
             settings_section: Default::default(),
             keys_filter: String::new(),
+            keys_exact: false,
             keys_changed_only: false,
             images: Default::default(),
             page: Default::default(),
@@ -1487,6 +1509,11 @@ impl Workspace {
             annotate: false,
             annotations: Vec::new(),
             annot_task: None,
+            blames: Default::default(),
+            blame_tip: None,
+            mention_hover: None,
+            file_view: None,
+            file_reading: None,
             ffind: None,
             reviewed: reviewed::Store::load(),
             done_card: false,
@@ -1666,6 +1693,7 @@ impl Workspace {
         self.selection = Selection::None;
         self.diff = None;
         self.diff_task = None;
+        self.file_view = None;
         self.clear_file();
         self.file = 0;
     }
@@ -1879,6 +1907,7 @@ impl Workspace {
                         this.diff = Some(diff);
                         // The files of the diff it replaces are gone.
                         this.stack = None;
+                        this.file_view = None;
                         this.map_agent_comments(cx);
                         this.index_review();
                         // The first file as the island lists it (a tree sorts folders first), so
@@ -1905,6 +1934,7 @@ impl Workspace {
         let Some(file) = self.diff.as_ref().and_then(|d| d.files.get(ix)).cloned() else {
             return;
         };
+        self.file_view = None;
         self.remember_place(
             recents::Key::File(file.path().to_owned()),
             file.path().to_owned(),
@@ -2714,6 +2744,10 @@ impl Workspace {
     // ---- resizing ------------------------------------------------------------------------
 
     fn render_diff(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // A file the diff does not change, opened from the Files tab (D18).
+        if let Some(view) = self.render_file_view(cx) {
+            return view;
+        }
         // A new merge request is written in the diff's place; Changes shows the diff again.
         if self.create_in_place() && !self.create_shows_changes() {
             return island()
@@ -3566,6 +3600,7 @@ impl Workspace {
                 None => (None, ix),
             };
             let active = file.is_none_or(|(_, f)| f == workspace.file);
+            let file_ix = file.map_or(workspace.file, |(_, f)| f);
             let (data, row, mut style) = match file {
                 Some((b, _)) if !active => {
                     let Some(stack) = &workspace.stack else {
@@ -3621,7 +3656,15 @@ impl Workspace {
             );
             let toggle = this.clone();
             let annotate = this.clone();
+            let blame = this.clone();
             let events = diff_view::Events {
+                blame: Box::new(move |old, line, at, cx| {
+                    blame
+                        .update(cx, |this, cx| {
+                            this.hover_line_number(file_ix, old, line, at, cx)
+                        })
+                        .ok();
+                }),
                 annotate: Box::new(move |_, line, cx| {
                     annotate
                         .update(cx, |this, cx| {
@@ -3694,7 +3737,12 @@ impl Workspace {
         };
         // With all files in one scroll, a file's rows are framed as its card.
         let rows = list(self.diff_list.clone(), move |ix, _, cx| {
-            let element = row(ix, cx);
+            // Its own id: the ids inside a row (a line number's, its +) repeat from file to file.
+            let element = div()
+                .id(("list-row", ix))
+                .w_full()
+                .child(row(ix, cx))
+                .into_any_element();
             let Some(workspace) = outer.upgrade() else {
                 return element;
             };
@@ -4032,6 +4080,8 @@ impl Render for TipOwned {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .mt(px(6.))
+            // Long text wraps rather than leaving the window.
+            .max_w(px(440.))
             .px_2()
             .py_1()
             .rounded(px(ROW_RADIUS))

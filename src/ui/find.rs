@@ -285,6 +285,8 @@ impl Workspace {
             } else if self.repo_menu {
                 self.repo_menu = false;
                 cx.notify();
+            } else if self.file_view.is_some() && !self.settings_open {
+                self.close_file_view(cx);
             } else if self.field.is_some() {
                 self.filter_key(event, cx);
             } else if self.dfind.is_some() {

@@ -386,6 +386,10 @@ impl Workspace {
             cx.notify();
             return true;
         }
+        // Typed, the keyboard filter matches by words again.
+        if field == Field::Keys {
+            self.keys_exact = false;
+        }
         let text = match field {
             Field::Branches => &mut self.bfilter,
             Field::Files => &mut self.pfilter,

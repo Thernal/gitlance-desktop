@@ -19,10 +19,28 @@ pub enum State {
     Stale,
 }
 
-/// Every mark ever made: per scope, per path, the fingerprint of the file when it was marked.
+/// A file marked reviewed: its fingerprint then, when (0: not known, an older mark), and the head
+/// the diff was at — its version says "at v2" (X59).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Mark {
+    fp: u64,
+    time: i64,
+    head: Option<git2::Oid>,
+}
+
+impl Mark {
+    fn now(fp: u64, head: Option<git2::Oid>) -> Self {
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        Self { fp, time, head }
+    }
+}
+
+/// Every mark ever made: per scope, per path, the file when it was marked.
 #[derive(Default)]
 pub struct Store {
-    marks: HashMap<String, HashMap<String, u64>>,
+    marks: HashMap<String, HashMap<String, Mark>>,
     /// `root|commit` of every head whose whole diff was reviewed: a branch or merge request whose tip
     /// is one of them shows ✓, and a new push (a new tip) takes it away.
     heads: HashSet<String>,
@@ -112,11 +130,17 @@ impl Store {
     }
 
     /// Marks or unmarks many files of one scope with a single write.
-    fn set_many(&mut self, scope: &str, files: &[(String, u64)], done: bool) {
+    fn set_many(
+        &mut self,
+        scope: &str,
+        files: &[(String, u64)],
+        done: bool,
+        head: Option<git2::Oid>,
+    ) {
         let entry = self.marks.entry(scope.to_owned()).or_default();
         for (path, fp) in files {
             if done {
-                entry.insert(path.clone(), *fp);
+                entry.insert(path.clone(), Mark::now(*fp, head));
             } else {
                 entry.remove(path);
             }
@@ -128,19 +152,22 @@ impl Store {
         self.save();
     }
 
+    /// `scope path fingerprint [time head]`, tab apart; older lines have no time and head.
     fn parse(text: &str) -> Self {
-        let mut marks: HashMap<String, HashMap<String, u64>> = HashMap::new();
+        let mut marks: HashMap<String, HashMap<String, Mark>> = HashMap::new();
         for line in text.lines() {
-            let mut parts = line.splitn(3, '\t');
+            let mut parts = line.splitn(5, '\t');
             let (Some(scope), Some(path), Some(fp)) = (parts.next(), parts.next(), parts.next())
             else {
                 continue;
             };
+            let time = parts.next().and_then(|t| t.parse().ok()).unwrap_or(0);
+            let head = parts.next().and_then(|h| git2::Oid::from_str(h).ok());
             if let Ok(fp) = u64::from_str_radix(fp, 16) {
                 marks
                     .entry(scope.to_owned())
                     .or_default()
-                    .insert(path.to_owned(), fp);
+                    .insert(path.to_owned(), Mark { fp, time, head });
             }
         }
         Self {
@@ -152,8 +179,12 @@ impl Store {
     fn render(&self) -> String {
         let mut out = String::new();
         for (scope, files) in &self.marks {
-            for (path, fp) in files {
-                out.push_str(&format!("{scope}\t{path}\t{fp:x}\n"));
+            for (path, m) in files {
+                let head = m.head.map(|h| h.to_string()).unwrap_or_default();
+                out.push_str(&format!(
+                    "{scope}\t{path}\t{:x}\t{}\t{head}\n",
+                    m.fp, m.time
+                ));
             }
         }
         out
@@ -164,14 +195,20 @@ impl Store {
     }
 
     fn get(&self, scope: &str, path: &str) -> Option<u64> {
-        self.marks.get(scope)?.get(path).copied()
+        self.marks.get(scope)?.get(path).map(|m| m.fp)
     }
 
-    fn set(&mut self, scope: &str, path: &str, fp: u64) {
+    /// When the file was marked, and the head the diff was at then.
+    fn when(&self, scope: &str, path: &str) -> Option<(i64, Option<git2::Oid>)> {
+        let m = self.marks.get(scope)?.get(path)?;
+        (m.time > 0).then_some((m.time, m.head))
+    }
+
+    fn set(&mut self, scope: &str, path: &str, fp: u64, head: Option<git2::Oid>) {
         self.marks
             .entry(scope.to_owned())
             .or_default()
-            .insert(path.to_owned(), fp);
+            .insert(path.to_owned(), Mark::now(fp, head));
         self.prune();
         self.save();
     }
@@ -289,7 +326,8 @@ impl Workspace {
             return;
         };
         if done {
-            self.reviewed.set(&scope, &path, fp);
+            let head = self.viewed_rev();
+            self.reviewed.set(&scope, &path, fp, head);
         } else {
             self.reviewed.clear(&scope, &path);
         }
@@ -307,7 +345,8 @@ impl Workspace {
             .iter()
             .filter_map(|&ix| Some((diff.files.get(ix)?.path().to_owned(), *self.fps.get(ix)?)))
             .collect();
-        self.reviewed.set_many(&scope, &files, done);
+        let head = self.viewed_rev();
+        self.reviewed.set_many(&scope, &files, done, head);
         self.review_changed(ixs);
         self.sync_complete();
         cx.notify();
@@ -478,6 +517,31 @@ impl Workspace {
         }
     }
 
+    /// What a file's box says on a long hover: when it was marked, at which version (X59).
+    fn review_said(&self, ix: usize, state: State) -> String {
+        let when = self
+            .review_scope
+            .as_deref()
+            .zip(self.diff.as_ref().and_then(|d| d.files.get(ix)))
+            .and_then(|(scope, f)| self.reviewed.when(scope, f.path()));
+        let at = when.map(|(time, head)| {
+            let version = head
+                .and_then(|h| self.versions.iter().find(|v| v.tip == h))
+                .map(|v| format!(" at v{},", v.number))
+                .unwrap_or_default();
+            format!("{version} {}", super::format::ago(time))
+        });
+        match (state, at) {
+            (State::Open, _) => "Mark as reviewed  ⇧V".into(),
+            (State::Done, Some(at)) => format!("Reviewed{at} — click to unmark  ⇧V"),
+            (State::Done, None) => "Reviewed — click to unmark  ⇧V".into(),
+            (State::Stale, Some(at)) => {
+                format!("Changed since you reviewed it{at} — mark again  ⇧V")
+            }
+            (State::Stale, None) => "Changed since you marked it — mark again  ⇧V".into(),
+        }
+    }
+
     /// The box at the left of a file row; a click marks or unmarks without opening the file.
     pub(super) fn review_box(
         &self,
@@ -485,6 +549,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
         let state = self.review_state(ix)?;
+        let said: gpui::SharedString = self.review_said(ix, state).into();
         let (border, fill, glyph) = match state {
             State::Open => (theme::faint(), None, ""),
             State::Done => (theme::added(), Some(theme::added()), "✓"),
@@ -512,16 +577,7 @@ impl Workspace {
                 .cursor_pointer()
                 .hover(|s| s.border_color(theme::text()))
                 .tooltip_show_delay(crate::ui::hover::LONG)
-                .tooltip(move |_, cx| {
-                    cx.new(|_| {
-                        super::Tip(match state {
-                            State::Open => "Mark as reviewed  ⇧V",
-                            State::Done => "Reviewed — click to unmark  ⇧V",
-                            State::Stale => "Changed since you marked it — mark again  ⇧V",
-                        })
-                    })
-                    .into()
-                })
+                .tooltip(move |_, cx| cx.new(|_| super::TipOwned(said.clone())).into())
                 .child(glyph)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -666,25 +722,41 @@ mod tests {
     #[test]
     fn marks_survive_a_round_trip() {
         let mut store = Store::default();
+        let head = git2::Oid::from_bytes(&[7; 20]).unwrap();
         store.marks.insert(
             "/r|mr:412".into(),
-            HashMap::from([("src/a.rs".to_owned(), 0xdead_beef_u64)]),
+            HashMap::from([(
+                "src/a.rs".to_owned(),
+                Mark {
+                    fp: 0xdead_beef_u64,
+                    time: 1_792_149_840,
+                    head: Some(head),
+                },
+            )]),
         );
         let again = Store::parse(&store.render());
         assert_eq!(again.get("/r|mr:412", "src/a.rs"), Some(0xdead_beef));
+        assert_eq!(
+            again.when("/r|mr:412", "src/a.rs"),
+            Some((1_792_149_840, Some(head)))
+        );
         assert_eq!(again.get("/r|mr:413", "src/a.rs"), None);
+        // A line from before marks had a time still reads.
+        let old = Store::parse("/r|mr:412\tsrc/a.rs\tdeadbeef\n");
+        assert_eq!(old.get("/r|mr:412", "src/a.rs"), Some(0xdead_beef));
+        assert_eq!(old.when("/r|mr:412", "src/a.rs"), None);
     }
 
     #[test]
     fn a_folder_is_marked_and_unmarked_at_once() {
         let mut store = Store::default();
         let files = [("ui/a.rs".to_owned(), 1), ("ui/b.rs".to_owned(), 2)];
-        store.set_many("s", &files, true);
+        store.set_many("s", &files, true, None);
         assert_eq!(
             (store.get("s", "ui/a.rs"), store.get("s", "ui/b.rs")),
             (Some(1), Some(2))
         );
-        store.set_many("s", &files[..1], false);
+        store.set_many("s", &files[..1], false, None);
         assert_eq!(
             (store.get("s", "ui/a.rs"), store.get("s", "ui/b.rs")),
             (None, Some(2))

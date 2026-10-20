@@ -195,7 +195,7 @@ impl Workspace {
             let (word, color) = match p.status.as_str() {
                 "success" => ("✓ passed".to_owned(), theme::added()),
                 "failed" => (
-                    p.failed.as_ref().map_or("✗ failed".to_owned(), |(job, _)| {
+                    p.failed.first().map_or("✗ failed".to_owned(), |(job, _)| {
                         format!("✗ {job} failed")
                     }),
                     theme::removed(),

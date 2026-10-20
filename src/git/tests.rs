@@ -689,3 +689,30 @@ fn a_line_is_followed_through_later_versions() {
     assert_eq!(follow(before, "a\nc\nd\n", 4), Fate::Same(3));
     assert_eq!(follow(before, before, 2), Fate::Same(2));
 }
+
+#[test]
+fn a_commit_says_how_much_it_changed() {
+    let mut fx = Fixture::new();
+    let a = fx.commit("refs/heads/main", &[], &[("a.txt", "1\n2\n")], "first");
+    let b = fx.commit(
+        "refs/heads/main",
+        &[a],
+        &[("a.txt", "1\ntwo\n3\n"), ("b.txt", "b\n")],
+        "second",
+    );
+    let repo = fx.open();
+    assert_eq!(repo.commit_stat(a).unwrap(), (1, 2, 0));
+    assert_eq!(repo.commit_stat(b).unwrap(), (2, 3, 1));
+}
+
+#[test]
+fn blame_of_the_working_tree_leaves_new_lines_unwritten() {
+    let mut fx = Fixture::new();
+    let a = fx.commit("refs/heads/main", &[], &[("a.txt", "1\n2\n")], "first");
+    fx.repo.set_head("refs/heads/main").unwrap();
+    let dir = fx.repo.workdir().unwrap().to_owned();
+    std::fs::write(dir.join("a.txt"), "1\nnew\n2\n").unwrap();
+    let lines = fx.open().blame_working("a.txt").unwrap();
+    let ids: Vec<Option<Oid>> = lines.iter().map(|l| l.as_ref().map(|l| l.id)).collect();
+    assert_eq!(ids, [Some(a), None, Some(a)]);
+}

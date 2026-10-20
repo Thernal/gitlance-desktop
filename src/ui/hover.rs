@@ -6,9 +6,11 @@
 use super::{ROW_RADIUS, TipOwned, Workspace, format, px, theme};
 use crate::git::{CommitInfo, Deco, DecoKind};
 use gpui::{
-    AnyView, App, ClickEvent, Context, FontWeight, IntoElement, Render, SharedString,
-    StatefulInteractiveElement, WeakEntity, Window, div, prelude::*,
+    AnyView, App, ClickEvent, Context, ElementId, FontWeight, IntoElement, Render, SharedString,
+    StatefulInteractiveElement, WeakEntity, Window, canvas, div, prelude::*,
 };
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 /// How long the pointer rests before a tooltip or a card shows.
@@ -31,19 +33,101 @@ pub trait Hover: StatefulInteractiveElement + Sized {
 
 impl<E: StatefulInteractiveElement> Hover for E {}
 
-/// "Thu 16 Oct 2026, 11:24 UTC": the date behind a relative time.
+/// A tooltip with nothing to say draws nothing.
+pub struct NoTip;
+
+impl Render for NoTip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+/// Text cut to its room with an ellipsis, whose long hover gives the whole of it — only when it is
+/// cut this time (X60): a canvas over it measures the text against the room it has.
+pub fn cut(id: impl Into<ElementId>, text: impl Into<SharedString>) -> gpui::Stateful<gpui::Div> {
+    cut_to(id, text, 1)
+}
+
+/// The same for text clamped to `lines` lines.
+pub fn cut_to(
+    id: impl Into<ElementId>,
+    text: impl Into<SharedString>,
+    lines: usize,
+) -> gpui::Stateful<gpui::Div> {
+    let text: SharedString = text.into();
+    let is_cut = Rc::new(Cell::new(false));
+    let measure = (is_cut.clone(), text.clone());
+    let shown = div().child(text.clone());
+    div()
+        .id(id)
+        .relative()
+        .min_w_0()
+        .overflow_hidden()
+        .child(if lines > 1 {
+            shown.line_clamp(lines)
+        } else {
+            shown.truncate()
+        })
+        .child(
+            canvas(
+                move |bounds, window, _| {
+                    let (is_cut, text) = measure;
+                    let style = window.text_style();
+                    let size = style.font_size.to_pixels(window.rem_size());
+                    let room = bounds.size.width + gpui::px(0.5);
+                    let cut = if lines > 1 {
+                        let run = style.to_run(text.len());
+                        window
+                            .text_system()
+                            .shape_text(text, size, &[run], Some(room), None)
+                            .map(|l| l.iter().map(|l| l.wrap_boundaries.len() + 1).sum::<usize>())
+                            .is_ok_and(|n| n > lines)
+                    } else {
+                        let line = SharedString::from(text.replace('\n', " "));
+                        let run = style.to_run(line.len());
+                        window
+                            .text_system()
+                            .shape_line(line, size, &[run], None)
+                            .width
+                            > room
+                    };
+                    is_cut.set(cut);
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        )
+        .tooltip_show_delay(LONG)
+        .tooltip(move |_, cx| {
+            if is_cut.get() {
+                cx.new(|_| TipOwned(text.clone())).into()
+            } else {
+                cx.new(|_| NoTip).into()
+            }
+        })
+}
+
+/// "Thu 16 Oct 2026, 11:24": the date behind a relative time, in local time (X61).
 pub fn full_date(time: i64) -> String {
+    full_date_at(time + format::local_offset(time))
+}
+
+/// The date of `time` as it is, written out.
+fn full_date_at(time: i64) -> String {
     const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
     let days = time.div_euclid(86400);
     let secs = time.rem_euclid(86400);
-    let date = format::date(time);
+    let date = format::date_at(time);
     let (y, m, d) = (&date[..4], &date[5..7], &date[8..10]);
     let month = m.parse::<usize>().unwrap_or(1).clamp(1, 12);
     format!(
-        "{} {} {} {y}, {:02}:{:02} UTC",
+        "{} {} {} {y}, {:02}:{:02}",
         DAYS[(days + 4).rem_euclid(7) as usize],
         d.trim_start_matches('0'),
         MONTHS[month - 1],
@@ -114,6 +198,10 @@ pub struct CommitCard {
     pub refs: Vec<Deco>,
     /// The commit on GitLab or GitHub.
     pub url: Option<String>,
+    /// The repository, to read what it changed when the card shows.
+    pub root: Option<std::path::PathBuf>,
+    /// (files, lines added, lines removed), once read (X58).
+    pub stat: Option<(usize, usize, usize)>,
 }
 
 impl CommitCard {
@@ -122,7 +210,30 @@ impl CommitCard {
             info: other.info.clone(),
             refs: other.refs.clone(),
             url: other.url.clone(),
+            root: other.root.clone(),
+            stat: other.stat,
         }
+    }
+
+    /// The card, shown: what the commit changed is read in the background and drawn when known.
+    pub fn show(other: &CommitCard, cx: &mut App) -> AnyView {
+        let card = cx.new(|_| CommitCard::clone_of(other));
+        if let Some(root) = other.root.clone() {
+            let (id, view) = (other.info.id, card.downgrade());
+            cx.spawn(async move |cx| {
+                let stat = cx
+                    .background_executor()
+                    .spawn(async move { crate::git::Repo::open(&root)?.commit_stat(id) })
+                    .await;
+                view.update(cx, |card, cx| {
+                    card.stat = stat.ok();
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
+        card.into()
     }
 }
 
@@ -166,6 +277,23 @@ impl Render for CommitCard {
                         ),
                     ),
             )
+            .children(self.stat.map(|(files, added, removed)| {
+                div()
+                    .flex()
+                    .gap(px(6.))
+                    .text_size(px(11.))
+                    .child(
+                        div()
+                            .text_color(theme::muted())
+                            .child(super::plural(files, "file")),
+                    )
+                    .child(div().text_color(theme::added()).child(format!("+{added}")))
+                    .child(
+                        div()
+                            .text_color(theme::removed())
+                            .child(format!("−{removed}")),
+                    )
+            }))
             .children((!self.refs.is_empty()).then(|| {
                 div()
                     .flex()
@@ -222,6 +350,8 @@ pub struct PersonCard {
     pub login: String,
     /// What they are in the open request: author, reviewer (approved), …
     pub role: Option<String>,
+    /// What they did last in it: "Pushed v4 35 min ago · wrote 12 min ago" (X58).
+    pub activity: Option<String>,
     pub url: Option<String>,
     pub ws: WeakEntity<Workspace>,
 }
@@ -232,6 +362,7 @@ impl PersonCard {
             name: other.name.clone(),
             login: other.login.clone(),
             role: other.role.clone(),
+            activity: other.activity.clone(),
             url: other.url.clone(),
             ws: other.ws.clone(),
         }
@@ -272,6 +403,11 @@ impl Render for PersonCard {
                     .clone()
                     .map(|r| div().text_color(theme::muted()).child(r)),
             )
+            .children(
+                self.activity
+                    .clone()
+                    .map(|a| div().text_size(px(11.)).text_color(theme::faint()).child(a)),
+            )
             .child(
                 div()
                     .flex()
@@ -286,6 +422,23 @@ impl Render for PersonCard {
                             .on_click(move |_: &ClickEvent, _, cx| cx.open_url(&url))
                     })),
             )
+    }
+}
+
+/// A mention under the pointer in comment text, and the person's card once the pointer rested on it
+/// (#51, X62): the card stays while the pointer is on the mention or on the card.
+pub struct MentionHover {
+    login: String,
+    /// Where the mention is drawn, in the window.
+    spot: gpui::Bounds<gpui::Pixels>,
+    card: Option<AnyView>,
+    _wait: gpui::Task<()>,
+}
+
+impl MentionHover {
+    /// Whether `at` is on the mention, or between it and its card.
+    fn near(&self, at: gpui::Point<gpui::Pixels>) -> bool {
+        self.spot.dilate(gpui::px(8.)).contains(&at)
     }
 }
 
@@ -340,6 +493,8 @@ impl Workspace {
             refs: self.decor.get(&info.id).cloned().unwrap_or_default(),
             url: self.web.as_ref().map(|w| w.commit(&info.id.to_string())),
             info,
+            root: self.root.clone(),
+            stat: None,
         })
     }
 
@@ -383,6 +538,30 @@ impl Workspace {
                 None
             }
         });
+        // What they did last here: the author's last push, anyone's last note.
+        let theirs = |l: &str, n: &str| (!login.is_empty() && l == login) || n == name;
+        let pushed = m
+            .filter(|m| theirs(&m.author_login, &m.author))
+            .and_then(|_| self.versions.last())
+            .filter(|v| v.time > 0)
+            .map(|v| format!("Pushed v{} {}", v.number, format::ago(v.time)));
+        let wrote = m
+            .and_then(|_| {
+                self.requests
+                    .threads
+                    .iter()
+                    .flat_map(|t| &t.notes)
+                    .filter(|n| theirs(&n.login, &n.author))
+                    .map(|n| n.created)
+                    .max()
+            })
+            .map(|t| format!("wrote {}", format::ago(t)));
+        let activity = match (pushed, wrote) {
+            (Some(p), Some(w)) => Some(format!("{p} · {w}")),
+            (Some(p), None) => Some(p),
+            (None, Some(w)) => Some(format!("{}{}", w[..1].to_uppercase(), &w[1..])),
+            (None, None) => None,
+        };
         let url = self.web.as_ref().filter(|_| !login.is_empty()).map(|w| {
             let host_end = w
                 .base
@@ -395,6 +574,7 @@ impl Workspace {
             name: name.to_owned(),
             login,
             role,
+            activity,
             url,
             ws,
         }
@@ -419,6 +599,110 @@ impl Workspace {
         })
     }
 
+    /// The pointer is on mention `hit` (or on none): its card comes after a long rest there.
+    pub(super) fn hover_mention(
+        &mut self,
+        hit: Option<(String, gpui::Bounds<gpui::Pixels>)>,
+        cx: &mut Context<Self>,
+    ) {
+        match hit {
+            Some((login, spot)) => {
+                if self
+                    .mention_hover
+                    .as_ref()
+                    .is_some_and(|h| h.login == login && h.spot == spot)
+                {
+                    return;
+                }
+                let wait = cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(LONG).await;
+                    this.update(cx, |this, cx| this.show_mention_card(cx)).ok();
+                });
+                self.mention_hover = Some(MentionHover {
+                    login,
+                    spot,
+                    card: None,
+                    _wait: wait,
+                });
+            }
+            // Off the mention before its card came: it does not come. A card shown waits for the
+            // pointer to leave it.
+            None => {
+                if self
+                    .mention_hover
+                    .as_ref()
+                    .is_some_and(|h| h.card.is_none())
+                {
+                    self.mention_hover = None;
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn show_mention_card(&mut self, cx: &mut Context<Self>) {
+        let Some(login) = self.mention_hover.as_ref().map(|h| h.login.clone()) else {
+            return;
+        };
+        let name = self
+            .requests
+            .members
+            .iter()
+            .find(|(l, _)| *l == login)
+            .map_or_else(|| login.clone(), |(_, n)| n.clone());
+        let card = self.person_card(&name, &login, cx.entity().downgrade());
+        let view: AnyView = cx.new(|_| card).into();
+        if let Some(h) = &mut self.mention_hover {
+            h.card = Some(view);
+        }
+        cx.notify();
+    }
+
+    /// The pointer moved: off the mention and off its card, the card goes.
+    pub(super) fn mention_pointer(
+        &mut self,
+        at: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .mention_hover
+            .as_ref()
+            .is_some_and(|h| !h.near(at) && h.card.is_some())
+        {
+            self.mention_hover = None;
+            cx.notify();
+        }
+    }
+
+    /// The card of the mention the pointer rests on, under it.
+    pub(super) fn render_mention_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let h = self.mention_hover.as_ref()?;
+        let card = h.card.clone()?;
+        Some(
+            gpui::deferred(
+                gpui::anchored()
+                    .position(gpui::point(h.spot.left(), h.spot.bottom()))
+                    .snap_to_window_with_margin(gpui::px(8.))
+                    .child(
+                        div()
+                            .id("mention-card")
+                            .occlude()
+                            .on_hover(cx.listener(|this, on: &bool, window, cx| {
+                                let at = window.mouse_position();
+                                if !*on && this.mention_hover.as_ref().is_some_and(|h| !h.near(at))
+                                {
+                                    this.mention_hover = None;
+                                    cx.notify();
+                                }
+                            }))
+                            .child(card),
+                    ),
+            )
+            .with_priority(2)
+            .into_any_element(),
+        )
+    }
+
     /// `@login ` into the comment being written, or onto the clipboard when none is.
     pub(super) fn mention(&mut self, login: &str, cx: &mut Context<Self>) {
         let tag = format!("@{login} ");
@@ -436,7 +720,11 @@ mod tests {
 
     #[test]
     fn a_time_reads_as_a_date() {
-        // 2026-10-16 11:24 UTC was a Friday.
-        assert_eq!(full_date(1_792_149_840), "Fri 16 Oct 2026, 11:24 UTC");
+        // 2026-10-16 11:24 UTC was a Friday; four hours on, 15:24.
+        assert_eq!(full_date_at(1_792_149_840), "Fri 16 Oct 2026, 11:24");
+        assert_eq!(
+            full_date_at(1_792_149_840 + 4 * 3600),
+            "Fri 16 Oct 2026, 15:24"
+        );
     }
 }

@@ -53,18 +53,28 @@ impl Preset {
     fn changes(self) -> &'static [(&'static str, &'static [&'static str])] {
         match self {
             Preset::GitLance => &[],
-            // Go to File ⌘⇧O, Find Action ⌘⇧A, File Structure ⌘F12.
+            // Go to File ⌘⇧O, Find Action ⌘⇧A, File Structure ⌘F12, Find in Files ⌘⇧F (the
+            // commit search keeps ⌘⇧C), Hide All Tool Windows ⌘⇧F12, Synchronize ⌥⌘Y (X55).
             Preset::AndroidStudio => &[
                 ("SearchFiles", &["cmd-shift-o"]),
                 ("SearchActions", &["cmd-shift-a"]),
                 ("ShowStructure", &["cmd-f12"]),
                 ("SendToAgent", &["cmd-alt-a"]),
+                ("FindInFiles", &["cmd-shift-f"]),
+                ("FindCommits", &[]),
+                ("FocusDiff", &["cmd-shift-f12"]),
+                ("Refresh", &["cmd-alt-y"]),
             ],
-            // Toggle Side Bar ⌘B, Open Recent ⌃R; branches are switched from the palette.
+            // Toggle Side Bar ⌘B, Open Recent ⌃R, Find in Files ⌘⇧F, Go Back ⌃− and Go Forward
+            // ⌃⇧− beside ⌘[ ⌘]; branches are switched from the palette.
             Preset::VsCode => &[
                 ("ToggleSidebar", &["cmd-b"]),
                 ("SwitchTo", &[]),
                 ("OpenRecent", &["ctrl-r"]),
+                ("FindInFiles", &["cmd-shift-f"]),
+                ("FindCommits", &[]),
+                ("GoBack", &["ctrl--", "cmd-["]),
+                ("GoForward", &["ctrl-shift--", "cmd-]"]),
             ],
         }
     }

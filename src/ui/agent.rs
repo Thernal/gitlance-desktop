@@ -790,7 +790,7 @@ impl Workspace {
                 .count()
         };
         let chats =
-            self.agent_chats.iter().map(|c| {
+            self.agent_chats.iter().enumerate().map(|(ix, c)| {
                 let busy = if c.listening() {
                     0
                 } else {
@@ -841,12 +841,24 @@ impl Workspace {
                             ),
                     )
                     .children((!c.title.is_empty()).then(|| {
+                        // A long hover: the whole title, where it works, when it was last heard (X59).
+                        let said: gpui::SharedString = format!(
+                            "{}\n{} in {} · last heard {}",
+                            c.title,
+                            c.agent,
+                            super::format::home_relative(&c.repo),
+                            super::hover::full_date(c.beat)
+                        )
+                        .into();
                         div()
+                            .id(("chat-title", ix))
                             .pl(px(16.))
                             .truncate()
                             .text_size(px(12.))
                             .text_color(theme::muted())
                             .child(c.title.clone())
+                            .tooltip_show_delay(super::hover::LONG)
+                            .tooltip(move |_, cx| cx.new(|_| super::TipOwned(said.clone())).into())
                     }))
             });
         // Where each comment is in its life with the agent (#50: Drafts · Asks you · Sent ·
@@ -1043,7 +1055,10 @@ impl Workspace {
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .child(div().truncate().child(chat.title.clone()))
+                        .child(super::hover::cut(
+                            ("pick-chat-title", ix),
+                            chat.title.clone(),
+                        ))
                         .child(
                             div()
                                 .text_size(px(12.))

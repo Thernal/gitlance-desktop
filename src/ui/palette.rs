@@ -429,13 +429,20 @@ impl Workspace {
             return;
         };
         let items = self.palette_items(palette);
-        // Every tab's count, while something is typed.
+        // Every tab's count, while something is typed; All's is what the others found (X56).
         let counts = match palette.kind {
             Kind::Search(_) if !palette.query.trim().is_empty() => {
                 let mut counts = [0; 6];
                 for (i, scope) in Scope::ALL.into_iter().enumerate() {
-                    counts[i] = self.scope_items(scope, palette).len();
+                    if scope != Scope::All {
+                        counts[i] = self.scope_items(scope, palette).len();
+                    }
                 }
+                let all = Scope::ALL
+                    .iter()
+                    .position(|&s| s == Scope::All)
+                    .unwrap_or(0);
+                counts[all] = counts.iter().sum();
                 Some(counts)
             }
             _ => None,
@@ -485,7 +492,7 @@ impl Workspace {
         let query = p.query.trim();
         let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
         match scope {
-            Scope::All => self.all_items(query),
+            Scope::All => self.all_items(query, &p.files),
             Scope::Actions => COMMANDS
                 .iter()
                 .filter(|(label, ..)| matches(&words, label))
@@ -549,56 +556,7 @@ impl Workspace {
                     })
                     .collect()
             }
-            Scope::Files => {
-                let name = |path: &str| path.rsplit('/').next().unwrap_or_default().to_owned();
-                let mut items: Vec<Item> = Vec::new();
-                let mut seen = std::collections::HashSet::new();
-                if let Some(diff) = &self.diff {
-                    for (ix, f) in
-                        crate::rank::rank(diff.files.iter().enumerate(), query, |(_, f)| {
-                            f.path().rsplit('/').next().unwrap_or_default()
-                        })
-                        .into_iter()
-                        .chain(diff.files.iter().enumerate().filter(|(_, f)| {
-                            !words.is_empty()
-                                && matches(&words, f.path())
-                                && crate::rank::score(query, &name(f.path())).is_none()
-                        }))
-                    {
-                        if seen.insert(f.path().to_owned()) {
-                            items.push(Item {
-                                group: "In this diff",
-                                label: f.path().to_owned(),
-                                detail: String::new(),
-                                key: "",
-                                pick: Pick::File(ix),
-                            });
-                        }
-                    }
-                }
-                if !words.is_empty() {
-                    let ranked = crate::rank::rank(p.files.iter(), query, |f| {
-                        f.rsplit('/').next().unwrap_or_default()
-                    });
-                    items.extend(
-                        ranked
-                            .into_iter()
-                            .chain(p.files.iter().filter(|f| {
-                                matches(&words, f) && crate::rank::score(query, &name(f)).is_none()
-                            }))
-                            .filter(|f| seen.insert((*f).clone()))
-                            .take(60)
-                            .map(|f| Item {
-                                group: "In the repository",
-                                label: f.clone(),
-                                detail: String::new(),
-                                key: "",
-                                pick: Pick::RepoFile(f.clone()),
-                            }),
-                    );
-                }
-                items
-            }
+            Scope::Files => self.file_items(query, &p.files),
         }
     }
 
@@ -761,7 +719,58 @@ impl Workspace {
     }
 
     /// The All tab: a few of every kind, a pasted link as one place, `#` `@` narrowing.
-    fn all_items(&self, query: &str) -> Vec<Item> {
+    /// The Files tab's finds: this diff's files first, then the repository's.
+    fn file_items(&self, query: &str, files: &[String]) -> Vec<Item> {
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        let name = |path: &str| path.rsplit('/').next().unwrap_or_default().to_owned();
+        let mut items: Vec<Item> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        if let Some(diff) = &self.diff {
+            for (ix, f) in crate::rank::rank(diff.files.iter().enumerate(), query, |(_, f)| {
+                f.path().rsplit('/').next().unwrap_or_default()
+            })
+            .into_iter()
+            .chain(diff.files.iter().enumerate().filter(|(_, f)| {
+                !words.is_empty()
+                    && matches(&words, f.path())
+                    && crate::rank::score(query, &name(f.path())).is_none()
+            })) {
+                if seen.insert(f.path().to_owned()) {
+                    items.push(Item {
+                        group: "In this diff",
+                        label: f.path().to_owned(),
+                        detail: String::new(),
+                        key: "",
+                        pick: Pick::File(ix),
+                    });
+                }
+            }
+        }
+        if !words.is_empty() {
+            let ranked = crate::rank::rank(files.iter(), query, |f| {
+                f.rsplit('/').next().unwrap_or_default()
+            });
+            items.extend(
+                ranked
+                    .into_iter()
+                    .chain(files.iter().filter(|f| {
+                        matches(&words, f) && crate::rank::score(query, &name(f)).is_none()
+                    }))
+                    .filter(|f| seen.insert((*f).clone()))
+                    .take(60)
+                    .map(|f| Item {
+                        group: "In the repository",
+                        label: f.clone(),
+                        detail: String::new(),
+                        key: "",
+                        pick: Pick::RepoFile(f.clone()),
+                    }),
+            );
+        }
+        items
+    }
+
+    fn all_items(&self, query: &str, files: &[String]) -> Vec<Item> {
         // A pasted GitLab link is one place to go.
         if let Some(link) = crate::links::parse(query) {
             return vec![Item {
@@ -808,34 +817,16 @@ impl Workspace {
                     }),
             );
         }
-        if scope.is_none_or(|s| s == '@')
-            && !words.is_empty() | scope.is_some()
-            && let Some(diff) = &self.diff
-        {
+        // The Files tab's first finds: this diff's, then the repository's (X56).
+        if scope.is_none_or(|s| s == '@') && !words.is_empty() | scope.is_some() {
             items.extend(
-                crate::rank::rank(diff.files.iter().enumerate(), rest, |(_, f)| {
-                    f.path().rsplit('/').next().unwrap_or_default()
-                })
-                .into_iter()
-                .chain(
-                    // A word that only matches the folders of a path.
-                    diff.files.iter().enumerate().filter(|(_, f)| {
-                        matches(&words, f.path())
-                            && crate::rank::score(
-                                rest,
-                                f.path().rsplit('/').next().unwrap_or_default(),
-                            )
-                            .is_none()
+                self.file_items(rest, files)
+                    .into_iter()
+                    .take(cap(3))
+                    .map(|i| Item {
+                        group: "Files",
+                        ..i
                     }),
-                )
-                .take(cap(3))
-                .map(|(ix, f)| Item {
-                    group: "Files in this diff",
-                    label: f.path().to_owned(),
-                    detail: String::new(),
-                    key: "",
-                    pick: Pick::File(ix),
-                }),
             );
         }
         if scope.is_none() && !words.is_empty() {
@@ -1038,17 +1029,8 @@ impl Workspace {
             }
             Pick::RepoFile(path) => {
                 self.palette = None;
-                // Not changed here: it opens in the editor, when there is one.
-                if crate::editor::pick(self.settings.editor).is_some() {
-                    self.run_act(super::menu::Act::OpenEditor { path, line: 1 }, cx);
-                } else {
-                    self.error = Some(
-                        format!(
-                            "{path} is not changed here, and no editor is set to open it (Settings → General)."
-                        )
-                        .into(),
-                    );
-                }
+                // Not changed here: shown in the diff's place (D18).
+                self.open_file_view(path, cx);
             }
             Pick::Link(link) => {
                 self.palette = None;

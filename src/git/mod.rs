@@ -437,6 +437,20 @@ impl Repo {
     }
 
     /// What a commit changed against its first parent; a root commit against the empty tree.
+    /// What commit `id` changed against its first parent: (files, lines added, lines removed).
+    pub fn commit_stat(&self, id: Oid) -> Result<(usize, usize, usize)> {
+        let commit = self.inner.find_commit(id)?;
+        let old = match commit.parent(0) {
+            Ok(parent) => Some(parent.tree()?),
+            Err(_) => None,
+        };
+        let diff = self
+            .inner
+            .diff_tree_to_tree(old.as_ref(), Some(&commit.tree()?), None)?;
+        let stats = diff.stats()?;
+        Ok((stats.files_changed(), stats.insertions(), stats.deletions()))
+    }
+
     pub fn commit_diff(&self, id: Oid, settings: DiffSettings) -> Result<Vec<FileDiff>> {
         let commit = self.inner.find_commit(id)?;
         let new = commit.tree()?;
@@ -629,6 +643,11 @@ impl Repo {
         tip == commit || self.inner.graph_descendant_of(tip, commit).unwrap_or(false)
     }
 
+    /// The first parent of commit `id`.
+    pub fn parent_of(&self, id: Oid) -> Result<Oid> {
+        Ok(self.inner.find_commit(id)?.parent_id(0)?)
+    }
+
     pub fn resolve(&self, spec: &str) -> Result<Oid> {
         Ok(self
             .inner
@@ -669,11 +688,34 @@ impl Repo {
         let mut opts = git2::BlameOptions::new();
         opts.newest_commit(rev);
         let blame = self.inner.blame_file(Path::new(path), Some(&mut opts))?;
+        Ok(self.blame_lines(&blame))
+    }
+
+    /// The same for the working tree's `path`: a line not committed yet is `None`.
+    pub fn blame_working(&self, path: &str) -> Result<Vec<Option<BlameLine>>> {
+        let dir = self
+            .inner
+            .workdir()
+            .context("a bare repository has no working tree")?;
+        let text = std::fs::read(dir.join(path))?;
+        let head = self.inner.blame_file(Path::new(path), None)?;
+        Ok(self.blame_lines(&head.blame_buffer(&text)?))
+    }
+
+    fn blame_lines(&self, blame: &git2::Blame<'_>) -> Vec<Option<BlameLine>> {
         let mut summaries: std::collections::HashMap<Oid, String> =
             std::collections::HashMap::new();
         let mut out: Vec<Option<BlameLine>> = Vec::new();
         for hunk in blame.iter() {
             let id = hunk.final_commit_id();
+            // Lines of a buffer that no commit has yet.
+            if id.is_zero() {
+                let end = hunk.final_start_line().saturating_sub(1) + hunk.lines_in_hunk();
+                if out.len() < end {
+                    out.resize(end, None);
+                }
+                continue;
+            }
             let summary = summaries
                 .entry(id)
                 .or_insert_with(|| {
@@ -703,7 +745,7 @@ impl Repo {
                 *slot = Some(line.clone());
             }
         }
-        Ok(out)
+        out
     }
 
     /// The commits `head` has on top of `base` (or of their merge base), newest first.

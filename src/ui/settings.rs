@@ -589,7 +589,7 @@ impl Workspace {
         let entries: Vec<_> = map
             .entries()
             .into_iter()
-            .filter(|e| matches_keys(e, &query))
+            .filter(|e| matches_keys(e, &query, self.keys_exact))
             .filter(|e| !changed_only || e.changed)
             .collect();
         let presets = div().flex().flex_wrap().gap(px(6.)).pb(px(12.)).children(
@@ -624,10 +624,32 @@ impl Workspace {
                     }))
             }),
         );
+        let by_keys = self.recording == Some(BY_KEYS);
         let tools = div()
             .flex()
             .gap(px(6.))
             .pb(px(8.))
+            // The next keys pressed filter the list (Design D, X55).
+            .child(
+                button(
+                    "keys-by-keys",
+                    if by_keys {
+                        "Press the keys…"
+                    } else {
+                        "By keys"
+                    },
+                    None,
+                    if by_keys {
+                        Kind::Primary(theme::accent())
+                    } else {
+                        Kind::Plain
+                    },
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.recording = if by_keys { None } else { Some(BY_KEYS) };
+                    cx.notify();
+                })),
+            )
             .child(
                 button(
                     "keys-changed-only",
@@ -843,6 +865,26 @@ impl Workspace {
             || key.modifiers.alt
             || key.modifiers.control
             || key.modifiers.shift);
+        // By keys: what was pressed becomes the filter, as the app writes keys.
+        if name == BY_KEYS {
+            if !(plain && key.key == "escape") {
+                // A letter key as the caps write it: ⌘B.
+                let mut spec = super::keymap::symbols(&key.unparse());
+                if spec.chars().last().is_some_and(|c| c.is_ascii_lowercase())
+                    && spec
+                        .chars()
+                        .rev()
+                        .nth(1)
+                        .is_none_or(|c| !c.is_alphanumeric())
+                {
+                    let last = spec.pop().map(|c| c.to_ascii_uppercase());
+                    spec.extend(last);
+                }
+                self.keys_filter = super::keys::text(&spec).into_owned();
+                self.keys_exact = true;
+            }
+            return cx.notify();
+        }
         match key.key.as_str() {
             "escape" if plain => {}
             "backspace" if plain => super::keymap::set(name, Some(Vec::new()), cx),
@@ -867,18 +909,45 @@ impl Workspace {
     }
 }
 
+/// What `Workspace::recording` holds while By keys waits for the keys to filter by.
+pub(super) const BY_KEYS: &str = "\u{0}by keys";
+
 /// Whether a keyboard row answers `query` (lower case): every word in its name, or a key written
 /// as the app writes it (`⌘B`) or as GPUI does (`cmd-b`).
-fn matches_keys(e: &super::keymap::Entry, query: &str) -> bool {
+fn matches_keys(e: &super::keymap::Entry, query: &str, exact: bool) -> bool {
     if query.is_empty() {
         return true;
     }
+    let written = |k: &String| super::keys::text(&super::keymap::symbols(k)).to_lowercase();
+    if exact {
+        return e.keys.iter().any(|k| written(k) == query);
+    }
     let label = e.label.to_lowercase();
     query.split_whitespace().all(|w| label.contains(w))
-        || e.keys.iter().any(|k| {
-            k.contains(query)
-                || super::keys::text(&super::keymap::symbols(k))
-                    .to_lowercase()
-                    .contains(query)
-        })
+        || e.keys
+            .iter()
+            .any(|k| k.contains(query) || written(k).contains(query))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_key_pressed_matches_only_that_key() {
+        let entry = |keys: &[&str]| super::super::keymap::Entry {
+            name: "X",
+            label: "Switch branch".into(),
+            keys: keys.iter().map(|k| (*k).to_owned()).collect(),
+            changed: false,
+            was: Vec::new(),
+            clash: None,
+        };
+        let pressed = super::super::keys::text("⌘B").to_lowercase();
+        assert!(matches_keys(&entry(&["cmd-b"]), &pressed, true));
+        assert!(!matches_keys(&entry(&["cmd-shift-b"]), &pressed, true));
+        // Typed, it is a part of a key or of the name.
+        assert!(matches_keys(&entry(&["cmd-shift-b"]), &pressed, false));
+        assert!(matches_keys(&entry(&[]), "branch", false));
+    }
 }

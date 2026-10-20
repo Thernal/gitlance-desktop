@@ -269,11 +269,11 @@ impl Workspace {
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme::faint())
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .child(diff.files[hit.file].path().to_owned()),
+                            super::hover::cut(
+                                ("hit-path", ix),
+                                diff.files[hit.file].path().to_owned(),
+                            )
+                            .flex_1(),
                         )
                         .child(count.to_string())
                         .into_any_element(),

@@ -17,10 +17,28 @@ pub fn ago(time: i64) -> String {
     }
 }
 
-/// `YYYY-MM-DD` in UTC.
+/// `YYYY-MM-DD` in local time.
 pub fn date(time: i64) -> String {
+    date_at(time + local_offset(time))
+}
+
+/// `YYYY-MM-DD` of `time` as it is.
+pub fn date_at(time: i64) -> String {
     let (y, m, d) = civil_from_days(time.div_euclid(86400));
     format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Seconds the local time zone is ahead of UTC at `time` (X61).
+pub fn local_offset(time: i64) -> i64 {
+    use chrono::Offset;
+    chrono::DateTime::from_timestamp(time, 0).map_or(0, |t| {
+        i64::from(
+            t.with_timezone(&chrono::Local)
+                .offset()
+                .fix()
+                .local_minus_utc(),
+        )
+    })
 }
 
 /// Howard Hinnant's days-to-civil conversion.
@@ -72,8 +90,8 @@ mod tests {
 
     #[test]
     fn dates() {
-        assert_eq!(date(0), "1970-01-01");
-        assert_eq!(date(1_791_417_600), "2026-10-08");
+        assert_eq!(date_at(0), "1970-01-01");
+        assert_eq!(date_at(1_791_417_600), "2026-10-08");
     }
 
     #[test]

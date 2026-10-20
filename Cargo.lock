@@ -1966,6 +1966,7 @@ name = "gitlance"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "git2",
  "gpui-pre",
  "gpui-pre-platform",
