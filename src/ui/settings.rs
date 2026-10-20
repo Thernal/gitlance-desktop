@@ -974,8 +974,10 @@ mod tests {
         let pressed = super::super::keys::text("⌘B").to_lowercase();
         assert!(matches_keys(&entry(&["cmd-b"]), &pressed, true));
         assert!(!matches_keys(&entry(&["cmd-shift-b"]), &pressed, true));
-        // Typed, it is a part of a key or of the name.
-        assert!(matches_keys(&entry(&["cmd-shift-b"]), &pressed, false));
+        // Typed, it is a part of a key or of the name: ⇧ on a Mac, shift on Windows and Linux.
+        let typed = super::super::keys::text("⇧").to_lowercase();
+        assert!(matches_keys(&entry(&["cmd-shift-b"]), &typed, false));
+        assert!(!matches_keys(&entry(&["cmd-b"]), &typed, false));
         assert!(matches_keys(&entry(&[]), "branch", false));
     }
 }

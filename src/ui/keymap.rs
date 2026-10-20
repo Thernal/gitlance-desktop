@@ -11,6 +11,8 @@ use std::collections::{BTreeMap, HashSet};
 /// The keys as written in code, the preset over them, and the user's changes.
 pub struct Keymap {
     defaults: Vec<KeyBinding>,
+    /// Whether the keys are macOS's (`platform::MAC`); a test reads Windows and Linux's on a Mac.
+    mac: bool,
     preset: Preset,
     /// Action name (`NextFile`) → its keys (`cmd-]`, `l`).
     overrides: BTreeMap<String, Vec<String>>,
@@ -48,8 +50,8 @@ impl Preset {
         Self::ALL.into_iter().find(|p| p.key() == key)
     }
 
-    /// What it changes from the shipped keys, written for macOS (`platform::keys` puts them in
-    /// this OS's terms).
+    /// What it changes from the shipped keys, written for macOS (`map` puts them in this OS's
+    /// terms).
     fn changes(self) -> &'static [(&'static str, &'static [&'static str])] {
         match self {
             Preset::GitLance => &[],
@@ -80,14 +82,39 @@ impl Preset {
         }
     }
 
-    fn map(self) -> BTreeMap<String, Vec<String>> {
+    /// Where Windows and Linux take other keys than `changes`, written the same way: the tool's
+    /// own keys there, or a ⌃ key that `cmd-` → `ctrl-` would give another action too.
+    fn pc_changes(self) -> &'static [(&'static str, &'static [&'static str])] {
+        match self {
+            Preset::GitLance | Preset::AndroidStudio => &[],
+            // Go Back and Go Forward are Alt+← Alt+→ there (Ctrl+− is Zoom out); Ctrl+R is Open
+            // Recent, so Refresh takes F5.
+            Preset::VsCode => &[
+                ("GoBack", &["alt-left", "cmd-["]),
+                ("GoForward", &["alt-right", "cmd-]"]),
+                ("Refresh", &["f5"]),
+            ],
+        }
+    }
+
+    /// Its changes in macOS's keys (`mac`) or in Windows and Linux's: action → keys.
+    fn map(self, mac: bool) -> BTreeMap<String, Vec<String>> {
+        let pc = if mac { &[][..] } else { self.pc_changes() };
         self.changes()
             .iter()
+            .chain(pc)
             .map(|(name, keys)| {
-                (
-                    (*name).to_owned(),
-                    keys.iter().map(|k| crate::platform::keys(k)).collect(),
-                )
+                let keys = keys
+                    .iter()
+                    .map(|&k| {
+                        if mac {
+                            k.to_owned()
+                        } else {
+                            crate::platform::pc_keys(k)
+                        }
+                    })
+                    .collect();
+                ((*name).to_owned(), keys)
             })
             .collect()
     }
@@ -114,6 +141,7 @@ pub fn install(defaults: Vec<KeyBinding>, cx: &mut App) {
     let (preset, overrides) = read(&storage::read("keymap.txt"));
     cx.set_global(Keymap {
         defaults,
+        mac: crate::platform::MAC,
         preset,
         overrides,
     });
@@ -191,7 +219,7 @@ impl Keymap {
 
     /// The preset's changes with the user's on top: action → keys.
     fn layer(&self) -> BTreeMap<String, Vec<String>> {
-        let mut layer = self.preset.map();
+        let mut layer = self.preset.map(self.mac);
         layer.extend(self.overrides.clone());
         layer
     }
@@ -263,7 +291,7 @@ impl Keymap {
                     });
                     let changed = self.overrides.contains_key(name);
                     let was = if changed {
-                        self.preset.map().remove(name).unwrap_or_else(|| {
+                        self.preset.map(self.mac).remove(name).unwrap_or_else(|| {
                             self.defaults
                                 .iter()
                                 .filter(|d| short(d.action().name()) == name)
@@ -420,6 +448,7 @@ mod tests {
 
     fn map(overrides: &str) -> Keymap {
         Keymap {
+            mac: crate::platform::MAC,
             preset: Preset::GitLance,
             defaults: vec![
                 KeyBinding::new("l", NextFile, Some("Workspace && !Typing")),
@@ -478,6 +507,7 @@ mod tests {
     fn the_shipped_keys_do_not_clash() {
         let shipped = Keymap {
             defaults: super::super::default_bindings(),
+            mac: crate::platform::MAC,
             preset: Preset::GitLance,
             overrides: BTreeMap::new(),
         };
@@ -493,6 +523,7 @@ mod tests {
     fn the_shipped_keys_do_not_clash_on_windows_and_linux() {
         let shipped = Keymap {
             defaults: super::super::bindings(crate::platform::pc_keys),
+            mac: false,
             preset: Preset::GitLance,
             overrides: BTreeMap::new(),
         };
@@ -506,33 +537,44 @@ mod tests {
 
     #[test]
     fn no_preset_clashes_and_each_names_real_actions() {
-        for preset in Preset::ALL {
-            let map = Keymap {
-                defaults: super::super::default_bindings(),
-                preset,
-                overrides: BTreeMap::new(),
+        // macOS's keys and Windows and Linux's, whichever OS runs the test.
+        for mac in [true, false] {
+            let keys: fn(&str) -> String = if mac {
+                str::to_owned
+            } else {
+                crate::platform::pc_keys
             };
-            let entries = map.entries();
-            for (name, _) in preset.changes() {
-                assert!(
-                    entries.iter().any(|e| e.name == *name),
-                    "{preset:?}: no {name}"
-                );
+            for preset in Preset::ALL {
+                let map = Keymap {
+                    defaults: super::super::bindings(keys),
+                    mac,
+                    preset,
+                    overrides: BTreeMap::new(),
+                };
+                let entries = map.entries();
+                for (name, _) in preset.changes().iter().chain(preset.pc_changes()) {
+                    assert!(
+                        entries.iter().any(|e| e.name == *name),
+                        "{preset:?}: no {name}"
+                    );
+                }
+                let clashes: Vec<_> = entries
+                    .into_iter()
+                    .filter_map(|e| e.clash.map(|c| (e.label, c)))
+                    .collect();
+                assert!(clashes.is_empty(), "{preset:?}, mac {mac}: {clashes:?}");
             }
-            let clashes: Vec<_> = entries
-                .into_iter()
-                .filter_map(|e| e.clash.map(|c| (e.label, c)))
-                .collect();
-            assert!(clashes.is_empty(), "{preset:?}: {clashes:?}");
         }
     }
 
     #[test]
     fn a_change_says_what_the_preset_had() {
-        let (preset, overrides) = read("Preset = android-studio\nSearchFiles = cmd-p\n");
+        // alt, not cmd: cmd is written super- on Linux and win- on Windows.
+        let (preset, overrides) = read("Preset = android-studio\nSearchFiles = alt-p\n");
         assert_eq!(preset, Preset::AndroidStudio);
         let map = Keymap {
             defaults: super::super::default_bindings(),
+            mac: crate::platform::MAC,
             preset,
             overrides,
         };
@@ -541,8 +583,8 @@ mod tests {
             .into_iter()
             .find(|e| e.name == "SearchFiles")
             .unwrap();
-        assert_eq!(files.keys, ["cmd-p"]);
-        assert_eq!(files.was, ["cmd-shift-o"]);
+        assert_eq!(files.keys, ["alt-p"]);
+        assert_eq!(files.was, [crate::platform::keys("cmd-shift-o")]);
     }
 
     #[test]
