@@ -1,6 +1,6 @@
 //! The menu of places on the left (Design `design/shell/` `nav()`, #49): Inbox, Merge requests (every
 //! open one, #57), Review requests and My requests, then the repository's Commits, Branches and
-//! Working tree, Settings at the foot. It folds to icons (the title bar's first button), and is
+//! Working tree (in Menu mode nested under the active project's row, X13), Settings at the foot. It folds to icons (the title bar's first button), and is
 //! drawn folded while a merge request is reviewed unless opened there (Settings → Appearance, on by
 //! default). The Inbox is a place of its own (`super::inbox`).
 
@@ -225,6 +225,27 @@ impl Workspace {
             }
         };
         let requests = self.requests.available;
+        // The repository's places; nested under the active project in Menu mode (Design `nav()`,
+        // X13), under a Repository heading otherwise.
+        let places = |nested: bool| {
+            [
+                (Place::Commits, "commit", "Commits", None),
+                (Place::Branches, "branch", "Branches", None),
+                (
+                    Place::WorkingTree,
+                    "files",
+                    "Working tree",
+                    Some(self.wt.count),
+                ),
+            ]
+            .map(|(place, icon, label, n)| {
+                item(place, icon, label, n)
+                    .when(nested && !folded, |s| s.pl(px(26.)))
+                    .into_any_element()
+            })
+        };
+        let projects = self.menu_projects();
+        let nested = !projects.is_empty();
         Some(
             div()
                 .id("places")
@@ -264,11 +285,12 @@ impl Workspace {
                         Some(count(Scope::Mine)),
                     )
                 }))
-                .children((!self.menu_projects().is_empty()).then(|| heading("Projects")))
-                .children(self.menu_projects().into_iter().map(|(ix, tab)| {
+                .children(nested.then(|| heading("Projects")))
+                .children(projects.into_iter().flat_map(|(ix, tab)| {
                     let mark = super::rail::initials(&tab.title);
                     let tint = super::rail::hue(&tab.title);
-                    div()
+                    let active = tab.active;
+                    let row = div()
                         .id(("menu-project", ix))
                         .h(px(32.))
                         .flex()
@@ -291,14 +313,22 @@ impl Workspace {
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(tab.title.clone()),
                             )
-                            .children(
-                                (!tab.active && tab.unread > 0).then(|| {
-                                    div()
-                                        .flex_none()
-                                        .text_size(px(11.))
-                                        .text_color(theme::accent())
-                                        .child(tab.unread.to_string())
-                                }),
+                            .children((!tab.active && tab.unread > 0).then(|| {
+                                div()
+                                    .flex_none()
+                                    .text_size(px(11.))
+                                    .text_color(theme::accent())
+                                    .child(tab.unread.to_string())
+                            }))
+                            // Open (its places under it) or another one to switch to.
+                            .child(
+                                icons::icon(if tab.active {
+                                    "chevron"
+                                } else {
+                                    "chevron-right"
+                                })
+                                .size(px(14.))
+                                .text_color(theme::faint()),
                             )
                         })
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
@@ -306,16 +336,16 @@ impl Workspace {
                                 s.select(ix, window, cx)
                             })
                         }))
+                        .into_any_element();
+                    let mut rows = vec![row];
+                    if active {
+                        rows.extend(places(true));
+                    }
+                    rows
                 }))
-                .child(heading("Repository"))
-                .child(item(Place::Commits, "commit", "Commits", None))
-                .child(item(Place::Branches, "branch", "Branches", None))
-                .child(item(
-                    Place::WorkingTree,
-                    "files",
-                    "Working tree",
-                    Some(self.wt.count),
-                ))
+                .when(!nested, |s| {
+                    s.child(heading("Repository")).children(places(false))
+                })
                 .child(div().flex_1())
                 .child(item(Place::Settings, "settings", "Settings", None)),
         )
