@@ -561,6 +561,7 @@ fn code_block(lang: &str, text: &str, marks: &[(usize, Mark)], ctx: &mut Ctx) ->
                             HighlightStyle {
                                 color: Some(theme::code(s.color)),
                                 font_style: s.italic.then_some(FontStyle::Italic),
+                                font_weight: s.bold.then_some(gpui::FontWeight::SEMIBOLD),
                                 ..Default::default()
                             },
                         )

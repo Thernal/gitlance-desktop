@@ -443,6 +443,8 @@ pub struct Run {
     pub range: Range<usize>,
     pub color: Option<u32>,
     pub italic: bool,
+    /// A declared function's name (#13).
+    pub bold: bool,
     /// Inside a changed token.
     pub marked: bool,
     /// Inside a word the search is looking for.
@@ -497,13 +499,20 @@ pub fn runs(
             range: start..end,
             color: span.map(|s| s.color),
             italic: span.is_some_and(|s| s.italic),
+            bold: span.is_some_and(|s| s.bold),
             marked: marks.iter().any(|r| r.start <= start && end <= r.end),
             found: found.iter().any(|r| r.start <= start && end <= r.end),
             selected: selected
                 .as_ref()
                 .is_some_and(|r| r.start <= start && end <= r.end),
         };
-        if run.color.is_none() && !run.italic && !run.marked && !run.found && !run.selected {
+        if run.color.is_none()
+            && !run.italic
+            && !run.bold
+            && !run.marked
+            && !run.found
+            && !run.selected
+        {
             continue;
         }
         match out.last_mut() {
@@ -512,10 +521,18 @@ pub fn runs(
                     && (
                         last.color,
                         last.italic,
+                        last.bold,
                         last.marked,
                         last.found,
                         last.selected,
-                    ) == (run.color, run.italic, run.marked, run.found, run.selected) =>
+                    ) == (
+                        run.color,
+                        run.italic,
+                        run.bold,
+                        run.marked,
+                        run.found,
+                        run.selected,
+                    ) =>
             {
                 last.range.end = end
             }
@@ -829,6 +846,7 @@ mod tests {
             range,
             color,
             italic: false,
+            bold: false,
         };
         let runs = runs(
             "let x = 10;",

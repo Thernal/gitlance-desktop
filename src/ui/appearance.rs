@@ -33,6 +33,61 @@ fn c(t: &Theme, tok: T) -> Rgba {
     rgba(t.get(tok))
 }
 
+/// The editor's rows: the tokens, then the parse tree's roles (`TOKENS.len()` + n, #13).
+const ROWS: usize = TOKENS.len() + themes::ROLES;
+
+/// Row `i`'s colour in `t`: a token's, or a role's — the token it falls back to when `t` gives it
+/// none.
+fn value(t: &Theme, i: usize) -> u32 {
+    use crate::highlight::role;
+    let Some(r) = i.checked_sub(TOKENS.len()) else {
+        return t.colors[i];
+    };
+    t.roles[r].unwrap_or(match role::ROLES[r].token {
+        n @ 1..=8 => t.colors[T::Code1 as usize + n as usize - 1],
+        role::MUTED => t.get(T::Text2),
+        _ => t.get(T::Text1),
+    })
+}
+
+/// Whether `t` sets row `i` itself.
+fn own(t: &Theme, i: usize) -> bool {
+    match i.checked_sub(TOKENS.len()) {
+        None => t.own.contains(&i),
+        Some(r) => t.own_roles.contains(&r),
+    }
+}
+
+/// Whether row `i` is text, read on every surface: the text tokens and every role.
+fn is_text(i: usize) -> bool {
+    i >= TOKENS.len() || themes::TEXT.iter().any(|&x| x as usize == i)
+}
+
+/// Row `i`'s name and what it is for.
+fn row_name(i: usize) -> (String, String) {
+    use crate::highlight::role;
+    match i.checked_sub(TOKENS.len()) {
+        None => (TOKENS[i].0.to_owned(), TOKENS[i].2.to_owned()),
+        Some(r) => {
+            let look = &role::ROLES[r];
+            let falls = match look.token {
+                n @ 1..=8 => format!("code-0{n}"),
+                role::MUTED => "content-02".to_owned(),
+                _ => "content-01".to_owned(),
+            };
+            let style = match (look.bold, look.italic) {
+                (true, _) => " · semibold",
+                (_, true) => " · italic",
+                _ => "",
+            };
+            (
+                format!("code.{}", look.name),
+                format!("role · falls back to {falls}{style}"),
+            )
+        }
+    }
+}
+
 /// The Window card's face (`cards-5.html` A): tabs on the left, the selected one in the accent;
 /// code as bars, a removed and two added lines in the diff's tints.
 fn window_face(t: &Theme) -> Div {
@@ -979,11 +1034,16 @@ impl Workspace {
                 edit.theme.colors[i] = base.colors[i];
             }
         }
+        for r in 0..themes::ROLES {
+            if !edit.theme.own_roles.contains(&r) {
+                edit.theme.roles[r] = base.roles[r];
+            }
+        }
         edit.theme.extends = Some(base.id.clone());
         edit.base = base;
         edit.said = None;
         if let Some(i) = edit.selected {
-            self.theme_value = themes::hex(edit.theme.colors[i]);
+            self.theme_value = themes::hex(value(&edit.theme, i));
         }
         cx.notify();
     }
@@ -998,7 +1058,7 @@ impl Workspace {
             return cx.notify();
         }
         edit.selected = Some(i);
-        self.theme_value = themes::hex(edit.theme.colors[i]);
+        self.theme_value = themes::hex(value(&edit.theme, i));
         self.start_field(Field::ThemeValue, cx);
     }
 
@@ -1007,10 +1067,40 @@ impl Workspace {
         let Some(edit) = &mut self.theme_edit else {
             return;
         };
-        edit.theme.colors[i] = color;
-        if !edit.theme.own.contains(&i) {
-            edit.theme.own.push(i);
+        match i.checked_sub(TOKENS.len()) {
+            None => {
+                edit.theme.colors[i] = color;
+                if !edit.theme.own.contains(&i) {
+                    edit.theme.own.push(i);
+                }
+            }
+            Some(r) => {
+                edit.theme.roles[r] = Some(color);
+                if !edit.theme.own_roles.contains(&r) {
+                    edit.theme.own_roles.push(r);
+                }
+            }
         }
+        edit.said = None;
+        cx.notify();
+    }
+
+    /// Row `i` back to what the theme it extends has.
+    fn reset_token(&mut self, i: usize, cx: &mut Context<Self>) {
+        let Some(edit) = &mut self.theme_edit else {
+            return;
+        };
+        match i.checked_sub(TOKENS.len()) {
+            None => {
+                edit.theme.colors[i] = edit.base.colors[i];
+                edit.theme.own.retain(|&o| o != i);
+            }
+            Some(r) => {
+                edit.theme.roles[r] = edit.base.roles[r];
+                edit.theme.own_roles.retain(|&o| o != r);
+            }
+        }
+        self.theme_value = themes::hex(value(&edit.theme, i));
         edit.said = None;
         cx.notify();
     }
@@ -1043,7 +1133,7 @@ impl Workspace {
             self.theme_value = self
                 .theme_edit
                 .as_ref()
-                .map(|e| themes::hex(e.theme.colors[i]))
+                .map(|e| themes::hex(value(&e.theme, i)))
                 .unwrap_or_default();
         }
     }
@@ -1100,7 +1190,7 @@ impl Workspace {
         edit.theme = edit.start.clone();
         edit.said = None;
         if let Some(i) = edit.selected {
-            self.theme_value = themes::hex(edit.theme.colors[i]);
+            self.theme_value = themes::hex(value(&edit.theme, i));
         }
         cx.notify();
     }
@@ -1114,14 +1204,15 @@ impl Workspace {
         let worst = |i: usize| {
             themes::SURFACES
                 .iter()
-                .map(|&s| themes::contrast(t.colors[i], t.get(s)))
+                .map(|&s| themes::contrast(value(t, i), t.get(s)))
                 .fold(f32::MAX, f32::min)
         };
-        let is_text = |i: usize| themes::TEXT.iter().any(|&x| x as usize == i);
         let mut list: Vec<AnyElement> = Vec::new();
         let mut group = "";
-        for (i, (name, g, what)) in TOKENS.iter().enumerate() {
-            if *g != group {
+        for i in 0..ROWS {
+            let g = TOKENS.get(i).map_or("Code roles", |(_, g, _)| g);
+            let (name, what) = row_name(i);
+            if g != group {
                 group = g;
                 list.push(
                     div()
@@ -1134,7 +1225,7 @@ impl Workspace {
                         .into_any_element(),
                 );
             }
-            let own = t.own.contains(&i);
+            let own = own(t, i);
             let selected = edit.selected == Some(i);
             let ratio = is_text(i).then(|| worst(i));
             list.push(
@@ -1157,7 +1248,7 @@ impl Workspace {
                             .rounded(px(4.))
                             .border_1()
                             .border_color(theme::island_border())
-                            .bg(rgba(t.colors[i])),
+                            .bg(rgba(value(t, i))),
                     )
                     .child(
                         div()
@@ -1165,7 +1256,7 @@ impl Workspace {
                             .flex_none()
                             .font_family(theme::CODE_FONT)
                             .text_color(if own { theme::text() } else { theme::faint() })
-                            .child(*name),
+                            .child(name),
                     )
                     .child(
                         div()
@@ -1173,15 +1264,12 @@ impl Workspace {
                             .flex_none()
                             .font_family(theme::CODE_FONT)
                             .text_color(if own { theme::text() } else { theme::faint() })
-                            .child(themes::hex(t.colors[i])),
+                            .child(themes::hex(value(t, i))),
                     )
                     .child(
-                        div()
+                        super::hover::cut(("token-what", i), what)
                             .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(theme::muted())
-                            .child(*what),
+                            .text_color(theme::muted()),
                     )
                     .children(ratio.map(|r| {
                         let ok = r >= 4.5;
@@ -1214,7 +1302,7 @@ impl Workspace {
                 );
             }
         }
-        let set = t.own.len();
+        let set = t.own.len() + t.own_roles.len();
         let from_label = edit.base.label.clone();
         let file = t
             .file
@@ -1378,7 +1466,7 @@ impl Workspace {
                     .gap(px(8.))
                     .text_size(px(11.))
                     .text_color(theme::faint())
-                    .child(format!("{set} set · {} from {from_label}", TOKENS.len() - set))
+                    .child(format!("{set} set · {} from {from_label}", ROWS - set))
                     .child(div().flex_1())
                     .child(div().font_family(theme::CODE_FONT).child(file)),
             )
@@ -1391,13 +1479,12 @@ impl Workspace {
             return div().into_any_element();
         };
         let t = &edit.theme;
-        let text = themes::TEXT.iter().any(|&x| x as usize == i);
+        let text = is_text(i);
         let active = self.field == Some(Field::ThemeValue);
         let low = text
             && themes::SURFACES
                 .iter()
-                .any(|&s| themes::contrast(t.colors[i], t.get(s)) < 4.5);
-        let base = edit.base.colors[i];
+                .any(|&s| themes::contrast(value(t, i), t.get(s)) < 4.5);
         let base_label = edit.base.label.clone();
         div()
             .ml(px(36.))
@@ -1456,7 +1543,7 @@ impl Workspace {
                     .flex_wrap()
                     .gap(px(14.))
                     .children(themes::SURFACES.iter().map(|&s| {
-                        let r = themes::contrast(t.colors[i], t.get(s));
+                        let r = themes::contrast(value(t, i), t.get(s));
                         div()
                             .flex()
                             .gap(px(4.))
@@ -1484,7 +1571,7 @@ impl Workspace {
                                 let Some(edit) = &this.theme_edit else {
                                     return;
                                 };
-                                let c = themes::raise(&edit.theme, edit.theme.colors[i]);
+                                let c = themes::raise(&edit.theme, value(&edit.theme, i));
                                 this.theme_value = themes::hex(c);
                                 this.set_token(i, c, cx);
                             },
@@ -1493,11 +1580,7 @@ impl Workspace {
                     .child(
                         small_button("theme-base", format!("Use {base_label}'s")).on_click(
                             cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.theme_value = themes::hex(base);
-                                this.set_token(i, base, cx);
-                                if let Some(edit) = &mut this.theme_edit {
-                                    edit.theme.own.retain(|&o| o != i);
-                                }
+                                this.reset_token(i, cx);
                             }),
                         ),
                     ),

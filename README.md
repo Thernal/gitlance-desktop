@@ -51,7 +51,7 @@ Rust end to end.
   pinned to the `gpui-pre` snapshot. [`gpui-component`](https://github.com/longbridge/gpui-component) joins
   when a widget (resizable panes, selects) earns it.
 - **Git:** `git2` (libgit2, vendored), read-only; the rebase-aware version diff merges in memory.
-- **Highlighting:** `syntect` with bat's syntaxes (`two-face`), in the theme's code colours.
+- **Highlighting:** `tree-sitter` for Kotlin, Java, Rust, Swift, TypeScript, JavaScript, Go, Python, JSON, YAML and Markdown — a declared function from a call, a parameter from a local, fields, constants — and `syntect` with bat's syntaxes (`two-face`) for the rest, in the theme's code colours.
 - **Structural diff:** difftastic's JSON output (`difft --display json`), optional.
 
 ## Why not an existing app

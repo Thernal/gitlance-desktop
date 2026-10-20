@@ -113,6 +113,7 @@ impl Workspace {
                                 HighlightStyle {
                                     color: Some(theme::code(s.color)),
                                     font_style: s.italic.then_some(FontStyle::Italic),
+                                    font_weight: s.bold.then_some(gpui::FontWeight::SEMIBOLD),
                                     ..Default::default()
                                 },
                             )
@@ -254,6 +255,7 @@ mod tests {
             range: r,
             color: 1,
             italic: false,
+            bold: false,
         };
         let (text, spans) = widen("\tfn x", &[span(1..3)]);
         assert_eq!(text.as_ref(), "    fn x");

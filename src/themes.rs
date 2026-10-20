@@ -4,8 +4,12 @@
 //! theme `extends` another (One Dark by default) and sets only what differs; what cannot be read is
 //! listed as its problems, and the rest still loads. `ui::theme` draws with the one in use.
 
+use crate::highlight::role;
 use serde_json::{Map, Value};
 use std::path::PathBuf;
+
+/// How many roles a theme may colour by name (`code.parameter` …, #13).
+pub const ROLES: usize = role::ROLES.len();
 
 /// The tokens a theme sets, in the editor's order: (name, group, what it is for).
 pub const TOKENS: [(&str, &str, &str); 41] = [
@@ -166,6 +170,9 @@ pub struct Theme {
     /// As shown: "One Dark", or the user's name.
     pub label: String,
     pub colors: [u32; TOKENS.len()],
+    /// The parse tree's roles it gives a colour of their own (`code.parameter`); the rest are drawn
+    /// with their code token (#13, X45).
+    pub roles: [Option<u32>; ROLES],
     /// Offered as a window theme: its file sets `colors` or `window`, or neither part apart.
     pub window: bool,
     /// Offered as a code theme: its file sets `colors` or `code`, or neither part apart.
@@ -178,6 +185,8 @@ pub struct Theme {
     pub extends: Option<String>,
     /// The tokens it sets itself (the rest come from `extends`).
     pub own: Vec<usize>,
+    /// The roles it colours itself.
+    pub own_roles: Vec<usize>,
     /// What could not be read, and text under 4.5:1.
     pub problems: Vec<String>,
     /// The file it was read from (a user theme).
@@ -205,6 +214,14 @@ impl Theme {
                     colors.insert((*name).to_owned(), Value::String(hex(self.colors[i])));
                 }
             }
+            // Roles are code: in `colors` or `code`.
+            if part != Some(false) {
+                for (r, look) in role::ROLES.iter().enumerate() {
+                    if let Some(c) = self.roles[r].filter(|_| full || self.own_roles.contains(&r)) {
+                        colors.insert(format!("code.{}", look.name), Value::String(hex(c)));
+                    }
+                }
+            }
             Value::Object(colors)
         };
         let mut root = Map::new();
@@ -213,7 +230,9 @@ impl Theme {
             root.insert("extends".into(), Value::String(e.clone()));
         }
         if self.split && !full {
-            let sets = |code: bool| self.own.iter().any(|&i| is_code(i) == code);
+            let sets = |code: bool| {
+                self.own.iter().any(|&i| is_code(i) == code) || (code && !self.own_roles.is_empty())
+            };
             if self.window || sets(false) {
                 root.insert("window".into(), colors(Some(false)));
             }
@@ -247,6 +266,7 @@ struct Raw {
     label: String,
     extends: Option<String>,
     colors: Vec<(usize, u32)>,
+    roles: Vec<(usize, u32)>,
     problems: Vec<String>,
     built_in: bool,
     file: Option<PathBuf>,
@@ -330,11 +350,21 @@ fn read_raw(text: &str, fallback: &str) -> Raw {
             continue;
         };
         for (name, value) in colors {
-            // Code roles (`code.parameter`) are known names; they fall back to their code token
-            // until the highlighter draws roles of its own (#13).
-            if name.starts_with("code.") {
+            // A role by name (`code.parameter`): its own colour (#13, X45).
+            if let Some(r) = name.strip_prefix("code.") {
                 if part == Some(false) {
                     raw.problems.push(format!("“{name}” belongs in “code”"));
+                    continue;
+                }
+                let Some(r) = role::named(r) else {
+                    raw.problems.push(format!("No role “{name}”"));
+                    continue;
+                };
+                match value.as_str().and_then(parse_hex) {
+                    Some(c) => raw.roles.push((r, c)),
+                    None => raw.problems.push(format!(
+                        "{name}: “{value}” is not #rgb, #rrggbb or #rrggbbaa"
+                    )),
                 }
                 continue;
             }
@@ -424,21 +454,27 @@ pub fn resolve(user: &[(PathBuf, String)]) -> Vec<Theme> {
         for (i, c) in base(&raws) {
             colors[i] = c;
         }
+        let mut roles = [None; ROLES];
         for r in chain.iter().rev() {
             for &(i, c) in &r.colors {
                 colors[i] = c;
+            }
+            for &(i, c) in &r.roles {
+                roles[i] = Some(c);
             }
         }
         let mut theme = Theme {
             id: raw.id.clone(),
             label: raw.label.clone(),
             colors,
+            roles,
             window: raw.window,
             code: raw.code,
             split: raw.split,
             built_in: raw.built_in,
             extends: raw.extends.clone(),
             own: raw.colors.iter().map(|(i, _)| *i).collect(),
+            own_roles: raw.roles.iter().map(|(i, _)| *i).collect(),
             problems: Vec::new(),
             file: raw.file.clone(),
         };
@@ -608,6 +644,13 @@ mod tests {
         assert_eq!(mine.get(T::Accent), 0xe5c07bff);
         assert_eq!(mine.get(T::Bg1), night.get(T::Bg1));
         assert!(mine.window && mine.code);
+        // A role by name keeps its colour (#13).
+        let parameter = role::named("parameter").unwrap();
+        assert_eq!(mine.roles[parameter], Some(0xd19a66ff));
+        assert!(
+            mine.to_json(false)
+                .contains("\"code.parameter\": \"#d19a66\"")
+        );
         // `islands` is a setting now (D12): the file is told so.
         assert_eq!(mine.problems.len(), 3, "{:?}", mine.problems);
         assert!(mine.problems.iter().any(|p| p.contains("Settings")));

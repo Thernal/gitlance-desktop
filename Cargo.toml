@@ -24,6 +24,21 @@ gpui = { package = "gpui-pre", version = "=0.3.8" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = ["runtime_shaders", "font-kit"] }
 syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-onig"] }
 two-face = "0.5"
+# Highlighting from a parse tree for the main languages (#13, D23); syntect stays for the rest.
+tree-sitter = "0.27"
+tree-sitter-highlight = "0.27"
+tree-sitter-language = "0.1"
+tree-sitter-kotlin-ng = "1.1"
+tree-sitter-java = "0.23"
+tree-sitter-rust = "0.24"
+tree-sitter-swift = "0.7"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-go = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-json = "0.24"
+tree-sitter-yaml = "0.7"
+tree-sitter-md = "0.5"
 
 # Linux windows through X11 and Wayland (features add up with the line above).
 [target.'cfg(target_os = "linux")'.dependencies]

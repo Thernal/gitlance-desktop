@@ -29,6 +29,9 @@ pub fn set(window: &Theme, code: Option<&Theme>) {
     if let Ok(mut current) = CURRENT.write() {
         *current = Some(colors);
     }
+    if let Ok(mut roles) = ROLE_COLORS.write() {
+        *roles = code.roles;
+    }
 }
 
 fn raw(i: usize) -> u32 {
@@ -207,13 +210,32 @@ pub fn removed_gutter() -> Rgba {
 }
 
 /// The colour of code drawn in `role` (`crate::highlight::Span::color`): `code-01` … `code-08`,
-/// 0 the code's text.
+/// 0 the code's text; a parse tree's role (`highlight::role::BASE` + n) in the code theme's own
+/// colour for it (`code.parameter` …, X45), else in the code token it falls back to.
 pub fn code(role: u32) -> Hsla {
-    match role {
-        1..=8 => rgba(raw(T::Code1 as usize + role as usize - 1)).into(),
+    use crate::highlight::role as r;
+    let token = |n: u32| match n {
+        1..=8 => rgba(raw(T::Code1 as usize + n as usize - 1)).into(),
+        r::MUTED => muted().into(),
         _ => code_text().into(),
+    };
+    if role < r::BASE {
+        return token(role);
+    }
+    let ix = (role - r::BASE) as usize;
+    match ROLE_COLORS
+        .read()
+        .ok()
+        .and_then(|c| c.get(ix).copied().flatten())
+    {
+        Some(c) => rgba(c).into(),
+        None => token(r::ROLES.get(ix).map_or(0, |l| l.token)),
     }
 }
+
+/// The code theme's own colours for the parse tree's roles.
+static ROLE_COLORS: RwLock<[Option<u32>; crate::highlight::role::ROLES.len()]> =
+    RwLock::new([None; crate::highlight::role::ROLES.len()]);
 
 /// The tint behind a removed line's pill or a failed check. `--danger-bg`
 pub fn danger_bg() -> Rgba {

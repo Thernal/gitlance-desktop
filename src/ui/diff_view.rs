@@ -387,6 +387,7 @@ fn code(
                 HighlightStyle {
                     color: run.color.map(theme::code),
                     font_style: run.italic.then_some(FontStyle::Italic),
+                    font_weight: run.bold.then_some(gpui::FontWeight::SEMIBOLD),
                     ..if run.selected {
                         HighlightStyle {
                             background_color: Some(theme::selection().into()),
