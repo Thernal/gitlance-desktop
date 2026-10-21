@@ -1348,6 +1348,9 @@ pub struct Workspace {
     win_width: f32,
     /// The diff is narrower than 700 px: it is drawn unified whatever the option says.
     narrow: bool,
+    /// The diff is narrower than 600 px: a comment's secondary buttons keep only their icon, the
+    /// keycaps go and its indent gives way (#69).
+    tight: bool,
     /// The files list is open over the diff (a window too narrow for its column).
     /// The comment marks of the open file's gutter.
     notes: Vec<diff_view::LineNote>,
@@ -1569,6 +1572,7 @@ impl Workspace {
             picker_open: false,
             win_width: 1480.,
             narrow: false,
+            tight: false,
             notes: Vec::new(),
             toggled_mr: HashSet::new(),
             toggled_agent: HashSet::new(),
@@ -3694,7 +3698,11 @@ impl Workspace {
                 (Some(stack), Some((_, f))) => stack.matches.get(stack.match_at) == Some(&(f, ix)),
                 _ => workspace.matches.get(workspace.match_at) == Some(&ix),
             };
-            let indent = style.gutter + 8.;
+            let indent = if workspace.tight {
+                24.
+            } else {
+                style.gutter + 8.
+            };
             match row {
                 Row::Thread(id) => return workspace.render_thread(id, indent, this.clone()),
                 Row::Request(ix) => {

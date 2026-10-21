@@ -230,6 +230,45 @@ const ICONS: &[(&str, &str)] = &[
             r#"<path d="M18 9a9 9 0 0 1-9 9"/>"#
         ),
     ),
+    // A comment's secondary buttons keep only these when the diff is narrow (#69).
+    (
+        "pencil",
+        lucide!(
+            r#"<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/>"#
+            r#"<path d="m15 5 4 4"/>"#
+        ),
+    ),
+    ("check", lucide!(r#"<path d="M20 6 9 17l-5-5"/>"#)),
+    (
+        "rotate-ccw",
+        lucide!(
+            r#"<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>"#
+            r#"<path d="M3 3v5h5"/>"#
+        ),
+    ),
+    (
+        "trash",
+        lucide!(
+            r#"<path d="M10 11v6"/><path d="M14 11v6"/>"#
+            r#"<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>"#
+            r#"<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>"#
+        ),
+    ),
+    (
+        "send",
+        lucide!(
+            r#"<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/>"#
+            r#"<path d="m21.854 2.147-10.94 10.939"/>"#
+        ),
+    ),
+    (
+        "layers",
+        lucide!(
+            r#"<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/>"#
+            r#"<path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/>"#
+            r#"<path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>"#
+        ),
+    ),
 ];
 
 /// Serves the embedded icons to GPUI's SVG renderer.

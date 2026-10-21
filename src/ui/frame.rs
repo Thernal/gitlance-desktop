@@ -845,8 +845,11 @@ impl Render for Workspace {
         }
         let body = self.body_width.get();
         let narrow = body > 0. && body < 700.;
-        if narrow != self.narrow {
+        // At the interface size chosen: 600 px of the design is more at 150 %.
+        let tight = body > 0. && body < f32::from(px(600.));
+        if narrow != self.narrow || tight != self.tight {
             self.narrow = narrow;
+            self.tight = tight;
             self.relayout_all();
         }
         self.follow_scroll(cx);

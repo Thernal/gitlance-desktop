@@ -300,6 +300,71 @@ pub fn button(
     kind: Kind,
 ) -> Stateful<Div> {
     let filled = matches!(kind, Kind::Primary(_));
+    shell(id, kind)
+        .child(label.into())
+        .children(key.map(|k| keys::caps(k, if filled { On::Filled } else { On::Plain })))
+}
+
+/// A secondary button with its icon before the label (#69, Design shell round 4, C). `bare` — a
+/// comment in a narrow diff — keeps only the icon: the label, the key and `about` go to the
+/// tooltip. The caller sets no tooltip of its own.
+pub fn icon_button(
+    id: impl Into<ElementId>,
+    icon: &'static str,
+    label: impl Into<SharedString>,
+    key: Option<&'static str>,
+    about: Option<&'static str>,
+    kind: Kind,
+    bare: bool,
+) -> Stateful<Div> {
+    const GROUP: &str = "discussion-icon-button";
+    let label = label.into();
+    let ink = match kind {
+        Kind::Plain => theme::text(),
+        Kind::Quiet => theme::muted(),
+        Kind::Danger => theme::removed(),
+        Kind::Primary(_) => theme::base(),
+    };
+    let glyph = super::icons::icon(icon)
+        .size(px(14.))
+        .text_color(ink)
+        .when(matches!(kind, Kind::Quiet), |s| {
+            s.group_hover(GROUP, |s| s.text_color(theme::text()))
+        });
+    let tip: Option<SharedString> = if bare {
+        let named = match key {
+            Some(k) if k.chars().count() == 1 => format!("{label}  {}", k.to_uppercase()),
+            Some(k) => format!("{label}  {k}"),
+            None => label.to_string(),
+        };
+        // "Add to review  ⇧⌘↵ — Pending until you submit the review"
+        Some(match about {
+            Some(about) => format!("{named} — {about}").into(),
+            None => named.into(),
+        })
+    } else {
+        about.map(SharedString::from)
+    };
+    let filled = matches!(kind, Kind::Primary(_));
+    let button = shell(id, kind).group(GROUP).child(glyph).map(|s| {
+        if bare {
+            s.px(px(8.))
+        } else {
+            s.child(label)
+                .children(key.map(|k| keys::caps(k, if filled { On::Filled } else { On::Plain })))
+        }
+    });
+    match tip {
+        Some(tip) => button
+            .tooltip_show_delay(super::hover::LONG)
+            .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into()),
+        None => button,
+    }
+}
+
+/// What every discussion button shares: its height, shape and colours by kind. A label never
+/// breaks (Design shell round 4).
+fn shell(id: impl Into<ElementId>, kind: Kind) -> Stateful<Div> {
     div()
         .id(id)
         .h(px(32.))
@@ -310,6 +375,7 @@ pub fn button(
         .gap(px(8.))
         .rounded(px(6.))
         .text_size(px(12.))
+        .whitespace_nowrap()
         .cursor_pointer()
         .map(|s| match kind {
             Kind::Plain => s
@@ -332,8 +398,6 @@ pub fn button(
                 .font_weight(FontWeight::SEMIBOLD)
                 .hover(|s| s.opacity(0.9)),
         })
-        .child(label.into())
-        .children(key.map(|k| keys::caps(k, if filled { On::Filled } else { On::Plain })))
 }
 
 /// A quiet word in a discussion's head (Raw, Delete): text that lights up under the pointer.

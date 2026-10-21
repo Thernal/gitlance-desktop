@@ -804,6 +804,7 @@ impl Workspace {
                             super::comments::edit_button(
                                 ("edit-note", note.id as usize),
                                 key,
+                                self.tight,
                                 change,
                                 edit.clone(),
                             )
@@ -884,17 +885,28 @@ impl Workspace {
                             .cursor_text()
                             .hover(|s| s.border_color(theme::muted()))
                             .child(div().flex_1().child("Reply…"))
-                            .child(super::keys::caps("r", super::keys::On::Plain))
+                            .children(
+                                (!self.tight)
+                                    .then(|| super::keys::caps("r", super::keys::On::Plain)),
+                            )
                             .on_click(move |_, _, cx| {
                                 reply.update(cx, |this, cx| this.start_reply(ix, cx)).ok();
                             }),
                     )
                     .children(t.resolvable.then(|| {
-                        discussion::button(
+                        let (icon, label) = if t.resolved {
+                            ("rotate-ccw", "Reopen")
+                        } else {
+                            ("check", "Resolve")
+                        };
+                        discussion::icon_button(
                             ("thread-resolve", ix),
-                            if t.resolved { "Reopen" } else { "Resolve" },
+                            icon,
+                            label,
                             Some("x"),
+                            None,
                             Kind::Plain,
+                            self.tight,
                         )
                         .h(px(34.))
                         .on_click(move |_, _, cx| {
@@ -1107,14 +1119,22 @@ impl Workspace {
                     })
             }))
             .child(
-                discussion::button(("draft-delete", ix), "Delete", None, Kind::Danger)
-                    .h(px(24.))
-                    .px(px(8.))
-                    .on_click(move |_, _, cx| {
-                        delete
-                            .update(cx, |this, cx| this.discard_draft(id, cx))
-                            .ok();
-                    }),
+                discussion::icon_button(
+                    ("draft-delete", ix),
+                    "trash",
+                    "Delete",
+                    None,
+                    None,
+                    Kind::Danger,
+                    self.tight,
+                )
+                .h(px(24.))
+                .px(px(8.))
+                .on_click(move |_, _, cx| {
+                    delete
+                        .update(cx, |this, cx| this.discard_draft(id, cx))
+                        .ok();
+                }),
             );
         div()
             .w_full()

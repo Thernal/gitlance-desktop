@@ -14,14 +14,15 @@ use crate::review::{self, Comment, Place, State};
 use crate::textedit::TextEdit;
 use gpui::{ClipboardItem, Context, KeyDownEvent, WeakEntity, div, prelude::*};
 
-/// The quiet Edit on one's own note.
+/// The quiet Edit on one's own note: a pencil, alone in a narrow diff (#69).
 pub(super) fn edit_button(
     id: impl Into<gpui::ElementId>,
     key: Option<&'static str>,
+    bare: bool,
     change: Change,
     this: WeakEntity<Workspace>,
 ) -> gpui::AnyElement {
-    discussion::button(id, "Edit", key, Kind::Quiet)
+    discussion::icon_button(id, "pencil", "Edit", key, None, Kind::Quiet, bare)
         .h(px(22.))
         .px(px(6.))
         .on_click(move |_, _, cx| {
@@ -914,7 +915,7 @@ impl Workspace {
             discussion::button(
                 "edit-save",
                 if compose.posting { "Saving…" } else { "Save" },
-                (!compose.posting).then_some("⌘↵"),
+                (!compose.posting && !self.tight).then_some("⌘↵"),
                 Kind::Primary(tone),
             )
             .h(px(28.))
@@ -1816,27 +1817,43 @@ impl Workspace {
             }))
             .children(
                 matches!(comment.state, State::Addressed | State::Resolved).then(|| {
-                    discussion::button(("reopen-agent", id), "Reopen", None, Kind::Plain)
-                        .h(px(24.))
-                        .px(px(8.))
-                        .on_click(move |_, _, cx| {
-                            cx.stop_propagation();
-                            reopen
-                                .update(cx, |this, cx| this.reopen_agent_comment(id, cx))
-                                .ok();
-                        })
-                }),
-            )
-            .child(
-                discussion::button(("delete-comment", id), "Delete", None, Kind::Danger)
+                    discussion::icon_button(
+                        ("reopen-agent", id),
+                        "rotate-ccw",
+                        "Reopen",
+                        None,
+                        None,
+                        Kind::Plain,
+                        self.tight,
+                    )
                     .h(px(24.))
                     .px(px(8.))
                     .on_click(move |_, _, cx| {
                         cx.stop_propagation();
-                        delete
-                            .update(cx, |this, cx| this.delete_comment(id, cx))
+                        reopen
+                            .update(cx, |this, cx| this.reopen_agent_comment(id, cx))
                             .ok();
-                    }),
+                    })
+                }),
+            )
+            .child(
+                discussion::icon_button(
+                    ("delete-comment", id),
+                    "trash",
+                    "Delete",
+                    None,
+                    None,
+                    Kind::Danger,
+                    self.tight,
+                )
+                .h(px(24.))
+                .px(px(8.))
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    delete
+                        .update(cx, |this, cx| this.delete_comment(id, cx))
+                        .ok();
+                }),
             )
             .on_click(move |_, _, cx| {
                 fold.update(cx, |this, cx| {
@@ -1867,7 +1884,7 @@ impl Workspace {
             },
             comment.replies.is_empty(),
             (self.compose.is_none())
-                .then(|| edit_button(("edit-agent", id), None, change, editing)),
+                .then(|| edit_button(("edit-agent", id), None, self.tight, change, editing)),
             None,
         );
         let replies = comment.replies.iter().enumerate().map(|(ix, reply)| {
@@ -2019,41 +2036,42 @@ impl Workspace {
         ];
         if let (Target::Request(iid), false) = (compose.target, compose.posting) {
             tail.push(
-                discussion::button("compose-review", "Add to review", Some("⇧⌘↵"), Kind::Plain)
-                    .h(px(28.))
-                    .px(px(10.))
-                    .tooltip_show_delay(crate::ui::hover::LONG)
-                    .tooltip(|_, cx| {
-                        cx.new(|_| super::Tip("Pending until you submit the review"))
-                            .into()
-                    })
-                    .on_click(move |_, _, cx| {
-                        review
-                            .update(cx, |this, cx| this.post_comment(iid, true, cx))
-                            .ok();
-                    })
-                    .into_any_element(),
+                discussion::icon_button(
+                    "compose-review",
+                    "layers",
+                    "Add to review",
+                    Some("⇧⌘↵"),
+                    Some("Pending until you submit the review"),
+                    Kind::Plain,
+                    self.tight,
+                )
+                .h(px(28.))
+                .px(px(10.))
+                .on_click(move |_, _, cx| {
+                    review
+                        .update(cx, |this, cx| this.post_comment(iid, true, cx))
+                        .ok();
+                })
+                .into_any_element(),
             );
         }
         if compose.target == Target::Agent {
             tail.push(
-                discussion::button(
+                discussion::icon_button(
                     "compose-send-all",
-                    &if drafts > 0 {
+                    "send",
+                    if drafts > 0 {
                         format!("Send all {}", drafts + 1)
                     } else {
                         "Send".to_owned()
                     },
                     Some("⇧⌘↵"),
+                    Some("Adds it and sends every draft to your agent's chat"),
                     Kind::Plain,
+                    self.tight,
                 )
                 .h(px(28.))
                 .px(px(10.))
-                .tooltip_show_delay(crate::ui::hover::LONG)
-                .tooltip(|_, cx| {
-                    cx.new(|_| super::Tip("Adds it and sends every draft to your agent's chat"))
-                        .into()
-                })
                 .on_click(move |_, _, cx| {
                     send_all
                         .update(cx, |this, cx| this.add_and_send(false, cx))
@@ -2098,7 +2116,7 @@ impl Workspace {
             discussion::button(
                 "compose-add",
                 primary,
-                (!compose.posting).then_some("⌘↵"),
+                (!compose.posting && !self.tight).then_some("⌘↵"),
                 Kind::Primary(tone),
             )
             .h(px(28.))
@@ -2174,7 +2192,7 @@ impl Workspace {
                 } else {
                     "Reply"
                 },
-                (!compose.posting).then_some("⌘↵"),
+                (!compose.posting && !self.tight).then_some("⌘↵"),
                 Kind::Primary(tone),
             )
             .h(px(28.))
