@@ -356,9 +356,10 @@ impl Workspace {
         ))
     }
 
-    /// The gap between the diff and the stripe when no tool window is open.
+    /// The gap between the page and the stripe, a tool window open or not: opening one moves
+    /// nothing outside it, the header above included (#68).
     pub(super) fn stripe_gap(&self) -> Option<impl IntoElement + use<>> {
-        (!self.tool_shown() && self.root.is_some() && self.zen.is_none() && !self.settings_open)
+        (self.root.is_some() && self.zen.is_none() && !self.settings_open)
             .then(|| div().flex_none().w(px(super::gap())))
     }
 }
