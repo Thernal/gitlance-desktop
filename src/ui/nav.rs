@@ -501,7 +501,7 @@ impl Workspace {
             }
             Space::Requests => {
                 if self.nav.pick_request.is_none() {
-                    self.nav.pick_request = self.shown_requests().first().map(|m| m.iid);
+                    self.nav.pick_request = self.listed_requests().first().map(|m| m.iid);
                 }
                 self.read_preview(cx);
                 self.zone = zones::Zone::Branches;
@@ -629,7 +629,10 @@ impl Workspace {
             // Back at the root: the list selects what was open.
             match (&page, page.item()) {
                 (Page::WorkingTree, _) => self.nav.pick_branch = Some(BranchRow::WorkingTree),
-                (_, Some(Item::Request(iid))) => self.nav.pick_request = Some(iid),
+                (_, Some(Item::Request(iid))) => {
+                    self.nav.pick_request = Some(iid);
+                    self.roots.reveal.set(true);
+                }
                 (_, Some(Item::Branch(refname))) => {
                     self.nav.pick_branch = self.branch_ix(&refname).map(BranchRow::Branch)
                 }
@@ -770,7 +773,7 @@ impl Workspace {
         // The list came in under its root: the first request is picked and previewed (#72).
         if self.nav.space == Space::Requests && self.at_root_list() {
             if self.nav.pick_request.is_none() {
-                self.nav.pick_request = self.shown_requests().first().map(|m| m.iid);
+                self.nav.pick_request = self.listed_requests().first().map(|m| m.iid);
             }
             self.read_preview(cx);
         }

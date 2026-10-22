@@ -3,6 +3,7 @@
 //! only (see `crate::mr`).
 
 use super::px;
+use super::roots::Group;
 use super::rows::Row;
 use super::tools::ToolView;
 use super::{Header, Selection, Workspace, format, plural, theme};
@@ -165,6 +166,9 @@ impl Workspace {
             self.draft_at = None;
         }
         self.requests.current = iid;
+        if let Some(iid) = iid {
+            self.mark_opened(iid);
+        }
         let (Some(iid), Some(remote)) = (iid, self.web.clone()) else {
             return;
         };
@@ -293,7 +297,7 @@ impl Workspace {
         }
     }
 
-    /// ⌥↓: the next merge request, in list order, that is not reviewed yet; ⌥↑: the previous one,
+    /// ⌥↓: the next merge request to review (`next_request`); ⌥↑: the previous one in the list,
     /// reviewed or not (to look again at what was just done).
     pub(super) fn step_request(&mut self, forward: bool, cx: &mut Context<Self>) {
         let shown = self.shown_requests();
@@ -301,35 +305,40 @@ impl Workspace {
         if n == 0 {
             return;
         }
-        let at = shown
-            .iter()
-            .position(|m| Some(m.iid) == self.requests.current);
         let next = if forward {
-            let reviewed: Vec<bool> = shown
-                .iter()
-                .map(|m| git2::Oid::from_str(&m.head).is_ok_and(|h| self.head_reviewed(h)))
-                .collect();
-            next_unreviewed(&reviewed, at).map(|ix| shown[ix])
+            self.next_request()
         } else {
+            let at = shown
+                .iter()
+                .position(|m| Some(m.iid) == self.requests.current);
             Some(shown[at.map_or(n - 1, |a| (a + n - 1) % n)])
         };
         let Some(next) = next.map(|m| m.iid) else {
-            self.error = Some("Every other merge request in the list is reviewed.".into());
+            self.error =
+                Some("Every other merge request in the list is reviewed, or yours.".into());
             return cx.notify();
         };
         self.done_card = false;
         self.select_request(next, cx);
     }
 
-    /// The next request after the open one, in list order, whose head is not reviewed yet.
-    fn next_unreviewed_request(&self) -> Option<&Mr> {
+    /// The next request to review after the open one, going round the list: one that needs your
+    /// review or was pushed since your review first — one just reviewed has moved down to
+    /// Reviewed, below them —, then one nobody asked you for; never one of yours (#81).
+    fn next_request(&self) -> Option<&Mr> {
         let shown = self.shown_requests();
         let at = shown
             .iter()
-            .position(|m| Some(m.iid) == self.requests.current)?;
-        (1..shown.len())
-            .map(|step| shown[(at + step) % shown.len()])
-            .find(|m| git2::Oid::from_str(&m.head).map_or(true, |head| !self.head_reviewed(head)))
+            .position(|m| Some(m.iid) == self.requests.current);
+        let tiers: Vec<Option<u8>> = shown
+            .iter()
+            .map(|m| match self.group_of(m) {
+                Group::Asks | Group::Updated => Some(0),
+                Group::Others => Some(1),
+                Group::Reviewed | Group::Yours => None,
+            })
+            .collect();
+        next_to_review(&tiers, at).map(|ix| shown[ix])
     }
 
     /// After branch `self.branch` in the branch list, the next branch of the same kind (local or
@@ -357,7 +366,7 @@ impl Workspace {
         // The next merge request in request mode, else the next branch.
         let next = match current {
             Some(_) => self
-                .next_unreviewed_request()
+                .next_request()
                 .map(|m| (format!("Next: !{} {}", m.iid, m.title), Err(m.iid))),
             None => self
                 .next_unreviewed_branch()
@@ -1955,12 +1964,17 @@ pub(super) fn pipeline_word(p: &Pipeline) -> (&'static str, String, gpui::Rgba) 
     }
 }
 
-fn next_unreviewed(reviewed: &[bool], at: Option<usize>) -> Option<usize> {
-    let n = reviewed.len();
+/// The row to review after row `at`, going round: the nearest of the lowest tier; a row of no
+/// tier is never one.
+fn next_to_review(tiers: &[Option<u8>], at: Option<usize>) -> Option<usize> {
+    let n = tiers.len();
     let start = at.map_or(0, |a| a + 1);
     (0..n)
         .map(|step| (start + step) % n)
-        .find(|&ix| Some(ix) != at && !reviewed[ix])
+        .filter(|&ix| Some(ix) != at)
+        .filter_map(|ix| tiers[ix].map(|tier| (tier, ix)))
+        .min_by_key(|&(tier, _)| tier)
+        .map(|(_, ix)| ix)
 }
 
 /// A group's heading in a tool window's list; `keys` says how to walk it.
@@ -2026,18 +2040,33 @@ pub(super) fn comment_item(
 
 #[cfg(test)]
 mod tests {
-    use super::next_unreviewed;
+    use super::next_to_review;
 
     #[test]
-    fn the_next_unreviewed_request_goes_round_to_the_top() {
-        // 0 open, 1 reviewed, 2 current, 3 reviewed: past the end, back to 0.
+    fn the_next_request_to_review_goes_round_to_the_top() {
+        // 0 to review, 1 reviewed, 2 current, 3 reviewed: past the end, back to 0.
         assert_eq!(
-            next_unreviewed(&[false, true, false, true], Some(2)),
+            next_to_review(&[Some(0), None, Some(0), None], Some(2)),
             Some(0)
         );
-        assert_eq!(next_unreviewed(&[true, false, true], Some(0)), Some(1));
-        assert_eq!(next_unreviewed(&[true, false], None), Some(1));
+        assert_eq!(next_to_review(&[None, Some(0), None], Some(0)), Some(1));
+        assert_eq!(next_to_review(&[None, Some(0)], None), Some(1));
         // Only the current one is left: nowhere to go.
-        assert_eq!(next_unreviewed(&[true, false, true], Some(1)), None);
+        assert_eq!(next_to_review(&[None, Some(0), None], Some(1)), None);
+    }
+
+    #[test]
+    fn a_request_waiting_for_you_comes_before_the_others() {
+        // 0 updated, 1 current (just reviewed), 2 nobody asked you, 3 yours: back up to 0.
+        assert_eq!(
+            next_to_review(&[Some(0), None, Some(1), None], Some(1)),
+            Some(0)
+        );
+        // None waits for you: the others, never yours.
+        assert_eq!(
+            next_to_review(&[None, None, Some(1), None], Some(1)),
+            Some(2)
+        );
+        assert_eq!(next_to_review(&[None, None, None], Some(1)), None);
     }
 }

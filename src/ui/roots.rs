@@ -1,7 +1,7 @@
 //! The roots of Branches and Merge requests (#72): the list, the row selected previewed beside it,
 //! the list's filter in the page bar (⌘F), and the list's states — loading, empty, no token, an
-//! error, offline. Merge requests are grouped by what they need from you, and Mine counts the
-//! discussions waiting for you and lists them first. Branches list the working tree first, then
+//! error, offline. Merge requests are grouped by what they need from you, each group a band that
+//! folds (#81), and Mine counts the discussions waiting for you and lists them first. Branches list the working tree first, then
 //! the local branches with how far they are from the main line and their request; a remote's
 //! branches fold under its name.
 
@@ -14,13 +14,14 @@ use crate::mr::{Approvals, Mr, Pipeline, Thread};
 use gpui::{
     AnyElement, ClickEvent, Context, Div, FontWeight, Rgba, SharedString, Task, div, prelude::*,
 };
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 /// The width of a root's list.
 const LIST: f32 = 460.;
 
 /// What a request needs from you: the list's groups, in their order.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Group {
     /// You are asked to review it, or started at its head.
     Asks,
@@ -42,7 +43,53 @@ impl Group {
             Group::Yours => "Yours",
         }
     }
+
+    /// The icon and colour its band opens with: the group says how far your review is, its rows
+    /// do not (#81).
+    fn icon(self) -> (&'static str, Rgba) {
+        match self {
+            Group::Asks => ("eye", theme::accent()),
+            Group::Updated => ("refresh", theme::warning()),
+            Group::Reviewed => ("check", theme::added()),
+            Group::Others => ("pull-request", theme::faint()),
+            Group::Yours => ("user", theme::faint()),
+        }
+    }
+
+    /// As `requests-list.txt` writes it.
+    fn key(self) -> &'static str {
+        match self {
+            Group::Asks => "asks",
+            Group::Updated => "updated",
+            Group::Reviewed => "reviewed",
+            Group::Others => "others",
+            Group::Yours => "yours",
+        }
+    }
+
+    fn parse(key: &str) -> Option<Group> {
+        [
+            Group::Asks,
+            Group::Updated,
+            Group::Reviewed,
+            Group::Others,
+            Group::Yours,
+        ]
+        .into_iter()
+        .find(|g| g.key() == key)
+    }
 }
+
+/// The groups folded in a project whose list was never folded or unfolded: those that need
+/// nothing from you.
+const FOLDED: [Group; 2] = [Group::Reviewed, Group::Others];
+
+/// What the requests list keeps per project (`<repo>\t<folded groups>\t<requests opened>`, both
+/// comma-separated) (#81).
+const LIST_FILE: &str = "requests-list.txt";
+
+/// The height of a group's band in the requests list.
+const BAND: f32 = 28.;
 
 /// Where request `seen` sits: yours first of all, then by how far your review got.
 pub fn group(mine: bool, asks: bool, seen: Seen) -> Group {
@@ -96,6 +143,89 @@ pub struct Roots {
     tree_task: Option<Task<()>>,
     previews: HashMap<u64, Preview>,
     preview_task: Option<Task<()>>,
+    /// The requests list's scroll, and whether the next frame brings the picked row into view
+    /// (after ↑ ↓ or esc back to the list).
+    scroll: gpui::ScrollHandle,
+    pub reveal: Cell<bool>,
+    /// Project `kept_of`'s requests list: the groups folded, and the requests you have opened —
+    /// a row's dot is gone once you have (#81).
+    folded: HashSet<Group>,
+    opened: HashSet<u64>,
+    kept_of: Option<String>,
+}
+
+impl Roots {
+    /// Project `repo`'s folds and opened requests, unless they are the ones held.
+    pub fn load(&mut self, repo: &str) {
+        if self.kept_of.as_deref() == Some(repo) {
+            return;
+        }
+        (self.folded, self.opened) = kept_list(&crate::storage::read(LIST_FILE), repo)
+            .unwrap_or_else(|| (FOLDED.into_iter().collect(), HashSet::new()));
+        self.kept_of = Some(repo.to_owned());
+    }
+
+    fn keep(&self) {
+        if let Some(repo) = &self.kept_of {
+            let text = crate::storage::read(LIST_FILE);
+            crate::storage::save(
+                LIST_FILE,
+                with_kept_list(&text, repo, &self.folded, &self.opened),
+            );
+        }
+    }
+}
+
+/// Repository `repo`'s line of `requests-list.txt`: its folded groups and the requests opened;
+/// none when it has no line.
+fn kept_list(text: &str, repo: &str) -> Option<(HashSet<Group>, HashSet<u64>)> {
+    let line = text.lines().find(|l| l.split('\t').next() == Some(repo))?;
+    let mut parts = line.split('\t').skip(1);
+    let mut next = || parts.next().unwrap_or_default().split(',');
+    let folded = next().filter_map(Group::parse).collect();
+    let opened = next().filter_map(|iid| iid.parse().ok()).collect();
+    Some((folded, opened))
+}
+
+/// `text` with repository `repo`'s line written anew; other repositories' kept.
+fn with_kept_list(
+    text: &str,
+    repo: &str,
+    folded: &HashSet<Group>,
+    opened: &HashSet<u64>,
+) -> String {
+    let mut folded: Vec<Group> = folded.iter().copied().collect();
+    folded.sort();
+    let mut opened: Vec<u64> = opened.iter().copied().collect();
+    opened.sort();
+    let line = format!(
+        "{repo}\t{}\t{}",
+        folded.iter().map(|g| g.key()).collect::<Vec<_>>().join(","),
+        opened
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let mut lines: Vec<String> = text
+        .lines()
+        .filter(|l| !l.is_empty() && l.split('\t').next() != Some(repo))
+        .map(str::to_owned)
+        .chain([line])
+        .collect();
+    lines.sort_unstable();
+    lines.join("\n") + "\n"
+}
+
+/// The band held at the top of the requests list while its rows scroll under it, by the bands'
+/// tops and the list's top: the last band above it, pushed up as far as the next one comes into
+/// its room (#81).
+fn held_band(tops: &[f32], top: f32) -> Option<(usize, f32)> {
+    let at = tops.iter().rposition(|&t| t < top)?;
+    let push = tops
+        .get(at + 1)
+        .map_or(0., |&next| (next - top - BAND).min(0.));
+    Some((at, push))
 }
 
 impl Workspace {
@@ -336,6 +466,7 @@ impl Workspace {
     /// A root list's row picked, by a click or ↑ ↓.
     pub(super) fn pick_request(&mut self, iid: u64, cx: &mut Context<Self>) {
         self.nav.pick_request = Some(iid);
+        self.roots.reveal.set(true);
         self.read_preview(cx);
         cx.notify();
     }
@@ -345,6 +476,43 @@ impl Workspace {
             self.roots.open_remotes.insert(remote);
         }
         cx.notify();
+    }
+
+    fn toggle_group(&mut self, g: Group, cx: &mut Context<Self>) {
+        if !self.roots.folded.remove(&g) {
+            self.roots.folded.insert(g);
+        }
+        self.roots.keep();
+        cx.notify();
+    }
+
+    /// Whether group `g`'s rows are folded away; a filter typed opens every group.
+    fn folds(&self, g: Group) -> bool {
+        self.bfilter.trim().is_empty() && self.roots.folded.contains(&g)
+    }
+
+    /// The requests the list has a row for, in its order: those of folded groups left out, but
+    /// the picked one, which stays under its band.
+    pub(super) fn listed_requests(&self) -> Vec<&Mr> {
+        self.shown_requests()
+            .into_iter()
+            .filter(|m| self.nav.pick_request == Some(m.iid) || !self.folds(self.group_of(m)))
+            .collect()
+    }
+
+    /// Request `iid` opened: its row's dot goes for good. Requests no longer open are forgotten.
+    pub(super) fn mark_opened(&mut self, iid: u64) {
+        if self.roots.opened.contains(&iid) {
+            return;
+        }
+        if !self.requests.list.is_empty() {
+            let list = &self.requests.list;
+            self.roots
+                .opened
+                .retain(|i| list.iter().any(|m| m.iid == *i));
+        }
+        self.roots.opened.insert(iid);
+        self.roots.keep();
     }
 
     // ---- the pages ------------------------------------------------------------------------
@@ -389,21 +557,65 @@ impl Workspace {
                 .child(self.requests_empty(cx))
                 .into_any_element()
         } else {
-            let mut rows: Vec<AnyElement> = Vec::new();
             let groups: Vec<Group> = shown.iter().map(|m| self.group_of(m)).collect();
-            for (n, (m, &g)) in shown.iter().zip(&groups).enumerate() {
-                if n == 0 || groups[n - 1] != g {
-                    let count = groups.iter().filter(|&&o| o == g).count();
-                    rows.push(heading(format!("{} · {count}", g.heading())).into_any_element());
-                }
-                rows.push(self.request_row(m, g, cx).into_any_element());
-            }
             let picked = self
                 .nav
                 .pick_request
                 .and_then(|iid| shown.iter().find(|m| m.iid == iid))
-                .or(shown.first())
+                .or_else(|| {
+                    shown
+                        .iter()
+                        .zip(&groups)
+                        .find(|(_, g)| !self.folds(**g))
+                        .map(|(m, _)| m)
+                })
                 .copied();
+            // Each group a band, its rows under it unless it is folded (#81).
+            let mut rows: Vec<AnyElement> = Vec::new();
+            let mut bands: Vec<(usize, Group, usize)> = Vec::new();
+            let mut picked_row = None;
+            for (n, (m, &g)) in shown.iter().zip(&groups).enumerate() {
+                if n == 0 || groups[n - 1] != g {
+                    let count = groups.iter().filter(|&&o| o == g).count();
+                    bands.push((rows.len(), g, count));
+                    rows.push(self.group_band(g, count, false, cx).into_any_element());
+                }
+                let is_picked = picked.is_some_and(|p| p.iid == m.iid);
+                if self.folds(g) && !is_picked {
+                    continue;
+                }
+                if is_picked {
+                    picked_row = Some(rows.len());
+                }
+                rows.push(self.request_row(m, g, cx).into_any_element());
+            }
+            // The rows as the last frame laid them out, when they are these rows: where the list's
+            // top is, so the band above it is held there.
+            let scroll = &self.roots.scroll;
+            let laid = scroll.children_count() == rows.len();
+            let top = f32::from(scroll.bounds().top() - scroll.offset().y);
+            let top_of = |ix: usize| scroll.bounds_for_item(ix).map(|b| f32::from(b.top()));
+            if self.roots.reveal.take()
+                && let Some(ix) = picked_row
+            {
+                // A row going up out of sight would stop under the held band: the one above it
+                // comes into view instead, and with it the row.
+                let under_band = laid && ix > 0 && top_of(ix).is_some_and(|t| t < top + BAND);
+                scroll.scroll_to_item(if under_band { ix - 1 } else { ix });
+            }
+            let tops: Vec<f32> = bands.iter().filter_map(|&(ix, ..)| top_of(ix)).collect();
+            let held = (laid && tops.len() == bands.len())
+                .then(|| held_band(&tops, top))
+                .flatten()
+                .map(|(at, push)| {
+                    let (_, g, count) = bands[at];
+                    div()
+                        .absolute()
+                        .top(px(push))
+                        .left_0()
+                        .right_0()
+                        .child(self.group_band(g, count, true, cx))
+                });
             div()
                 .flex_1()
                 .min_h_0()
@@ -416,12 +628,23 @@ impl Workspace {
                         .border_color(self.zone_border(super::zones::Zone::Branches))
                         .child(
                             div()
-                                .id("requests")
+                                .relative()
                                 .flex_1()
                                 .min_h_0()
-                                .overflow_y_scroll()
-                                .pb(px(6.))
-                                .children(rows),
+                                .flex()
+                                .flex_col()
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .id("requests")
+                                        .flex_1()
+                                        .min_h_0()
+                                        .overflow_y_scroll()
+                                        .track_scroll(&self.roots.scroll)
+                                        .pb(px(6.))
+                                        .children(rows),
+                                )
+                                .children(held),
                         ),
                 )
                 .child(
@@ -514,6 +737,72 @@ impl Workspace {
         }
     }
 
+    /// A group's band in the requests list: its icon, name and count, and the chevron that folds
+    /// it (a click anywhere on it does); `held` is its copy held at the top of the list (#81).
+    fn group_band(
+        &self,
+        g: Group,
+        count: usize,
+        held: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let (icon, tone) = g.icon();
+        let foldable = self.bfilter.trim().is_empty();
+        let folded = self.folds(g);
+        div()
+            .id((if held { "group-held" } else { "group-band" }, g as usize))
+            .h(px(BAND))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .pl(px(16.))
+            .pr(px(10.))
+            .bg(theme::base())
+            .border_t_1()
+            .border_b_1()
+            .border_color(theme::island_border())
+            .text_size(px(12.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(if folded {
+                theme::muted()
+            } else {
+                theme::text()
+            })
+            .child(icons::icon(icon).size(px(14.)).text_color(tone))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(g.heading()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .px(px(6.))
+                    .rounded_full()
+                    .bg(theme::hover())
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::NORMAL)
+                    .text_color(theme::muted())
+                    .child(count.to_string()),
+            )
+            .when(foldable, |s| {
+                s.cursor_pointer()
+                    .child(
+                        icons::icon(if folded { "chevron-right" } else { "chevron" })
+                            .size(px(14.))
+                            .text_color(theme::faint()),
+                    )
+                    .on_click(
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_group(g, cx)),
+                    )
+            })
+    }
+
     /// A request's row: unread dot, number and title, when; who, the pipeline, its discussions.
     fn request_row(&self, m: &Mr, g: Group, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let iid = m.iid;
@@ -527,7 +816,15 @@ impl Workspace {
             .and_then(|p| p.pipeline.as_ref());
         let waiting = (g == Group::Yours).then(|| self.waiting_threads(iid).len());
         let threads = self.notices.threads_of(iid).map(<[Thread]>::len);
-        let fresh = matches!(g, Group::Asks | Group::Updated) || waiting.is_some_and(|n| n > 0);
+        // A dot: a row of yours a thread waits on, another you have never opened; how far your
+        // review is, its group says (#81).
+        let unread = match waiting {
+            Some(n) => n > 0,
+            None => {
+                !self.roots.opened.contains(&iid)
+                    && matches!(self.request_seen(iid, head), Seen::Never)
+            }
+        };
         let mut meta: Vec<AnyElement> = Vec::new();
         let mut text = |s: String| meta.push(div().child(s).into_any_element());
         match waiting {
@@ -599,7 +896,7 @@ impl Workspace {
                 .cursor_pointer()
                 .when(picked, |s| s.bg(theme::selected()))
                 .when(!picked, |s| s.hover(|s| s.bg(theme::hover())))
-                .child(unread_dot(fresh))
+                .child(unread_dot(unread))
                 .child(
                     div()
                         .flex_1()
@@ -1657,7 +1954,8 @@ fn heading(text: String) -> Div {
         .child(text)
 }
 
-/// The blue dot of a row that asks for you; a blank of its width otherwise.
+/// The blue dot of a row not seen yet: a request you have never opened, or one of yours a thread
+/// waits on; a blank of its width otherwise.
 fn unread_dot(on: bool) -> Div {
     div()
         .flex_none()
@@ -1806,5 +2104,36 @@ mod tests {
         assert_eq!(group(false, true, Seen::Earlier), Group::Updated);
         assert_eq!(group(false, true, Seen::Done), Group::Reviewed);
         assert!(Group::Asks < Group::Updated && Group::Others < Group::Yours);
+    }
+
+    #[test]
+    fn a_projects_folds_and_opened_requests_are_kept_on_its_own_line() {
+        let folded = HashSet::from([Group::Others, Group::Reviewed]);
+        let opened = HashSet::from([415, 398]);
+        let text = with_kept_list("b\tasks\t7\n", "a", &folded, &opened);
+        assert_eq!(text, "a\treviewed,others\t398,415\nb\tasks\t7\n");
+        assert_eq!(kept_list(&text, "a"), Some((folded, opened)));
+        assert_eq!(
+            kept_list(&text, "b"),
+            Some((HashSet::from([Group::Asks]), HashSet::from([7])))
+        );
+        // Every group unfolded, nothing opened: a line still, so the defaults do not come back.
+        let none = with_kept_list(&text, "a", &HashSet::new(), &HashSet::new());
+        assert_eq!(
+            kept_list(&none, "a"),
+            Some((HashSet::new(), HashSet::new()))
+        );
+        assert_eq!(kept_list(&none, "c"), None);
+    }
+
+    #[test]
+    fn the_band_above_the_lists_top_is_held_until_the_next_pushes_it_up() {
+        // Bands at 0, 200 and 300; the list's top at 0: nothing is above it.
+        assert_eq!(held_band(&[0., 200., 300.], 0.), None);
+        assert_eq!(held_band(&[0., 200., 300.], 100.), Some((0, 0.)));
+        // The next band 10 px below the top: the held one goes up by what it covers.
+        assert_eq!(held_band(&[0., 200., 300.], 190.), Some((0, -18.)));
+        assert_eq!(held_band(&[0., 200., 300.], 250.), Some((1, 0.)));
+        assert_eq!(held_band(&[0., 200., 300.], 900.), Some((2, 0.)));
     }
 }

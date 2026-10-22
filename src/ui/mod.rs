@@ -1734,6 +1734,8 @@ impl Workspace {
                         this.load_requests(cx);
                         // The documents this repository reads as Source (#11).
                         this.page.load(&crate::review::key(&root));
+                        // Its requests list's folds and the requests opened (#81).
+                        this.roots.load(&crate::review::key(&root));
                         this.root = Some(root);
                         this.branches = branches;
                         let refresh = keep.is_some();

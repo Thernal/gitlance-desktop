@@ -283,6 +283,13 @@ const ICONS: &[(&str, &str)] = &[
             r#"<path d="M14 2v4a2 2 0 0 0 2 2h4"/>"#
         ),
     ),
+    (
+        "user",
+        lucide!(
+            r#"<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>"#
+            r#"<circle cx="12" cy="7" r="4"/>"#
+        ),
+    ),
 ];
 
 /// Serves the embedded icons to GPUI's SVG renderer.

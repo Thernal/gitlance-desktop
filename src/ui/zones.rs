@@ -266,7 +266,7 @@ impl Workspace {
             (None, _) => (n > 0).then_some(0),
         };
         if self.nav.space == super::spaces::Space::Requests {
-            let shown: Vec<u64> = self.shown_requests().iter().map(|m| m.iid).collect();
+            let shown: Vec<u64> = self.listed_requests().iter().map(|m| m.iid).collect();
             let at = self
                 .nav
                 .pick_request
@@ -292,7 +292,7 @@ impl Workspace {
     /// ↵ in a space's list: the row selected opens.
     pub(super) fn open_pick(&mut self, cx: &mut Context<Self>) {
         if self.nav.space == super::spaces::Space::Requests {
-            let shown: Vec<u64> = self.shown_requests().iter().map(|m| m.iid).collect();
+            let shown: Vec<u64> = self.listed_requests().iter().map(|m| m.iid).collect();
             let pick = self.nav.pick_request.filter(|iid| shown.contains(iid));
             if let Some(iid) = pick.or(shown.first().copied()) {
                 self.open_picked_request(iid, cx);
