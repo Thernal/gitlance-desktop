@@ -139,15 +139,14 @@ impl Workspace {
         let mut sections: Vec<AnyElement> = Vec::new();
         let rule = || div().flex_none().h(px(1.)).bg(theme::island_border());
 
-        // A request's commits are its Commits tab, a commit of it a level there: on its pages the
-        // panel holds the versions and the changes, on a commit only the commit's changes (#73).
-        let request = self.nav_page().cloned();
-        let request_page = matches!(
-            request,
-            Some(Page::Request(_) | Page::RequestCommit(..) | Page::RequestVersions(..))
-        );
-        let commit_level = matches!(request, Some(Page::RequestCommit(..)));
-        if self.versions.len() > 1 && !commit_level {
+        // A request's or a branch's commits are its Commits tab, a commit of it a level there: on
+        // its pages the panel holds the changes — a request's with its versions — and on a commit
+        // only the commit's (#73, #74).
+        let page = self.nav_page().cloned();
+        let tabbed = !self.item_sections().is_empty();
+        let commit_level = matches!(page, Some(Page::RequestCommit(..) | Page::BranchCommit(..)));
+        let branch = tabbed && matches!(page, Some(Page::Branch(_) | Page::BranchCommit(..)));
+        if self.versions.len() > 1 && !commit_level && !branch {
             let folded = self.section_folded(Section::Versions);
             let summary = match self.selection {
                 Selection::Versions { from, to } => format!(
@@ -187,7 +186,7 @@ impl Workspace {
             );
         }
 
-        if !request_page {
+        if !tabbed {
             let commits_folded = self.section_folded(Section::Commits);
             let first = match self.selection {
                 Selection::Commit(ix) => self.commits.get(ix),

@@ -291,6 +291,14 @@ impl Workspace {
     /// The key the marks of the open diff are kept under; none for the working tree, which has
     /// no stable identity.
     fn review_scope(&self) -> Option<String> {
+        // A branch's pages are your own work: no review marks there (#74). The main line keeps
+        // them, its commits are everyone's.
+        if let Some(super::nav::Page::Branch(refname) | super::nav::Page::BranchCommit(refname, _)) =
+            self.loaded_page()
+            && self.branch_tabbed(&refname)
+        {
+            return None;
+        }
         let root = self.root.as_ref()?.display().to_string();
         let key = match &self.diff.as_ref()?.header {
             Header::Commit(c) => format!("commit:{}", c.id),
@@ -313,6 +321,11 @@ impl Workspace {
             } = d.header
         {
             self.requests.files = Some((iid, d.files.len()));
+        }
+        if self.branch_compare()
+            && let (Some(f), Some(d)) = (self.branch_page.as_mut(), self.diff.as_ref())
+        {
+            f.files = Some(d.files.len());
         }
         self.fps = match (&self.review_scope, &self.diff) {
             (Some(_), Some(d)) => d.files.iter().map(fingerprint).collect(),

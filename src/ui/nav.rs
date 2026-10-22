@@ -19,8 +19,11 @@ use gpui::{Context, ListOffset};
 pub enum Page {
     /// A file read in Code.
     File(String),
-    /// A branch, by its refname: its commits, one of them shown.
+    /// A branch, by its refname: off the main line its Commits · Changes (#74), the main line its
+    /// commits with one of them shown.
     Branch(String),
+    /// A commit of a branch off the main line: a level under its Commits (#74).
+    BranchCommit(String, Oid),
     /// Two versions of a branch compared.
     Versions(String, usize, usize),
     /// What is not committed, against `HEAD`.
@@ -38,9 +41,11 @@ impl Page {
     pub fn space(&self) -> Space {
         match self {
             Page::File(_) => Space::Code,
-            Page::Branch(_) | Page::Versions(..) | Page::WorkingTree | Page::Compare(..) => {
-                Space::Branches
-            }
+            Page::Branch(_)
+            | Page::BranchCommit(..)
+            | Page::Versions(..)
+            | Page::WorkingTree
+            | Page::Compare(..) => Space::Branches,
             Page::Request(_) | Page::RequestCommit(..) | Page::RequestVersions(..) => {
                 Space::Requests
             }
@@ -50,7 +55,9 @@ impl Page {
     /// The page one up; None when that is the space's root.
     pub fn parent(&self) -> Option<Page> {
         match self {
-            Page::Versions(refname, ..) => Some(Page::Branch(refname.clone())),
+            Page::Versions(refname, ..) | Page::BranchCommit(refname, _) => {
+                Some(Page::Branch(refname.clone()))
+            }
             Page::RequestCommit(iid, _) | Page::RequestVersions(iid, ..) => {
                 Some(Page::Request(*iid))
             }
@@ -65,9 +72,9 @@ impl Page {
     /// The request or branch it belongs to, kept open under its space.
     pub fn item(&self) -> Option<Item> {
         match self {
-            Page::Branch(refname) | Page::Versions(refname, ..) => {
-                Some(Item::Branch(refname.clone()))
-            }
+            Page::Branch(refname)
+            | Page::BranchCommit(refname, _)
+            | Page::Versions(refname, ..) => Some(Item::Branch(refname.clone())),
             Page::Request(iid) | Page::RequestCommit(iid, _) | Page::RequestVersions(iid, ..) => {
                 Some(Item::Request(*iid))
             }
@@ -80,6 +87,7 @@ impl Page {
         match self {
             Page::File(path) => format!("file:{path}"),
             Page::Branch(refname) => format!("branch:{refname}"),
+            Page::BranchCommit(refname, id) => format!("branch-commit:{id}:{refname}"),
             Page::Versions(refname, a, b) => format!("versions:{a}:{b}:{refname}"),
             Page::WorkingTree => "working-tree".to_owned(),
             Page::Compare((base, a), (head, b)) => format!("compare:{a}:{b}:{base}:{head}"),
@@ -96,6 +104,10 @@ impl Page {
         Some(match kind {
             "file" => Page::File(rest.to_owned()),
             "branch" => Page::Branch(rest.to_owned()),
+            "branch-commit" => {
+                let (id, refname) = rest.split_once(':')?;
+                Page::BranchCommit(refname.to_owned(), Oid::from_str(id).ok()?)
+            }
             "versions" => {
                 let (a, b) = (next()?.parse().ok()?, next()?.parse().ok()?);
                 Page::Versions(next()?.to_owned(), a, b)
@@ -354,7 +366,7 @@ impl Workspace {
     }
 
     /// What is loaded, as a page of Branches or Merge requests.
-    fn loaded_page(&self) -> Option<Page> {
+    pub(super) fn loaded_page(&self) -> Option<Page> {
         let refname = self.branches.get(self.branch?)?.refname.clone();
         if let Some((_, _, iid)) = &self.open_request
             && self.requests.current == Some(*iid)
@@ -366,10 +378,17 @@ impl Workspace {
                 Selection::None | Selection::WorkingTree => Page::Request(iid),
             });
         }
+        let tabbed = self.branch_tabbed(&refname);
         Some(
             match (self.selection, self.diff.as_ref().map(|d| &d.header)) {
                 (Selection::WorkingTree, _) => Page::WorkingTree,
                 (Selection::Versions { from, to }, _) => Page::Versions(refname, from, to),
+                (Selection::Commit(ix), _) if tabbed => {
+                    Page::BranchCommit(refname, self.commits.get(ix)?.id)
+                }
+                (Selection::None, Some(Header::Compare { .. })) if self.branch_compare() => {
+                    Page::Branch(refname)
+                }
                 (Selection::None, Some(Header::Compare { base, head, .. })) => {
                     Page::Compare(base.clone(), head.clone())
                 }
@@ -407,53 +426,75 @@ impl Workspace {
         }
     }
 
-    /// The section tab of the request on screen: a commit of it is under Commits, two versions
-    /// compared under Changes.
-    pub(super) fn request_section(&self) -> Option<Section> {
-        let page = self.nav_page()?;
-        match page {
-            Page::Request(_) | Page::RequestCommit(..) | Page::RequestVersions(..) => Some(
-                self.nav
-                    .opened(&page.item()?)
-                    .map_or(Section::Changes, |o| o.section),
-            ),
-            _ => None,
+    /// The section tabs of the page's item: a request's three (#73), a branch off the main line's
+    /// Commits and Changes (#74); none for anything else.
+    pub(super) fn item_sections(&self) -> &'static [Section] {
+        match self.nav_page() {
+            Some(Page::Request(_) | Page::RequestCommit(..) | Page::RequestVersions(..)) => {
+                &Section::ALL
+            }
+            Some(Page::Branch(refname) | Page::BranchCommit(refname, _))
+                if self.branch_tabbed(refname) =>
+            {
+                &[Section::Commits, Section::Changes]
+            }
+            _ => &[],
         }
     }
 
-    /// The request's tab on screen when it is the tabbed page itself, not a level under it.
-    pub(super) fn request_tab(&self) -> Option<Section> {
-        matches!(self.nav_page(), Some(Page::Request(_)))
-            .then(|| self.request_section())
+    /// The section tab of the item on screen: a commit of it is under Commits, two versions
+    /// compared under Changes.
+    pub(super) fn page_section(&self) -> Option<Section> {
+        if self.item_sections().is_empty() {
+            return None;
+        }
+        let item = self.nav_page()?.item()?;
+        Some(
+            self.nav
+                .opened(&item)
+                .map_or(Section::Changes, |o| o.section),
+        )
+    }
+
+    /// The item's tab on screen when it is the tabbed page itself, not a level under it.
+    pub(super) fn page_tab(&self) -> Option<Section> {
+        matches!(self.nav_page(), Some(Page::Request(_) | Page::Branch(_)))
+            .then(|| self.page_section())
             .flatten()
     }
 
-    /// Section `section` of the request on screen; from a commit or two versions, the whole
-    /// request again.
+    /// Section `section` of the item on screen; from a level under it, the item's page again.
     pub(super) fn show_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        if !self.item_sections().contains(&section) {
+            return;
+        }
         let Some(page) = self.nav_page().cloned() else {
             return;
         };
-        let Some(item @ Item::Request(iid)) = page.item() else {
+        let Some(item) = page.item() else {
             return;
         };
         if let Some(open) = self.nav.opened_mut(&item) {
             open.section = section;
         }
-        if !matches!(page, Page::Request(_)) {
-            self.show(Space::Requests, Some(Page::Request(iid)), cx);
+        let top = match &item {
+            Item::Request(iid) => Page::Request(*iid),
+            Item::Branch(refname) => Page::Branch(refname.clone()),
+        };
+        if page != top {
+            self.show(page.space(), Some(top), cx);
         }
         cx.notify();
     }
 
     /// ⌃⇥ and ⌃⇧⇥: the next or the previous section tab, going round.
     pub(super) fn step_section(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let Some(at) = self.request_section() else {
+        let (sections, Some(at)) = (self.item_sections(), self.page_section()) else {
             return;
         };
-        let n = Section::ALL.len();
-        let ix = Section::ALL.iter().position(|s| *s == at).unwrap_or(0);
-        self.show_section(Section::ALL[(ix + if forward { 1 } else { n - 1 }) % n], cx);
+        let n = sections.len();
+        let ix = sections.iter().position(|s| *s == at).unwrap_or(0);
+        self.show_section(sections[(ix + if forward { 1 } else { n - 1 }) % n], cx);
     }
 
     /// `page` becomes its space's and the space the one on screen; the request or branch it is of
@@ -488,7 +529,7 @@ impl Workspace {
             // A commit of a request is a level under Commits, picked there when esc comes back to
             // it; two versions compared are Changes (#73).
             let section = match &page {
-                Page::RequestCommit(_, id) => {
+                Page::RequestCommit(_, id) | Page::BranchCommit(_, id) => {
                     self.nav.pick_commit = Some(*id);
                     Some(Section::Commits)
                 }
@@ -638,6 +679,16 @@ impl Workspace {
         }
         match page.clone() {
             Page::File(_) => {}
+            Page::Branch(refname) if same_item && self.branch_tabbed(&refname) => {
+                self.run_branch_compare(cx)
+            }
+            Page::BranchCommit(refname, id) => {
+                if same_item && let Some(ix) = self.commits.iter().position(|c| c.id == id) {
+                    self.select_commit(ix, cx);
+                } else if let Some(ix) = self.branch_ix(&refname) {
+                    self.select_branch(ix, Some(id), cx);
+                }
+            }
             Page::Branch(refname) => {
                 let commit = opened.and_then(|o| o.commit);
                 if same_item {
@@ -1013,6 +1064,10 @@ mod tests {
             Page::Versions("refs/heads/x".into(), 0, 2).parent(),
             Some(Page::Branch("refs/heads/x".into()))
         );
+        assert_eq!(
+            Page::BranchCommit("refs/heads/x".into(), id).parent(),
+            Some(Page::Branch("refs/heads/x".into()))
+        );
         assert_eq!(Page::File("a/b.kt".into()).space(), Space::Code);
         assert_eq!(Page::WorkingTree.item(), None);
         assert_eq!(
@@ -1027,6 +1082,7 @@ mod tests {
         let pages = [
             Page::File("src/a b.rs".into()),
             Page::Branch("refs/heads/feature/x".into()),
+            Page::BranchCommit("refs/heads/feature/x".into(), id),
             Page::Versions("refs/remotes/origin/x".into(), 1, 3),
             Page::WorkingTree,
             Page::Compare(("main".into(), id), ("origin/x".into(), id)),

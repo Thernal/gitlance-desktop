@@ -180,6 +180,23 @@ impl Workspace {
             Some(Page::Branch(refname)) => {
                 (vec![Crumb::up("Branches", None)], branch(refname), true)
             }
+            // A commit is a level under the branch's Commits (#74).
+            Some(Page::BranchCommit(refname, id)) => {
+                let up = |label: String, mono: bool| Crumb {
+                    label,
+                    mono,
+                    to: Some(Some(Page::Branch(refname.clone()))),
+                };
+                (
+                    vec![
+                        Crumb::up("Branches", None),
+                        up(branch(refname), true),
+                        up("Commits".to_owned(), false),
+                    ],
+                    format::short(*id),
+                    true,
+                )
+            }
             Some(Page::Versions(refname, a, b)) => {
                 let up = Crumb {
                     label: branch(refname),
@@ -260,7 +277,9 @@ impl Workspace {
             (Space::Requests, None) if self.requests.available => {
                 self.request_filters(cx).map(IntoElement::into_any_element)
             }
-            (Space::Requests, Some(_)) => self.section_tabs(cx).map(IntoElement::into_any_element),
+            (Space::Requests | Space::Branches, Some(_)) => {
+                self.section_tabs(cx).map(IntoElement::into_any_element)
+            }
             _ => None,
         }
     }
@@ -333,18 +352,19 @@ impl Workspace {
                     None => {}
                 }
             }
-            (Space::Requests, Some(Page::RequestCommit(..))) => {
+            (Space::Requests, Some(Page::RequestCommit(..)))
+            | (Space::Branches, Some(Page::BranchCommit(..))) => {
                 out.push(
                     bar_button("bar-previous-commit", "Previous", "[", false)
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.step_request_commit(false, cx);
+                            this.step_item_commit(false, cx);
                         }))
                         .into_any_element(),
                 );
                 out.push(
                     bar_button("bar-next-commit", "Next", "]", false)
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.step_request_commit(true, cx);
+                            this.step_item_commit(true, cx);
                         }))
                         .into_any_element(),
                 );

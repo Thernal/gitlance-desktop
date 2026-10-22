@@ -23,9 +23,24 @@ impl Workspace {
             .filter(|_| self.requests.current == Some(iid))
     }
 
-    /// A request's Overview or Commits under its bar, the tool window beside it.
-    pub(super) fn render_request_tab(&self, tab: Section, cx: &mut Context<Self>) -> Div {
+    /// An item's Overview or Commits under its bar, the tool window beside it: a request's, or a
+    /// branch's Commits (#74).
+    pub(super) fn render_tab_page(&self, tab: Section, cx: &mut Context<Self>) -> Div {
         let body = match (self.page_request(), tab) {
+            _ if matches!(self.nav_page(), Some(Page::Branch(_))) => {
+                let line = self
+                    .render_branch_line()
+                    .unwrap_or_else(|| div().into_any_element());
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(super::gap()))
+                    .child(line)
+                    .child(self.commits_list(None, cx))
+                    .into_any_element()
+            }
             (None, _) => island()
                 .flex_1()
                 .bg(theme::editor())
@@ -121,6 +136,11 @@ impl Workspace {
     /// in a row — author, branches, pipeline, approvals, how far your review is, the versions.
     fn overview_identity(&self, m: &Mr, cx: &mut Context<Self>) -> Div {
         let url = m.url.clone();
+        let mine = self
+            .requests
+            .login
+            .as_deref()
+            .is_some_and(|me| me == m.author_login);
         let pipeline = self.requests.pipeline.as_ref().map_or_else(
             || faint("—").into_any_element(),
             |p| {
@@ -198,8 +218,16 @@ impl Workspace {
                     .gap_x(px(5.))
                     .text_size(px(13.))
                     .text_color(theme::muted())
-                    .child(div().text_color(theme::text()).child(m.author.clone()))
-                    .child("wants to merge")
+                    .child(div().text_color(theme::text()).child(if mine {
+                        "You".to_owned()
+                    } else {
+                        m.author.clone()
+                    }))
+                    .child(if mine {
+                        "want to merge"
+                    } else {
+                        "wants to merge"
+                    })
                     .child(
                         div()
                             .text_color(theme::text())
@@ -396,15 +424,34 @@ impl Workspace {
         out
     }
 
-    /// Commits: one line of identity, then the request's commits, newest first, each with the
-    /// version it came with; ↑ ↓ pick one, ↵ or a second click opens it as a level.
+    /// A request's Commits: one line of identity, then its commits, each with the version it came
+    /// with.
     fn render_commits_tab(&self, m: &Mr, cx: &mut Context<Self>) -> AnyElement {
         let tips: Vec<(usize, git2::Oid)> =
             self.versions.iter().map(|v| (v.number, v.tip)).collect();
         let ids: Vec<git2::Oid> = self.commits.iter().map(|c| c.id).collect();
         let versions = commit_versions(&ids, &tips);
-        let picked = self.picked_commit();
         let line = self.request_line(m, cx);
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(super::gap()))
+            .child(line)
+            .child(self.commits_list(Some(versions), cx))
+            .into_any_element()
+    }
+
+    /// An item's commits, newest first, with the version each came with when it has versions;
+    /// ↑ ↓ pick one, ↵ or a second click opens it as a level.
+    fn commits_list(
+        &self,
+        versions: Option<Vec<Option<usize>>>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let versions = versions.unwrap_or_else(|| vec![None; self.commits.len()]);
+        let picked = self.picked_commit();
         let rows: Vec<_> = self
             .commits
             .iter()
@@ -455,74 +502,70 @@ impl Workspace {
                     }))
             })
             .collect();
-        div()
+        island()
             .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap(px(super::gap()))
-            .child(line)
+            .min_h_0()
+            .bg(theme::editor())
             .child(
-                island().flex_1().min_h_0().bg(theme::editor()).child(
-                    div()
-                        .id("request-commits")
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .px(px(8.))
-                        .py(px(8.))
-                        .child(
-                            div()
-                                .px(px(10.))
-                                .pb(px(6.))
-                                .text_size(px(11.))
-                                .text_color(theme::faint())
-                                .child(plural(self.commits.len(), "commit")),
-                        )
-                        .children(rows),
-                ),
+                div()
+                    .id("request-commits")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px(px(8.))
+                    .py(px(8.))
+                    .child(
+                        div()
+                            .px(px(10.))
+                            .pb(px(6.))
+                            .text_size(px(11.))
+                            .text_color(theme::faint())
+                            .child(plural(self.commits.len(), "commit")),
+                    )
+                    .children(rows),
             )
             .into_any_element()
     }
 
-    /// The section tabs in a request's bar: Overview, Commits and Changes with their counts; ⌃⇥
-    /// walks them.
+    /// The section tabs in an item's bar with their counts — a request's Overview, Commits and
+    /// Changes, a branch's Commits and Changes (#74); ⌃⇥ walks them.
     pub(super) fn section_tabs(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let at = self.request_section()?;
-        let iid = match self.nav_page()?.item()? {
-            Item::Request(iid) => iid,
-            Item::Branch(_) => return None,
+        let at = self.page_section()?;
+        let (loaded, files) = match self.nav_page()?.item()? {
+            Item::Request(iid) => (
+                self.requests.current == Some(iid),
+                self.requests
+                    .files
+                    .filter(|(of, _)| *of == iid)
+                    .map(|(_, n)| n),
+            ),
+            // Tabbed only while it is the branch loaded.
+            Item::Branch(_) => (true, self.branch_page.as_ref().and_then(|f| f.files)),
         };
-        let loaded = self.requests.current == Some(iid);
         let count = |section: Section| match section {
             Section::Overview => None,
             Section::Commits => loaded.then_some(self.commits.len()),
-            Section::Changes => self
-                .requests
-                .files
-                .filter(|(of, _)| *of == iid)
-                .map(|(_, n)| n),
+            Section::Changes => files,
         };
-        Some(
-            Section::ALL
-                .into_iter()
-                .fold(super::diff_view::group(), |group, section| {
-                    let label = match count(section) {
-                        Some(n) => format!("{} {n}", section.label()),
-                        None => section.label().to_owned(),
-                    };
-                    group.child(
-                        super::diff_view::chip(
-                            SharedString::from(format!("section-{}", section.label())),
-                            label,
-                            section == at,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| this.show_section(section, cx),
-                        )),
+        Some(self.item_sections().iter().copied().fold(
+            super::diff_view::group(),
+            |group, section| {
+                let label = match count(section) {
+                    Some(n) => format!("{} {n}", section.label()),
+                    None => section.label().to_owned(),
+                };
+                group.child(
+                    super::diff_view::chip(
+                        SharedString::from(format!("section-{}", section.label())),
+                        label,
+                        section == at,
                     )
-                }),
-        )
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| this.show_section(section, cx),
+                    )),
+                )
+            },
+        ))
     }
 
     /// The commit Commits has picked: the one esc came back from, else the newest.
@@ -553,10 +596,12 @@ impl Workspace {
         }
     }
 
-    /// [ and ] on a request's commit: the commit before or after it in time (the list is newest
+    /// [ and ] on a request's or a branch's commit: the commit before or after it in time (the list is newest
     /// first). Whether the page was one.
-    pub(super) fn step_request_commit(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
-        let Some(Page::RequestCommit(_, id)) = self.nav_page().cloned() else {
+    pub(super) fn step_item_commit(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
+        let (Some(Page::RequestCommit(_, id)) | Some(Page::BranchCommit(_, id))) =
+            self.nav_page().cloned()
+        else {
             return false;
         };
         let Some(at) = self.commits.iter().position(|c| c.id == id) else {

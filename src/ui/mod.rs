@@ -5,6 +5,7 @@ mod annotate;
 mod appearance;
 mod bar;
 mod bookmarks;
+mod branch_page;
 mod comments;
 mod complete;
 mod create;
@@ -1297,6 +1298,8 @@ pub struct Workspace {
     title: String,
     branches: Vec<BranchRef>,
     branch: Option<usize>,
+    /// The loaded branch's page: its main line, how far from it, where it is pushed (#74).
+    branch_page: Option<branch_page::Facts>,
     versions: Vec<Version>,
     commits: Vec<CommitInfo>,
     selection: Selection,
@@ -1564,6 +1567,7 @@ impl Workspace {
             title: String::new(),
             branches: Vec::new(),
             branch: None,
+            branch_page: None,
             versions: Vec::new(),
             commits: Vec::new(),
             selection: Selection::None,
@@ -1777,6 +1781,7 @@ impl Workspace {
     fn clear_branch(&mut self) {
         self.watch.forget();
         self.branch = None;
+        self.branch_page = None;
         self.versions.clear();
         self.commits.clear();
         self.clear_diff();
@@ -1816,7 +1821,7 @@ impl Workspace {
         let (Some(root), Some(branch)) = (self.root.clone(), self.branches.get(ix)) else {
             return;
         };
-        let (refname, tip) = (branch.refname.clone(), branch.tip);
+        let (refname, name, tip) = (branch.refname.clone(), branch.name.clone(), branch.tip);
         self.clear_branch();
         self.branch = Some(ix);
         self.branch_task = Some(cx.spawn(async move |this, cx| {
@@ -1826,19 +1831,48 @@ impl Workspace {
                     let repo = Repo::open(&root)?;
                     // A ref without a reflog simply has no earlier versions.
                     let versions = repo.versions(&refname).unwrap_or_default();
-                    anyhow::Ok((versions, repo.log(tip, COMMIT_LIMIT)?))
+                    let facts = branch_page::Facts::read(&repo, &refname, &name, tip);
+                    // A branch off the main line lists its own commits (#74).
+                    let own = facts
+                        .base
+                        .as_ref()
+                        .and_then(|(_, base)| repo.range_log(*base, tip, true).ok())
+                        .filter(|own| !own.is_empty());
+                    anyhow::Ok((versions, repo.log(tip, COMMIT_LIMIT)?, facts, own))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 match loaded {
-                    Ok((versions, commits)) => {
+                    Ok((versions, commits, facts, own)) => {
                         this.versions = versions;
-                        this.commits = commits;
+                        // Its page shows the branch against the main line, unless a commit of it
+                        // or a request on it is what was asked for.
+                        let tabbed = own.is_some()
+                            && this.pending_compare.is_none()
+                            && keep.is_none_or(|id| {
+                                own.as_ref().is_some_and(|o| o.iter().any(|c| c.id == id))
+                            });
+                        this.commits = match own {
+                            Some(own) if tabbed => own,
+                            _ => commits,
+                        };
+                        this.branch_page = Some(branch_page::Facts {
+                            base: facts.base.filter(|_| tabbed),
+                            ..facts
+                        });
                         this.refilter();
                         this.index_paths(cx);
                         let ix = keep
                             .and_then(|id| this.commits.iter().position(|c| c.id == id))
                             .unwrap_or(0);
+                        if tabbed && keep.is_none() {
+                            if !this.finish_pending(cx) {
+                                this.run_branch_compare(cx);
+                            }
+                            this.follow_pending_link(cx);
+                            cx.notify();
+                            return;
+                        }
                         if !this.commits.is_empty() {
                             this.select_commit(ix, cx);
                         }
