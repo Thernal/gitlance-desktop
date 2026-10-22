@@ -3,6 +3,7 @@
 //! (a count, the first item, how far the review is). An open Commits or Changes takes the room left;
 //! Versions takes what its rows need. Folds are kept in `layout.txt`; ⌥⌘2 folds Changes.
 
+use super::nav::Page;
 use super::zones::Zone;
 use super::{Selection, Tip, Workspace, chip, commit_chip, icons, island, plural, px, theme};
 use gpui::{
@@ -138,7 +139,15 @@ impl Workspace {
         let mut sections: Vec<AnyElement> = Vec::new();
         let rule = || div().flex_none().h(px(1.)).bg(theme::island_border());
 
-        if self.versions.len() > 1 {
+        // A request's commits are its Commits tab, a commit of it a level there: on its pages the
+        // panel holds the versions and the changes, on a commit only the commit's changes (#73).
+        let request = self.nav_page().cloned();
+        let request_page = matches!(
+            request,
+            Some(Page::Request(_) | Page::RequestCommit(..) | Page::RequestVersions(..))
+        );
+        let commit_level = matches!(request, Some(Page::RequestCommit(..)));
+        if self.versions.len() > 1 && !commit_level {
             let folded = self.section_folded(Section::Versions);
             let summary = match self.selection {
                 Selection::Versions { from, to } => format!(
@@ -178,93 +187,91 @@ impl Workspace {
             );
         }
 
-        let commits_folded = self.section_folded(Section::Commits);
-        let first = match self.selection {
-            Selection::Commit(ix) => self.commits.get(ix),
-            _ => self.commits.first(),
-        };
-        let commit_summary = first.map(|c| {
-            if self.commits.len() > 1 {
-                format!("{} +{}", c.summary, self.commits.len() - 1)
-            } else {
-                c.summary.clone()
-            }
-        });
-        let mut commit_end: Vec<AnyElement> = Vec::new();
-        commit_end.extend(
-            self.render_request_chip(cx)
-                .map(IntoElement::into_any_element),
-        );
-        commit_end.extend(
-            self.render_working_chip(cx)
-                .map(IntoElement::into_any_element),
-        );
-        commit_end.push(
-            commit_chip("commit-search", self.find.text.is_some())
-                .px(px(5.))
-                .child(icons::icon("search").size(px(15.)).text_color(
-                    if self.find.text.is_some() {
-                        theme::text()
-                    } else {
-                        theme::muted()
-                    },
-                ))
-                .tooltip_show_delay(crate::ui::hover::LONG)
-                .tooltip(|_, cx| cx.new(|_| Tip("Search commits  ⌘⇧F")).into())
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    if this.layout.fold_commits {
-                        this.fold_section(1, cx);
-                    }
-                    this.start_find(cx)
-                }))
-                .into_any_element(),
-        );
-        commit_end.push(count(self.commits.len()));
-        if !sections.is_empty() {
-            sections.push(rule().into_any_element());
-        }
-        if !commits_folded {
-            open_lists += 1;
-        }
-        let commits_rows = !commits_folded || self.motion.recent("fold-1");
-        let commits = div()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| this.set_zone(Zone::Commits, cx)),
-            )
-            .child(self.section_header(
-                Section::Commits,
-                format!("Commits{}", self.zone_tag(Zone::Commits)),
-                commit_summary,
-                commit_end,
-                true,
-                cx,
-            ))
-            .when(commits_rows, |s| {
-                s.children(self.find.text.is_some().then(|| self.render_find(cx)))
-                    .children(self.render_pill(cx))
-                    .child(if self.find.shown.as_ref().is_some_and(Vec::is_empty) {
-                        self.render_no_match().into_any_element()
-                    } else {
-                        uniform_list(
-                            "commits",
-                            self.commit_rows(),
-                            cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                                range
-                                    .map(|row| this.render_commit_row(this.commit_at(row), cx))
-                                    .collect::<Vec<_>>()
-                            }),
-                        )
-                        .track_scroll(&self.commit_scroll)
-                        .flex_1()
-                        .pb(px(6.))
-                        .into_any_element()
-                    })
+        if !request_page {
+            let commits_folded = self.section_folded(Section::Commits);
+            let first = match self.selection {
+                Selection::Commit(ix) => self.commits.get(ix),
+                _ => self.commits.first(),
+            };
+            let commit_summary = first.map(|c| {
+                if self.commits.len() > 1 {
+                    format!("{} +{}", c.summary, self.commits.len() - 1)
+                } else {
+                    c.summary.clone()
+                }
             });
-        sections.push(open_share(commits, "commits-open", !commits_folded).into_any_element());
+            let mut commit_end: Vec<AnyElement> = Vec::new();
+            commit_end.extend(
+                self.render_working_chip(cx)
+                    .map(IntoElement::into_any_element),
+            );
+            commit_end.push(
+                commit_chip("commit-search", self.find.text.is_some())
+                    .px(px(5.))
+                    .child(icons::icon("search").size(px(15.)).text_color(
+                        if self.find.text.is_some() {
+                            theme::text()
+                        } else {
+                            theme::muted()
+                        },
+                    ))
+                    .tooltip_show_delay(crate::ui::hover::LONG)
+                    .tooltip(|_, cx| cx.new(|_| Tip("Search commits  ⌘⇧F")).into())
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        if this.layout.fold_commits {
+                            this.fold_section(1, cx);
+                        }
+                        this.start_find(cx)
+                    }))
+                    .into_any_element(),
+            );
+            commit_end.push(count(self.commits.len()));
+            if !sections.is_empty() {
+                sections.push(rule().into_any_element());
+            }
+            if !commits_folded {
+                open_lists += 1;
+            }
+            let commits_rows = !commits_folded || self.motion.recent("fold-1");
+            let commits = div()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| this.set_zone(Zone::Commits, cx)),
+                )
+                .child(self.section_header(
+                    Section::Commits,
+                    format!("Commits{}", self.zone_tag(Zone::Commits)),
+                    commit_summary,
+                    commit_end,
+                    true,
+                    cx,
+                ))
+                .when(commits_rows, |s| {
+                    s.children(self.find.text.is_some().then(|| self.render_find(cx)))
+                        .children(self.render_pill(cx))
+                        .child(if self.find.shown.as_ref().is_some_and(Vec::is_empty) {
+                            self.render_no_match().into_any_element()
+                        } else {
+                            uniform_list(
+                                "commits",
+                                self.commit_rows(),
+                                cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                    range
+                                        .map(|row| this.render_commit_row(this.commit_at(row), cx))
+                                        .collect::<Vec<_>>()
+                                }),
+                            )
+                            .track_scroll(&self.commit_scroll)
+                            .flex_1()
+                            .pb(px(6.))
+                            .into_any_element()
+                        })
+                });
+            sections.push(open_share(commits, "commits-open", !commits_folded).into_any_element());
+        }
 
         if let Some(diff) = self.diff.as_ref().filter(|d| !d.files.is_empty()) {
             let one = diff.files.len() == 1;

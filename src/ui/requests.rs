@@ -6,7 +6,7 @@ use super::px;
 use super::roots::Group;
 use super::rows::Row;
 use super::tools::ToolView;
-use super::{Header, Selection, Workspace, format, plural, theme};
+use super::{Header, Workspace, format, plural, theme};
 use crate::git::{RefKind, Repo, Version};
 use crate::mr::{self, Draft, Mr, Pipeline, Thread};
 use gpui::{ClickEvent, Context, FontWeight, SharedString, Task, WeakEntity, div, prelude::*};
@@ -46,8 +46,11 @@ pub struct Requests {
     pub pipeline: Option<Pipeline>,
     /// Who approved the request, and where the reviewer stands.
     pub approvals: Option<mr::Approvals>,
-    /// Its description, labels, milestone and assignees, for the Details window (#8).
+    /// Its description, labels, milestone and assignees, for its Overview (#8, #73).
     pub details: Option<mr::Details>,
+    /// The files of a request's whole diff when it was last loaded: its Changes tab's count, on a
+    /// commit of it too (#73).
+    pub files: Option<(u64, usize)>,
     /// Discussions written on an earlier version: what became of their line, by thread id (#46).
     pub histories: std::collections::HashMap<String, super::outdated::LineHistory>,
     pub history_task: Option<Task<()>>,
@@ -203,7 +206,6 @@ impl Workspace {
                             this.requests.drafts = drafts;
                             this.requests.pipeline = pipeline;
                             this.requests.approvals = approvals;
-                            this.details_first_time(iid, cx);
                             // Both read the discussions just taken in.
                             this.compute_histories(cx);
                             this.load_awards(cx);
@@ -1238,23 +1240,6 @@ impl Workspace {
             return;
         };
         self.request_action(move |remote| mr::delete_draft(&remote, iid, id), cx);
-    }
-
-    /// "!412 · 3" on the Commits label: back to the diff of the whole request after one commit.
-    pub(super) fn render_request_chip(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let (base, head, iid) = self.open_request.clone()?;
-        let selected = self.selection == Selection::None && self.showing_request();
-        let n = self.commits.len();
-        Some(
-            super::commit_chip("request-row", selected)
-                .child(super::words::number(iid))
-                .tooltip_show_delay(crate::ui::hover::LONG)
-                .tooltip(|_, cx| cx.new(|_| super::Tip("The whole merge request")).into())
-                .child(div().text_color(theme::warning()).child(n.to_string()))
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.run_compare(base.clone(), head.clone(), true, Some(iid), cx)
-                })),
-        )
     }
 
     /// The Discussions tool window: every comment on the open diff, the request's in orange and the

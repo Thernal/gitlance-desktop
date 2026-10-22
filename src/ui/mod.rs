@@ -8,7 +8,6 @@ mod bookmarks;
 mod comments;
 mod complete;
 mod create;
-mod details;
 mod diff_view;
 mod discussion;
 mod fetch;
@@ -39,6 +38,7 @@ mod palette;
 mod rail;
 mod reactions;
 mod recents;
+mod request_page;
 mod requests;
 mod reviewed;
 mod roots;
@@ -143,7 +143,9 @@ actions!(
         ShowShortcuts,
         ToggleThread,
         ToggleComments,
-        ToggleDetails,
+        ShowOverview,
+        NextSection,
+        PreviousSection,
         MarkReviewed,
         OpenRecent,
         ZoomIn,
@@ -302,7 +304,9 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
             ToggleComments,
             Some("Workspace && !Typing"),
         ),
-        KeyBinding::new(&k("cmd-i"), ToggleDetails, Some("Workspace && !Typing")),
+        KeyBinding::new(&k("cmd-i"), ShowOverview, Some("Workspace && !Typing")),
+        KeyBinding::new(&k("ctrl-tab"), NextSection, Some("Workspace")),
+        KeyBinding::new(&k("ctrl-shift-tab"), PreviousSection, Some("Workspace")),
         KeyBinding::new(&k("v"), MarkReviewed, Some("Workspace && !Typing")),
         KeyBinding::new(&k("cmd-e"), OpenRecent, Some("Workspace")),
         KeyBinding::new(&k("cmd-="), ZoomIn, Some("Workspace")),

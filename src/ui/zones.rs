@@ -61,7 +61,12 @@ impl Workspace {
             self.nav.space,
             super::spaces::Space::Branches | super::spaces::Space::Requests
         ) && !self.at_root_list();
-        if !item {
+        // A request's Overview and Commits: no side panel and no diff (#73).
+        let tab_page = matches!(
+            self.request_tab(),
+            Some(super::nav::Section::Overview | super::nav::Section::Commits)
+        );
+        if !item || tab_page {
             if self.at_root_list() {
                 out.push(Zone::Branches);
             }
@@ -105,6 +110,9 @@ impl Workspace {
         if self.inbox && self.zone != Zone::Tool {
             return self.inbox_step(down, cx);
         }
+        if self.request_tab() == Some(super::nav::Section::Commits) && self.zone != Zone::Tool {
+            return self.step_commit_pick(down, cx);
+        }
         match self.zone {
             Zone::Commits => self.step_commit_row(down, cx),
             Zone::Branches => self.step_pick(down, cx),
@@ -123,6 +131,10 @@ impl Workspace {
 
     /// ← and → : the neighbouring file, or in the file tree open and close folders.
     pub(super) fn zone_horizontal(&mut self, forward: bool, cx: &mut Context<Self>) {
+        // On a request's commit they walk its commits, but in the file tree (#73).
+        if self.zone != Zone::Files && self.step_request_commit(forward, cx) {
+            return;
+        }
         match self.zone {
             Zone::Files if !self.options.list_files && self.pfilter.trim().is_empty() => {
                 self.tree_horizontal(forward, cx)
@@ -165,6 +177,9 @@ impl Workspace {
         // A space's list: what is selected in it opens (#71).
         if self.at_root_list() && self.zone == Zone::Branches {
             return self.open_pick(cx);
+        }
+        if self.request_tab() == Some(super::nav::Section::Commits) && self.zone != Zone::Tool {
+            return self.open_commit_pick(cx);
         }
         match self.zone {
             Zone::Tool | Zone::Branches => {}

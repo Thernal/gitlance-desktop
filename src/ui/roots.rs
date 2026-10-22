@@ -500,6 +500,17 @@ impl Workspace {
             .collect()
     }
 
+    /// Whether you have been inside request `iid`: opened here, or files of it marked (#81).
+    pub(super) fn opened_before(&self, iid: u64) -> bool {
+        let head = self
+            .requests
+            .list
+            .iter()
+            .find(|m| m.iid == iid)
+            .and_then(|m| git2::Oid::from_str(&m.head).ok());
+        self.roots.opened.contains(&iid) || !matches!(self.request_seen(iid, head), Seen::Never)
+    }
+
     /// Request `iid` opened: its row's dot goes for good. Requests no longer open are forgotten.
     pub(super) fn mark_opened(&mut self, iid: u64) {
         if self.roots.opened.contains(&iid) {
@@ -820,10 +831,7 @@ impl Workspace {
         // review is, its group says (#81).
         let unread = match waiting {
             Some(n) => n > 0,
-            None => {
-                !self.roots.opened.contains(&iid)
-                    && matches!(self.request_seen(iid, head), Seen::Never)
-            }
+            None => !self.opened_before(iid),
         };
         let mut meta: Vec<AnyElement> = Vec::new();
         let mut text = |s: String| meta.push(div().child(s).into_any_element());

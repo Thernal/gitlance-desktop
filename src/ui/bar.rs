@@ -203,10 +203,12 @@ impl Workspace {
                 true,
             ),
             Some(Page::Request(iid)) => (vec![requests()], words::number(*iid), false),
+            // A commit is a level under the request's Commits (#73).
             Some(Page::RequestCommit(iid, id)) => (
                 vec![
                     requests(),
                     Crumb::up(words::number(*iid), Some(Page::Request(*iid))),
+                    Crumb::up("Commits", Some(Page::Request(*iid))),
                 ],
                 format::short(*id),
                 true,
@@ -245,7 +247,8 @@ impl Workspace {
         }
     }
 
-    /// The page's view switch: the Inbox's filters, the requests list's.
+    /// The page's view switch: the Inbox's filters, the requests list's, a request's section
+    /// tabs (#73).
     fn view_of(
         &self,
         space: Space,
@@ -257,6 +260,7 @@ impl Workspace {
             (Space::Requests, None) if self.requests.available => {
                 self.request_filters(cx).map(IntoElement::into_any_element)
             }
+            (Space::Requests, Some(_)) => self.section_tabs(cx).map(IntoElement::into_any_element),
             _ => None,
         }
     }
@@ -328,6 +332,22 @@ impl Workspace {
                     ),
                     None => {}
                 }
+            }
+            (Space::Requests, Some(Page::RequestCommit(..))) => {
+                out.push(
+                    bar_button("bar-previous-commit", "Previous", "[", false)
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.step_request_commit(false, cx);
+                        }))
+                        .into_any_element(),
+                );
+                out.push(
+                    bar_button("bar-next-commit", "Next", "]", false)
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.step_request_commit(true, cx);
+                        }))
+                        .into_any_element(),
+                );
             }
             (Space::Requests, Some(Page::Request(_))) if self.showing_request() => {
                 let pending = self.requests.drafts.len();

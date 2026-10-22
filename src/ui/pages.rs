@@ -3,27 +3,28 @@
 //! branch's or request's panes with its identity over the diff.
 //! Code's root is interim until its page comes: the files opened lately and Go to a file (#75).
 
+use super::nav::Section;
 use super::spaces::Space;
 use super::{Split, Workspace, gap, island, keys, motion, px, theme};
 use gpui::{AnyElement, ClickEvent, Context, div, prelude::*};
 
 impl Workspace {
     pub(super) fn render_space(&self, cx: &mut Context<Self>) -> AnyElement {
-        let body =
-            match (self.nav.space, self.nav_page()) {
-                (Space::Inbox, _) => div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(self.render_inbox(cx))
-                    .children(self.render_tool(cx)),
-                (Space::Code, None) => div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(self.render_code_root(cx)),
-                (Space::Code, Some(_)) => div()
+        let body = match (self.nav.space, self.nav_page()) {
+            (Space::Inbox, _) => div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(self.render_inbox(cx))
+                .children(self.render_tool(cx)),
+            (Space::Code, None) => div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(self.render_code_root(cx)),
+            (Space::Code, Some(_)) => {
+                div()
                     .relative()
                     .flex_1()
                     .min_h_0()
@@ -31,23 +32,30 @@ impl Workspace {
                     .child(self.render_file_view().unwrap_or_else(|| {
                         island().flex_1().bg(theme::editor()).into_any_element()
                     }))
-                    .children(self.render_tool(cx)),
-                (Space::Branches, None) => div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(self.render_branches_root(cx))
-                    .children(self.render_tool(cx)),
-                (Space::Requests, None) => div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(self.render_requests_root(cx))
-                    .children(self.render_tool(cx)),
-                (Space::Branches | Space::Requests, Some(_)) => self.render_item(cx),
-            };
+                    .children(self.render_tool(cx))
+            }
+            (Space::Branches, None) => div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(self.render_branches_root(cx))
+                .children(self.render_tool(cx)),
+            (Space::Requests, None) => div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(self.render_requests_root(cx))
+                .children(self.render_tool(cx)),
+            // A request's Overview and Commits are pages of their own (#73).
+            (Space::Requests, Some(_))
+                if let Some(tab @ (Section::Overview | Section::Commits)) = self.request_tab() =>
+            {
+                self.render_request_tab(tab, cx)
+            }
+            (Space::Branches | Space::Requests, Some(_)) => self.render_item(cx),
+        };
         div()
             .flex_1()
             .min_w_0()
@@ -90,7 +98,7 @@ impl Workspace {
             .map(|diff| {
                 if let Some(head) = self.render_create_header(cx) {
                     head
-                } else if let Some(head) = self.render_request_header(cx) {
+                } else if let Some(head) = self.render_request_line(cx) {
                     head
                 } else {
                     self.render_header(diff, cx).into_any_element()

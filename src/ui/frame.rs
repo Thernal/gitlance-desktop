@@ -956,11 +956,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToggleAnnotate, _, cx| this.toggle_annotate(cx)))
             .on_action(cx.listener(|this, _: &FindInFiles, _, cx| this.open_find_files(cx)))
             .on_action(cx.listener(|this, _: &ToggleReviewed, _, cx| this.toggle_reviewed(cx)))
-            .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| {
-                if this.showing_request() {
-                    this.toggle_tool(tools::Tool::Details, cx)
-                }
+            .on_action(cx.listener(|this, _: &ShowOverview, _, cx| {
+                this.show_section(nav::Section::Overview, cx)
             }))
+            .on_action(cx.listener(|this, _: &NextSection, _, cx| this.step_section(true, cx)))
+            .on_action(cx.listener(|this, _: &PreviousSection, _, cx| this.step_section(false, cx)))
             .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
                 this.toggle_tool(tools::Tool::Discussions, cx)
             }))

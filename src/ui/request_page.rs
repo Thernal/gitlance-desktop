@@ -1,0 +1,784 @@
+//! A merge request's page (#73): the section tabs of its bar — Overview, Commits, Changes — and
+//! what the first two show; Changes is the diff, with one line of identity over it. Overview holds
+//! what the Details tool window held (#8), as a page: the identity and its facts, the description,
+//! and a column of who reviews, labels and milestone, and the discussions in short. A request you
+//! have never been inside opens on it, later ones on Changes (`nav::first_section`). Commits lists
+//! the request's commits with the version each came with; one opens as a level under it.
+
+use super::nav::{Item, Page, Section};
+use super::{Workspace, format, icons, island, markdown, plural, px, theme, words};
+use crate::mr::{Details, Mr};
+use gpui::{AnyElement, ClickEvent, Context, Div, FontWeight, Rgba, SharedString, div, prelude::*};
+
+impl Workspace {
+    /// The request of the page on screen, once it is the one loaded.
+    fn page_request(&self) -> Option<&Mr> {
+        let Some(Item::Request(iid)) = self.nav_page()?.item() else {
+            return None;
+        };
+        self.requests
+            .list
+            .iter()
+            .find(|m| m.iid == iid)
+            .filter(|_| self.requests.current == Some(iid))
+    }
+
+    /// A request's Overview or Commits under its bar, the tool window beside it.
+    pub(super) fn render_request_tab(&self, tab: Section, cx: &mut Context<Self>) -> Div {
+        let body = match (self.page_request(), tab) {
+            (None, _) => island()
+                .flex_1()
+                .bg(theme::editor())
+                .px(px(28.))
+                .py(px(26.))
+                .child(super::roots::skeleton(4))
+                .into_any_element(),
+            (Some(m), Section::Overview) => self.render_overview(m, cx),
+            (Some(m), _) => self.render_commits_tab(m, cx),
+        };
+        div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .child(body)
+            .children(self.render_tool(cx))
+    }
+
+    /// Overview: the identity and its facts, then the description beside the facts column.
+    fn render_overview(&self, m: &Mr, cx: &mut Context<Self>) -> AnyElement {
+        let d = self.requests.details.clone().unwrap_or_default();
+        // The list's own copy until the request's details are in.
+        let text = if d.description.trim().is_empty() {
+            &m.description
+        } else {
+            &d.description
+        };
+        let description = if text.trim().is_empty() {
+            div()
+                .text_color(theme::muted())
+                .child("No description.")
+                .into_any_element()
+        } else {
+            markdown::body(
+                text,
+                true,
+                format!("overview-{}", m.iid),
+                self.web.as_ref().map(|w| w.base.as_str()),
+                None,
+            )
+        };
+        island()
+            .flex_1()
+            .min_w_0()
+            .bg(theme::editor())
+            .child(
+                div()
+                    .id("overview")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(self.overview_identity(m, cx))
+                    .child(div().h(px(1.)).bg(theme::island_border()))
+                    .child(
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap(px(32.))
+                            .px(px(24.))
+                            .py(px(20.))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(10.))
+                                    .child(
+                                        div()
+                                            .text_size(px(15.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("Description"),
+                                    )
+                                    .child(div().text_size(px(13.)).child(description)),
+                            )
+                            .child(
+                                div()
+                                    .w(px(300.))
+                                    .flex_none()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(20.))
+                                    .text_size(px(12.))
+                                    .children(self.overview_facts(&d, cx)),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Overview's head: the title and its state, who wants to merge what into what, and the facts
+    /// in a row — author, branches, pipeline, approvals, how far your review is, the versions.
+    fn overview_identity(&self, m: &Mr, cx: &mut Context<Self>) -> Div {
+        let url = m.url.clone();
+        let pipeline = self.requests.pipeline.as_ref().map_or_else(
+            || faint("—").into_any_element(),
+            |p| {
+                let (glyph, word, color) = super::requests::pipeline_word(p);
+                div()
+                    .text_color(color)
+                    .child(format!("{glyph} {word}"))
+                    .into_any_element()
+            },
+        );
+        let approvals = match &self.requests.approvals {
+            Some(a) if a.required > 0 => {
+                format!("{} of {}", a.required - a.left.min(a.required), a.required)
+            }
+            Some(a) if !a.by.is_empty() => format!("{} approved", a.by.len()),
+            Some(_) => "none yet".to_owned(),
+            None => "—".to_owned(),
+        };
+        let head = git2::Oid::from_str(&m.head).ok();
+        let reviewed = self
+            .review_progress()
+            .map(|(done, total)| (done as u32, total as u32))
+            .or_else(|| head.and_then(|h| self.head_part(h)))
+            .map_or_else(
+                || "—".to_owned(),
+                |(done, total)| format!("{done} of {}", plural(total as usize, "file")),
+            );
+        let latest = self.versions.last().map(|v| v.number);
+        let versions = match (self.marked_version(m.iid), latest) {
+            (Some(at), Some(latest)) if at < latest => format!("v{at} → v{latest}"),
+            (_, Some(latest)) => format!("v{latest}"),
+            _ => "—".to_owned(),
+        };
+        div()
+            .px(px(24.))
+            .pt(px(20.))
+            .pb(px(18.))
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(17.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(m.title.clone()),
+                    )
+                    .child(state_chip(m))
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .id("overview-web")
+                            .flex_none()
+                            .text_size(px(12.))
+                            .text_color(theme::faint())
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(theme::accent()))
+                            .child(words::say("Open in GitLab ↗").into_owned())
+                            .on_click(
+                                cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url)),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_x(px(5.))
+                    .text_size(px(13.))
+                    .text_color(theme::muted())
+                    .child(div().text_color(theme::text()).child(m.author.clone()))
+                    .child("wants to merge")
+                    .child(
+                        div()
+                            .text_color(theme::text())
+                            .child(plural(self.commits.len(), "commit")),
+                    )
+                    .child("from")
+                    .child(mono(&m.source).text_color(theme::accent()))
+                    .child("into")
+                    .child(mono(&m.target)),
+            )
+            .child(
+                div()
+                    .mt(px(12.))
+                    .flex()
+                    .flex_wrap()
+                    .gap_x(px(32.))
+                    .gap_y(px(12.))
+                    .child(fact(
+                        "Author",
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(super::discussion::avatar(&m.author, false, 16.))
+                            .child(m.author.clone())
+                            .into_any_element(),
+                    ))
+                    .child(fact(
+                        "Branches",
+                        div()
+                            .flex()
+                            .gap(px(5.))
+                            .child(mono(&m.source).text_color(theme::accent()))
+                            .child(faint("→"))
+                            .child(mono(&m.target))
+                            .into_any_element(),
+                    ))
+                    .child(fact("Pipeline", pipeline))
+                    .child(fact("Approvals", div().child(approvals).into_any_element()))
+                    .child(fact("Reviewed", div().child(reviewed).into_any_element()))
+                    .child(fact("Versions", div().child(versions).into_any_element())),
+            )
+    }
+
+    /// Overview's column of facts: who reviews and how far, assignees, labels and milestone, the
+    /// discussions in short (a click shows one on Changes).
+    fn overview_facts(&self, d: &Details, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut out: Vec<AnyElement> = Vec::new();
+        let approved = self
+            .requests
+            .approvals
+            .as_ref()
+            .map(|a| a.by.clone())
+            .unwrap_or_default();
+        // Who reviews: those asked, then whoever approved without being asked (GitHub drops an
+        // approving reviewer from the asked ones).
+        let mut reviewers = d.reviewers.clone();
+        for name in approved.iter().chain(&d.changes_requested) {
+            if !reviewers.contains(name) {
+                reviewers.push(name.clone());
+            }
+        }
+        if !reviewers.is_empty() {
+            out.push(
+                block(
+                    "Reviewers",
+                    reviewers.into_iter().map(|r| {
+                        let state = if approved.contains(&r) {
+                            ("✓ approved", theme::added())
+                        } else if d.changes_requested.contains(&r) {
+                            ("requested changes", theme::warning())
+                        } else {
+                            ("reviewing", theme::muted())
+                        };
+                        person(r, Some(state)).into_any_element()
+                    }),
+                )
+                .into_any_element(),
+            );
+        }
+        if !d.assignees.is_empty() {
+            out.push(
+                block(
+                    "Assignees",
+                    d.assignees
+                        .iter()
+                        .map(|a| person(a.clone(), None).into_any_element()),
+                )
+                .into_any_element(),
+            );
+        }
+        if !d.labels.is_empty() || d.milestone.is_some() {
+            let title = match (d.labels.is_empty(), d.milestone.is_some()) {
+                (false, true) => "Labels · Milestone",
+                (false, false) => "Labels",
+                _ => "Milestone",
+            };
+            let chips = d
+                .labels
+                .iter()
+                .map(|l| {
+                    let color = l.color.map_or(theme::muted(), gpui::rgb);
+                    chip(l.name.clone(), color)
+                })
+                .chain(d.milestone.as_ref().map(|(name, due)| {
+                    chip(
+                        match due {
+                            Some(due) => format!("{name} · due {due}"),
+                            None => name.clone(),
+                        },
+                        theme::muted(),
+                    )
+                }));
+            out.push(
+                block(
+                    title,
+                    [div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(6.))
+                        .children(chips)
+                        .into_any_element()],
+                )
+                .into_any_element(),
+            );
+        }
+        let threads = &self.requests.threads;
+        let drafts = &self.requests.drafts;
+        if !threads.is_empty() || !drafts.is_empty() {
+            let open = threads.iter().filter(|t| !t.resolved).count();
+            let title = format!("Discussions · {}", open + drafts.len());
+            let place = |path: &Option<String>, line: Option<u32>| {
+                path.as_ref().map(|p| {
+                    let name = p.rsplit('/').next().unwrap_or(p);
+                    match line {
+                        Some(line) => format!("on {name}:{line}"),
+                        None => format!("on {name}"),
+                    }
+                })
+            };
+            let thread = |n: usize, t: &crate::mr::Thread, cx: &mut Context<Self>| {
+                let first = t.notes.first()?;
+                let at = t.path.clone().zip(
+                    t.new_line
+                        .map(|l| (l, false))
+                        .or(t.old_line.map(|l| (l, true))),
+                );
+                Some(
+                    discussion_row(
+                        SharedString::from(format!("overview-thread-{n}")),
+                        &first.author,
+                        place(&t.path, t.new_line.or(t.old_line)),
+                        t.resolved.then_some("resolved"),
+                        &first.body,
+                    )
+                    .when_some(at, |s, (path, (line, old))| {
+                        s.cursor_pointer().on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| {
+                                this.show_section(Section::Changes, cx);
+                                this.jump_to_line(&path, line, old, cx)
+                            },
+                        ))
+                    })
+                    .into_any_element(),
+                )
+            };
+            // The open ones first, then your notes not submitted, then what was resolved.
+            let mut rows: Vec<AnyElement> = threads
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| !t.resolved)
+                .filter_map(|(n, t)| thread(n, t, cx))
+                .collect();
+            rows.extend(drafts.iter().enumerate().map(|(n, draft)| {
+                discussion_row(
+                    SharedString::from(format!("overview-draft-{n}")),
+                    "You",
+                    place(&draft.path, draft.new_line.or(draft.old_line)),
+                    Some("pending, not submitted"),
+                    &draft.body,
+                )
+                .into_any_element()
+            }));
+            rows.extend(
+                threads
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| t.resolved)
+                    .filter_map(|(n, t)| thread(n, t, cx)),
+            );
+            rows.truncate(10);
+            out.push(block(&title, rows).into_any_element());
+        }
+        out
+    }
+
+    /// Commits: one line of identity, then the request's commits, newest first, each with the
+    /// version it came with; ↑ ↓ pick one, ↵ or a second click opens it as a level.
+    fn render_commits_tab(&self, m: &Mr, cx: &mut Context<Self>) -> AnyElement {
+        let tips: Vec<(usize, git2::Oid)> =
+            self.versions.iter().map(|v| (v.number, v.tip)).collect();
+        let ids: Vec<git2::Oid> = self.commits.iter().map(|c| c.id).collect();
+        let versions = commit_versions(&ids, &tips);
+        let picked = self.picked_commit();
+        let line = self.request_line(m, cx);
+        let rows: Vec<_> = self
+            .commits
+            .iter()
+            .enumerate()
+            .map(|(ix, c)| {
+                let selected = picked == Some(ix);
+                super::row(("request-commit", ix), selected)
+                    .h(px(36.))
+                    .gap(px(10.))
+                    .px(px(10.))
+                    .child(
+                        icons::icon("commit")
+                            .size(px(14.))
+                            .text_color(theme::faint()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_family(theme::CODE_FONT)
+                            .text_size(px(12.))
+                            .text_color(theme::faint())
+                            .child(format::short(c.id)),
+                    )
+                    .child(div().flex_1().min_w_0().truncate().child(c.summary.clone()))
+                    .children(versions[ix].map(|v| {
+                        div()
+                            .flex_none()
+                            .px(px(6.))
+                            .rounded_full()
+                            .border_1()
+                            .border_color(theme::accent())
+                            .text_size(px(11.))
+                            .text_color(theme::accent())
+                            .child(format!("v{v}"))
+                    }))
+                    .child(
+                        super::hover::ago(("request-commit-ago", ix), c.time)
+                            .flex_none()
+                            .text_size(px(11.))
+                            .text_color(theme::faint()),
+                    )
+                    .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                        if this.picked_commit() == Some(ix) && event.click_count() > 1 {
+                            return this.select_commit(ix, cx);
+                        }
+                        this.nav.pick_commit = this.commits.get(ix).map(|c| c.id);
+                        cx.notify();
+                    }))
+            })
+            .collect();
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(super::gap()))
+            .child(line)
+            .child(
+                island().flex_1().min_h_0().bg(theme::editor()).child(
+                    div()
+                        .id("request-commits")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .px(px(8.))
+                        .py(px(8.))
+                        .child(
+                            div()
+                                .px(px(10.))
+                                .pb(px(6.))
+                                .text_size(px(11.))
+                                .text_color(theme::faint())
+                                .child(plural(self.commits.len(), "commit")),
+                        )
+                        .children(rows),
+                ),
+            )
+            .into_any_element()
+    }
+
+    /// The section tabs in a request's bar: Overview, Commits and Changes with their counts; ⌃⇥
+    /// walks them.
+    pub(super) fn section_tabs(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let at = self.request_section()?;
+        let iid = match self.nav_page()?.item()? {
+            Item::Request(iid) => iid,
+            Item::Branch(_) => return None,
+        };
+        let loaded = self.requests.current == Some(iid);
+        let count = |section: Section| match section {
+            Section::Overview => None,
+            Section::Commits => loaded.then_some(self.commits.len()),
+            Section::Changes => self
+                .requests
+                .files
+                .filter(|(of, _)| *of == iid)
+                .map(|(_, n)| n),
+        };
+        Some(
+            Section::ALL
+                .into_iter()
+                .fold(super::diff_view::group(), |group, section| {
+                    let label = match count(section) {
+                        Some(n) => format!("{} {n}", section.label()),
+                        None => section.label().to_owned(),
+                    };
+                    group.child(
+                        super::diff_view::chip(
+                            SharedString::from(format!("section-{}", section.label())),
+                            label,
+                            section == at,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| this.show_section(section, cx),
+                        )),
+                    )
+                }),
+        )
+    }
+
+    /// The commit Commits has picked: the one esc came back from, else the newest.
+    fn picked_commit(&self) -> Option<usize> {
+        let at = self
+            .nav
+            .pick_commit
+            .and_then(|id| self.commits.iter().position(|c| c.id == id));
+        at.or((!self.commits.is_empty()).then_some(0))
+    }
+
+    /// ↑ ↓ in a request's Commits: another commit picked, nothing opened.
+    pub(super) fn step_commit_pick(&mut self, down: bool, cx: &mut Context<Self>) {
+        let n = self.commits.len();
+        let to = match (self.picked_commit(), down) {
+            (Some(at), true) => (at + 1).min(n.saturating_sub(1)),
+            (Some(at), false) => at.saturating_sub(1),
+            (None, _) => return,
+        };
+        self.nav.pick_commit = self.commits.get(to).map(|c| c.id);
+        cx.notify();
+    }
+
+    /// ↵ in a request's Commits: the commit picked opens as a level under it.
+    pub(super) fn open_commit_pick(&mut self, cx: &mut Context<Self>) {
+        if let Some(ix) = self.picked_commit() {
+            self.select_commit(ix, cx);
+        }
+    }
+
+    /// [ and ] on a request's commit: the commit before or after it in time (the list is newest
+    /// first). Whether the page was one.
+    pub(super) fn step_request_commit(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
+        let Some(Page::RequestCommit(_, id)) = self.nav_page().cloned() else {
+            return false;
+        };
+        let Some(at) = self.commits.iter().position(|c| c.id == id) else {
+            return false;
+        };
+        let to = if forward {
+            at.checked_sub(1)
+        } else {
+            (at + 1 < self.commits.len()).then_some(at + 1)
+        };
+        if let Some(to) = to {
+            self.select_commit(to, cx);
+        }
+        true
+    }
+
+    /// One line of a request's identity, over its Commits and its Changes: the title, its state,
+    /// the pipeline (#73).
+    pub(super) fn render_request_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let m = self
+            .requests
+            .current
+            .filter(|_| self.showing_request())
+            .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))?;
+        Some(self.request_line(m, cx).into_any_element())
+    }
+
+    fn request_line(&self, m: &Mr, cx: &mut Context<Self>) -> Div {
+        island()
+            .flex_none()
+            .flex_row()
+            .items_center()
+            .gap(px(10.))
+            .h(px(40.))
+            .px(px(14.))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(m.title.clone()),
+            )
+            .child(state_chip(m))
+            .child(div().flex_1())
+            .children(self.render_pipeline_pill(cx))
+    }
+}
+
+/// Each commit's version, the commits newest first: the version whose tip it is, else the one of
+/// the commit above it — it came with that push. None above the first tip found (a push rewrote
+/// what the versions knew).
+fn commit_versions(commits: &[git2::Oid], tips: &[(usize, git2::Oid)]) -> Vec<Option<usize>> {
+    let mut at = None;
+    commits
+        .iter()
+        .map(|id| {
+            // The first push it was the tip of: when it came.
+            if let Some(&(number, _)) = tips.iter().find(|(_, tip)| tip == id) {
+                at = Some(number);
+            }
+            at
+        })
+        .collect()
+}
+
+/// The request's state as a chip: open, or a draft.
+fn state_chip(m: &Mr) -> Div {
+    let (word, color) = if m.draft {
+        ("Draft", theme::warning())
+    } else {
+        ("Open", theme::added())
+    };
+    div()
+        .flex_none()
+        .px(px(6.))
+        .rounded(px(4.))
+        .bg(Rgba { a: 0.15, ..color })
+        .text_size(px(11.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(color)
+        .child(word)
+}
+
+/// A fact of Overview's head: its label over its value.
+fn fact(label: &'static str, value: AnyElement) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .child(
+            div()
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme::faint())
+                .child(label.to_uppercase()),
+        )
+        .child(div().text_size(px(13.)).child(value))
+}
+
+/// A block of Overview's column: its heading over its rows.
+fn block(title: &str, rows: impl IntoIterator<Item = AnyElement>) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .child(
+            div()
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme::faint())
+                .child(title.to_uppercase()),
+        )
+        .children(rows)
+}
+
+fn person(name: String, state: Option<(&'static str, Rgba)>) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .child(super::discussion::avatar(&name, false, 18.))
+        .child(name)
+        .children(state.map(|(word, color)| div().text_color(color).child(word)))
+}
+
+fn chip(text: String, color: Rgba) -> Div {
+    div()
+        .px(px(8.))
+        .h(px(20.))
+        .flex()
+        .items_center()
+        .rounded_full()
+        .border_1()
+        .border_color(Rgba { a: 0.45, ..color })
+        .bg(Rgba { a: 0.18, ..color })
+        .text_size(px(11.))
+        .text_color(theme::text())
+        .child(text)
+}
+
+/// A discussion in short: who, where, its state, and the first lines of its first note.
+fn discussion_row(
+    id: SharedString,
+    who: &str,
+    place: Option<String>,
+    state: Option<&'static str>,
+    body: &str,
+) -> gpui::Stateful<Div> {
+    // Plain words: its code marks would show as backticks.
+    let text: String = body
+        .lines()
+        .take(3)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('`', "");
+    div()
+        .id(id)
+        .flex()
+        .items_start()
+        .gap(px(8.))
+        .py(px(6.))
+        .border_t_1()
+        .border_color(theme::island_border())
+        .child(super::discussion::avatar(who, false, 16.))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_x(px(4.))
+                        .text_color(theme::muted())
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme::text())
+                                .child(who.to_owned()),
+                        )
+                        .children(place)
+                        .children(state.map(|s| div().text_color(theme::faint()).child(s))),
+                )
+                .child(div().line_clamp(2).text_color(theme::muted()).child(text)),
+        )
+}
+
+fn mono(text: &str) -> Div {
+    div().font_family(theme::CODE_FONT).child(text.to_owned())
+}
+
+fn faint(text: &'static str) -> Div {
+    div().text_color(theme::faint()).child(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::commit_versions;
+    use git2::Oid;
+
+    fn id(n: u8) -> Oid {
+        Oid::from_bytes(&[n; 20]).unwrap()
+    }
+
+    #[test]
+    fn a_commit_is_of_the_push_it_came_with() {
+        // Newest first: 3 is v3's tip, 2 v2's, 1 came with v2 too (v1's tip was 0).
+        let commits = [id(3), id(2), id(1), id(0)];
+        let tips = [(1, id(0)), (2, id(2)), (3, id(3))];
+        assert_eq!(
+            commit_versions(&commits, &tips),
+            [Some(3), Some(2), Some(2), Some(1)]
+        );
+        // A push rewrote them all: none of the tips is among them but the last.
+        let rewritten = [id(9), id(8), id(7)];
+        assert_eq!(
+            commit_versions(&rewritten, &[(1, id(0)), (2, id(9))]),
+            [Some(2), Some(2), Some(2)]
+        );
+        assert_eq!(commit_versions(&[id(1)], &[]), [None]);
+    }
+}

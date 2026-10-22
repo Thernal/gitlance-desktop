@@ -307,6 +307,13 @@ impl Workspace {
     /// Called when a diff arrives: its scope and the fingerprint of each file.
     pub(super) fn index_review(&mut self) {
         self.review_scope = self.review_scope();
+        if let Some(d) = &self.diff
+            && let Header::Compare {
+                request: Some(iid), ..
+            } = d.header
+        {
+            self.requests.files = Some((iid, d.files.len()));
+        }
         self.fps = match (&self.review_scope, &self.diff) {
             (Some(_), Some(d)) => d.files.iter().map(fingerprint).collect(),
             _ => Vec::new(),
@@ -406,6 +413,17 @@ impl Workspace {
                     .set_progress(&root, head, reviewed as u32, total as u32);
             }
         }
+    }
+
+    /// The version of request `iid` your marks were last made at, by the versions loaded (#73).
+    pub(super) fn marked_version(&self, iid: u64) -> Option<usize> {
+        let root = self.root.as_ref()?.display().to_string();
+        let heads = self.reviewed.marked_heads(&format!("{root}|mr:{iid}"));
+        self.versions
+            .iter()
+            .filter(|v| heads.contains(&Some(v.tip)))
+            .map(|v| v.number)
+            .max()
     }
 
     /// How far the review of the branch or request ending at `head` got, when it started and is

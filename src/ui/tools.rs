@@ -1,5 +1,5 @@
 //! The right edge of the redesign (Design `design/shell/`, #49): an icon stripe that opens one tool
-//! window at a time beside the diff — Details, Discussions, Agents — and Submit review in the same
+//! window at a time beside the diff — Discussions, Agents — and Submit review in the same
 //! place (the bell's Notifications window retired into the Inbox, #72). The same icon or esc closes it; which one is open and its width are kept in
 //! `layout.txt`. No stripe until a repository is open, none in zen.
 
@@ -9,8 +9,6 @@ use gpui::{AnyElement, ClickEvent, Context, FontWeight, Rgba, SharedString, div,
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
-    /// A merge request's facts and description (#8); only while one is shown.
-    Details,
     Discussions,
     Agents,
 }
@@ -18,21 +16,19 @@ pub enum Tool {
 impl Tool {
     fn name(self) -> &'static str {
         match self {
-            Tool::Details => "details",
             Tool::Discussions => "discussions",
             Tool::Agents => "agents",
         }
     }
 
     pub fn parse(name: &str) -> Option<Self> {
-        [Tool::Details, Tool::Discussions, Tool::Agents]
+        [Tool::Discussions, Tool::Agents]
             .into_iter()
             .find(|t| t.name() == name)
     }
 
     fn icon(self) -> &'static str {
         match self {
-            Tool::Details => "info",
             Tool::Discussions => "message",
             Tool::Agents => "bot",
         }
@@ -40,7 +36,6 @@ impl Tool {
 
     fn tip(self) -> &'static str {
         match self {
-            Tool::Details => "Request details  ⌘I",
             Tool::Discussions => "Discussions  ⌘⇧D",
             Tool::Agents => "Agents  ⇧⌘A",
         }
@@ -58,8 +53,8 @@ pub struct ToolView {
 }
 
 impl Workspace {
-    /// The tool window open now; Details on a request's page, Discussions on a branch's or a
-    /// request's (#71).
+    /// The tool window open now; Discussions on a branch's or a request's page (#71); a
+    /// request's details are its Overview (#73).
     pub(super) fn tool(&self) -> Option<Tool> {
         self.root.as_ref()?;
         let tool = Tool::parse(&self.layout.tool)?;
@@ -68,12 +63,6 @@ impl Workspace {
             super::spaces::Space::Branches | super::spaces::Space::Requests
         ) && self.nav_page().is_some();
         match tool {
-            Tool::Details
-                if !self.showing_request()
-                    || !matches!(self.nav_page(), Some(super::nav::Page::Request(_))) =>
-            {
-                None
-            }
             Tool::Discussions if !item => None,
             tool => Some(tool),
         }
@@ -196,10 +185,6 @@ impl Workspace {
                 .items_center()
                 .gap(px(4.))
                 .pt(px(2.))
-                .children(
-                    self.showing_request()
-                        .then(|| button(Tool::Details, None, String::new())),
-                )
                 .child(button(
                     Tool::Discussions,
                     count(self.comments_total(), theme::accent()),
@@ -224,7 +209,6 @@ impl Workspace {
         let view = match self.submit_tool(cx) {
             Some(view) => view,
             None => match self.tool().or(self.last_tool.filter(|_| leaving))? {
-                Tool::Details => self.details_tool(cx),
                 Tool::Discussions => self.discussions_tool(cx),
                 Tool::Agents => self.agents_tool(cx),
             },

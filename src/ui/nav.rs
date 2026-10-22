@@ -150,6 +150,27 @@ impl Item {
     }
 }
 
+/// A request's section tabs (#73): tabs, not levels — the request is one page, a commit of it a
+/// level under Commits.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Section {
+    Overview,
+    Commits,
+    Changes,
+}
+
+impl Section {
+    pub const ALL: [Section; 3] = [Section::Overview, Section::Commits, Section::Changes];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Section::Overview => "Overview",
+            Section::Commits => "Commits",
+            Section::Changes => "Changes",
+        }
+    }
+}
+
 /// A row of Branches' list: the working tree, or a branch (#72).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BranchRow {
@@ -169,6 +190,8 @@ pub struct Opened {
     place: Option<(String, ListOffset)>,
     /// The files of its diff when it was last shown: an agent draft on one is unsent work here.
     pub paths: Vec<String>,
+    /// A request's section tab (#73).
+    pub section: Section,
 }
 
 /// What `nav.txt` keeps of a project.
@@ -204,6 +227,8 @@ pub struct Nav {
     pending_show: Option<(Space, Option<Page>)>,
     /// The row a root list has selected: a request, a branch or the working tree.
     pub pick_request: Option<u64>,
+    /// The commit a request's Commits section has selected (#73).
+    pub pick_commit: Option<Oid>,
     pub pick_branch: Option<BranchRow>,
     /// Loading what a page needs, or coming back to a moment: no new moment, no link.
     restoring: bool,
@@ -222,6 +247,7 @@ impl Default for Nav {
             pending: None,
             pending_show: None,
             pick_request: None,
+            pick_commit: None,
             pick_branch: None,
             restoring: false,
         }
@@ -372,6 +398,64 @@ impl Workspace {
         self.set_page(page);
     }
 
+    /// The section a request opened anew starts on: Overview when you have never been inside it,
+    /// else Changes (#73).
+    fn first_section(&self, item: &Item) -> Section {
+        match item {
+            Item::Request(iid) if !self.opened_before(*iid) => Section::Overview,
+            _ => Section::Changes,
+        }
+    }
+
+    /// The section tab of the request on screen: a commit of it is under Commits, two versions
+    /// compared under Changes.
+    pub(super) fn request_section(&self) -> Option<Section> {
+        let page = self.nav_page()?;
+        match page {
+            Page::Request(_) | Page::RequestCommit(..) | Page::RequestVersions(..) => Some(
+                self.nav
+                    .opened(&page.item()?)
+                    .map_or(Section::Changes, |o| o.section),
+            ),
+            _ => None,
+        }
+    }
+
+    /// The request's tab on screen when it is the tabbed page itself, not a level under it.
+    pub(super) fn request_tab(&self) -> Option<Section> {
+        matches!(self.nav_page(), Some(Page::Request(_)))
+            .then(|| self.request_section())
+            .flatten()
+    }
+
+    /// Section `section` of the request on screen; from a commit or two versions, the whole
+    /// request again.
+    pub(super) fn show_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        let Some(page) = self.nav_page().cloned() else {
+            return;
+        };
+        let Some(item @ Item::Request(iid)) = page.item() else {
+            return;
+        };
+        if let Some(open) = self.nav.opened_mut(&item) {
+            open.section = section;
+        }
+        if !matches!(page, Page::Request(_)) {
+            self.show(Space::Requests, Some(Page::Request(iid)), cx);
+        }
+        cx.notify();
+    }
+
+    /// ⌃⇥ and ⌃⇧⇥: the next or the previous section tab, going round.
+    pub(super) fn step_section(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some(at) = self.request_section() else {
+            return;
+        };
+        let n = Section::ALL.len();
+        let ix = Section::ALL.iter().position(|s| *s == at).unwrap_or(0);
+        self.show_section(Section::ALL[(ix + if forward { 1 } else { n - 1 }) % n], cx);
+    }
+
     /// `page` becomes its space's and the space the one on screen; the request or branch it is of
     /// stays open in the menu; a moment of time.
     fn set_page(&mut self, page: Page) {
@@ -389,13 +473,32 @@ impl Workspace {
                     open.page = page.clone();
                     open.commit = commit.or(open.commit);
                 }
-                None => self.nav.open.push(Opened {
-                    item,
-                    page: page.clone(),
-                    commit,
-                    place: None,
-                    paths: Vec::new(),
-                }),
+                None => {
+                    let section = self.first_section(&item);
+                    self.nav.open.push(Opened {
+                        item: item.clone(),
+                        page: page.clone(),
+                        commit,
+                        place: None,
+                        paths: Vec::new(),
+                        section,
+                    })
+                }
+            }
+            // A commit of a request is a level under Commits, picked there when esc comes back to
+            // it; two versions compared are Changes (#73).
+            let section = match &page {
+                Page::RequestCommit(_, id) => {
+                    self.nav.pick_commit = Some(*id);
+                    Some(Section::Commits)
+                }
+                Page::RequestVersions(..) => Some(Section::Changes),
+                _ => None,
+            };
+            if let Some(section) = section
+                && let Some(open) = self.nav.opened_mut(&item)
+            {
+                open.section = section;
             }
         }
         self.remember_moment();
@@ -816,6 +919,7 @@ impl Workspace {
                 commit: None,
                 place: None,
                 paths: Vec::new(),
+                section: Section::Changes,
             });
         }
         let page = self.nav.pages[space.ix()].clone();
@@ -946,6 +1050,7 @@ mod tests {
                 commit: None,
                 place: None,
                 paths: Vec::new(),
+                section: Section::Changes,
             });
         }
         let Saved {

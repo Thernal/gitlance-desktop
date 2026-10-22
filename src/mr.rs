@@ -414,7 +414,7 @@ pub struct Label {
     pub color: Option<u32>,
 }
 
-/// What the Details window says about a request beyond its list row (#8).
+/// What a request's Overview says beyond its list row (#8, #73).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Details {
     pub description: String,
