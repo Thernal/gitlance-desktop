@@ -1,0 +1,402 @@
+//! The page bar (#71): one 44 px line over every page — the path ending in the item's id, each
+//! part above it a way up; "‹ Inbox" while a page reached from another space is on screen; the
+//! page's view switch; its actions and one primary action. Nothing else: the item's facts are the
+//! first block of its content. A request's bar carries the public orange along its top.
+
+use super::nav::Page;
+use super::spaces::Space;
+use super::{Workspace, format, island, keys, px, theme, words};
+use gpui::{AnyElement, ClickEvent, Context, FontWeight, SharedString, div, prelude::*};
+
+/// A part of the path: its words, and the page it goes up to.
+struct Crumb {
+    label: String,
+    mono: bool,
+    to: Option<Option<Page>>,
+}
+
+impl Crumb {
+    fn up(label: impl Into<String>, to: Option<Page>) -> Self {
+        Self {
+            label: label.into(),
+            mono: false,
+            to: Some(to),
+        }
+    }
+
+    fn plain(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            mono: false,
+            to: None,
+        }
+    }
+}
+
+impl Workspace {
+    /// The bar of the page on screen; None in zen, which has its own line.
+    pub(super) fn render_page_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.zen.is_some() {
+            return None;
+        }
+        let space = self.nav.space;
+        let page = self.nav_page().cloned();
+        let (path, id, mono) = self.path_of(space, page.as_ref());
+        let count = self.count_of(space, page.as_ref());
+        let public = space == Space::Requests && page.is_some();
+        let from = self.nav.from.filter(|_| page.is_some());
+        let crumbs = path.into_iter().enumerate().map(|(n, crumb)| {
+            let link = crumb.to.clone();
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .id(SharedString::from(format!("crumb-{n}")))
+                        .when(crumb.mono, |s| s.font_family(theme::CODE_FONT))
+                        .child(words::say(&crumb.label).into_owned())
+                        .when_some(link, |s, to| {
+                            s.cursor_pointer()
+                                .hover(|s| s.text_color(theme::accent()))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.nav.from = None;
+                                    this.show(space, to.clone(), cx)
+                                }))
+                        }),
+                )
+                .child(div().text_color(theme::faint()).child("›"))
+        });
+        let bar = island()
+            .relative()
+            .overflow_hidden()
+            .flex_none()
+            .flex_row()
+            .h(px(44.))
+            .items_center()
+            .gap(px(12.))
+            .pl(px(14.))
+            .pr(px(8.))
+            .whitespace_nowrap()
+            .children(from.map(|from| {
+                div()
+                    .id("bar-from")
+                    .flex_none()
+                    .px(px(8.))
+                    .rounded_full()
+                    .bg(theme::hover())
+                    .text_size(px(11.))
+                    .text_color(theme::muted())
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(theme::text()))
+                    .child(format!("‹ {}", words::say(space_name(from))))
+                    .tooltip_show_delay(super::hover::LONG)
+                    .tooltip(|_, cx| {
+                        cx.new(|_| super::Tip("Back where you came from  ⌘["))
+                            .into()
+                    })
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.go_back(cx)))
+            }))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .overflow_hidden()
+                    .text_color(theme::muted())
+                    .children(crumbs)
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::text())
+                            .when(mono, |s| s.font_family(theme::CODE_FONT))
+                            .child(words::say(&id).into_owned()),
+                    )
+                    .children(count.map(|n| {
+                        div()
+                            .flex_none()
+                            .ml(px(4.))
+                            .text_size(px(12.))
+                            .text_color(theme::faint())
+                            .child(n)
+                    })),
+            )
+            .children(self.view_of(space, page.as_ref(), cx))
+            .child(div().flex_1().min_w_0())
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .children(self.actions_of(space, page.as_ref(), cx)),
+            )
+            // Public: what is done here is seen on GitLab (#71).
+            .when(public, |s| {
+                s.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(2.))
+                        .bg(theme::warning()),
+                )
+            });
+        Some(bar.into_any_element())
+    }
+
+    /// The path above the page, and its own id.
+    fn path_of(&self, space: Space, page: Option<&Page>) -> (Vec<Crumb>, String, bool) {
+        let project = self
+            .root
+            .as_ref()
+            .and_then(|r| r.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let branch = |refname: &str| {
+            self.branches
+                .iter()
+                .find(|b| b.refname == refname)
+                .map_or_else(|| refname.to_owned(), |b| b.name.clone())
+        };
+        let versions = |a: usize, b: usize| match (self.versions.get(a), self.versions.get(b)) {
+            (Some(a), Some(b)) => format!("v{} → v{}", a.number, b.number),
+            _ => "versions".to_owned(),
+        };
+        let requests = || Crumb::up("Merge requests", None);
+        match page {
+            None => (Vec::new(), space_root(space, &project), false),
+            Some(Page::File(path)) => {
+                let mut parts: Vec<&str> = path.split('/').collect();
+                let name = parts.pop().unwrap_or_default().to_owned();
+                let mut crumbs = vec![Crumb::up("Code", None), Crumb::up(project, None)];
+                crumbs.extend(parts.into_iter().map(Crumb::plain));
+                (crumbs, name, false)
+            }
+            Some(Page::Branch(refname)) => {
+                (vec![Crumb::up("Branches", None)], branch(refname), true)
+            }
+            Some(Page::Versions(refname, a, b)) => {
+                let up = Crumb {
+                    label: branch(refname),
+                    mono: true,
+                    to: Some(Some(Page::Branch(refname.clone()))),
+                };
+                (
+                    vec![Crumb::up("Branches", None), up],
+                    versions(*a, *b),
+                    false,
+                )
+            }
+            Some(Page::WorkingTree) => (
+                vec![Crumb::up("Branches", None)],
+                "Working tree".to_owned(),
+                false,
+            ),
+            Some(Page::Compare(base, head)) => (
+                vec![Crumb::up("Branches", None)],
+                format!("{} … {}", base.0, head.0),
+                true,
+            ),
+            Some(Page::Request(iid)) => (vec![requests()], words::number(*iid), false),
+            Some(Page::RequestCommit(iid, id)) => (
+                vec![
+                    requests(),
+                    Crumb::up(words::number(*iid), Some(Page::Request(*iid))),
+                ],
+                format::short(*id),
+                true,
+            ),
+            Some(Page::RequestVersions(iid, a, b)) => (
+                vec![
+                    requests(),
+                    Crumb::up(words::number(*iid), Some(Page::Request(*iid))),
+                ],
+                versions(*a, *b),
+                false,
+            ),
+        }
+    }
+
+    /// The faint count after a root's name.
+    fn count_of(&self, space: Space, page: Option<&Page>) -> Option<String> {
+        match (space, page) {
+            (Space::Inbox, _) => Some(match self.notices.unread() {
+                0 => "Nothing new".to_owned(),
+                n => format!("{n} new"),
+            }),
+            (Space::Requests, None) if self.requests.available => {
+                Some(self.requests.list.len().to_string())
+            }
+            (Space::Branches, None) => Some(self.branches.len().to_string()),
+            (Space::Code, Some(Page::File(_))) => {
+                self.file_view.as_ref().map(|v| format!("as of {}", v.at()))
+            }
+            _ => None,
+        }
+    }
+
+    /// The page's view switch: the Inbox's filters, the requests list's.
+    fn view_of(
+        &self,
+        space: Space,
+        page: Option<&Page>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        match (space, page) {
+            (Space::Inbox, _) => Some(self.inbox_filters(cx).into_any_element()),
+            (Space::Requests, None) if self.requests.available => {
+                self.request_filters(cx).map(IntoElement::into_any_element)
+            }
+            _ => None,
+        }
+    }
+
+    /// The page's actions, its primary one last.
+    fn actions_of(
+        &self,
+        space: Space,
+        page: Option<&Page>,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut out = Vec::new();
+        match (space, page) {
+            (Space::Inbox, _) if self.notices.unread() > 0 => out.push(
+                bar_button("bar-read-all", "Mark all read", "", false)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.read_all_notices(cx)))
+                    .into_any_element(),
+            ),
+            (Space::Code, Some(Page::File(path))) => {
+                if let Some(editor) = crate::editor::pick(self.settings.editor) {
+                    let path = path.clone();
+                    out.push(
+                        bar_button(
+                            "bar-open-in",
+                            &format!("Open in {}", editor.label()),
+                            "",
+                            false,
+                        )
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.run_act(
+                                super::menu::Act::OpenEditor {
+                                    path: path.clone(),
+                                    line: 1,
+                                },
+                                cx,
+                            )
+                        }))
+                        .into_any_element(),
+                    );
+                }
+            }
+            (Space::Branches, Some(Page::Branch(refname))) => {
+                let ix = self.branches.iter().position(|b| &b.refname == refname);
+                match ix.and_then(|ix| self.request_of_branch(ix).map(|m| m.iid)) {
+                    // Its request has a page of its own: the way there.
+                    Some(iid) => out.push(
+                        bar_button(
+                            "bar-request",
+                            &format!("{} →", words::number(iid)),
+                            "",
+                            false,
+                        )
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.select_request(iid, cx)
+                        }))
+                        .into_any_element(),
+                    ),
+                    // Not while one is being written: its own Create is the primary then.
+                    None if self.requests.available && self.newreq.is_none() => out.push(
+                        bar_button("bar-create", "Create merge request", "⌥⌘M", true)
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.open_create(ix, cx)
+                            }))
+                            .into_any_element(),
+                    ),
+                    None => {}
+                }
+            }
+            (Space::Requests, Some(Page::Request(_))) if self.showing_request() => {
+                let pending = self.requests.drafts.len();
+                let label = match pending {
+                    0 => "Submit review".to_owned(),
+                    n => format!("Submit review · {n}"),
+                };
+                out.push(
+                    bar_button("bar-submit", &label, "⇧⌘↵", false)
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_submit(cx)))
+                        .into_any_element(),
+                );
+                out.extend(
+                    self.render_approval_chip(cx)
+                        .map(IntoElement::into_any_element),
+                );
+            }
+            _ => {}
+        }
+        out
+    }
+}
+
+/// A root's name: the space's, Code's the project's.
+fn space_root(space: Space, project: &str) -> String {
+    match space {
+        Space::Code => project.to_owned(),
+        _ => space_name(space).to_owned(),
+    }
+}
+
+fn space_name(space: Space) -> &'static str {
+    match space {
+        Space::Inbox => "Inbox",
+        Space::Code => "Code",
+        Space::Branches => "Branches",
+        Space::Requests => "Merge requests",
+    }
+}
+
+/// A button of the bar: its label and its key as caps; the primary one filled.
+fn bar_button(
+    id: &'static str,
+    label: &str,
+    key: &'static str,
+    primary: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .h(px(28.))
+        .px(px(10.))
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded(px(super::ROW_RADIUS))
+        .cursor_pointer()
+        .text_size(px(13.))
+        .when(primary, |s| {
+            s.bg(theme::accent())
+                .text_color(theme::on_accent())
+                .font_weight(FontWeight::MEDIUM)
+                .hover(|s| s.opacity(0.9))
+        })
+        .when(!primary, |s| {
+            s.border_1()
+                .border_color(theme::island_border())
+                .hover(|s| s.bg(theme::hover()))
+        })
+        .child(words::say(label).into_owned())
+        .when(!key.is_empty(), |s| {
+            s.child(keys::caps(
+                key,
+                if primary {
+                    keys::On::Filled
+                } else {
+                    keys::On::Plain
+                },
+            ))
+        })
+}

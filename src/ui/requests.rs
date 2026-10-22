@@ -1619,71 +1619,48 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The island's label: which of the two lists the rail's button chose. The requests' carries
-    /// the filters All · To review · Mine (the shell's Merge requests space, #70) once the token's
-    /// user is known.
-    pub(super) fn render_branches_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.requests.connectable && self.requests.side == Side::Requests {
-            return super::island_label(format!(
-                "Connect GitLab{}",
-                self.zone_tag(super::zones::Zone::Branches)
-            ))
-            .into_any_element();
-        }
-        if self.requests.available && self.requests.side == Side::Requests {
-            let n = self.requests.list.len();
-            let loading = self.requests.loading && n == 0;
-            let count = |scope: Scope| {
-                self.requests
-                    .list
-                    .iter()
-                    .filter(|m| self.in_scope(m, scope))
-                    .count()
-            };
-            let label = if loading {
-                super::words::say("Merge requests …").into_owned()
-            } else if self.requests.login.is_some() {
-                super::words::say("Merge requests").into_owned()
-            } else {
-                super::words::say(&format!("Merge requests · {n}")).into_owned()
-            };
-            let filter = |scope: Scope, id: &'static str, name: &'static str| {
-                super::diff_view::chip(
-                    id,
-                    format!("{name} {}", count(scope)),
-                    self.requests.scope == scope,
-                )
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.requests.scope = scope;
-                    cx.notify();
-                }))
-            };
-            return div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .pr(px(10.))
-                .child(
-                    super::island_label(format!(
-                        "{label}{}",
-                        self.zone_tag(super::zones::Zone::Branches)
-                    ))
-                    .flex_1()
-                    .min_w_0(),
-                )
-                .children((self.requests.login.is_some() && !loading).then(|| {
-                    super::diff_view::group()
-                        .child(filter(Scope::All, "scope-all", "All"))
-                        .child(filter(Scope::ReviewMe, "scope-review", "To review"))
-                        .child(filter(Scope::Mine, "scope-mine", "Mine"))
-                }))
-                .into_any_element();
-        }
+    /// The branch picker's label (⌃1).
+    pub(super) fn render_branches_header(&self) -> impl IntoElement {
         super::island_label(format!(
             "Branches{}",
             self.zone_tag(super::zones::Zone::Branches)
         ))
-        .into_any_element()
+    }
+
+    /// All · To review · Mine with their counts, in Merge requests' bar, once the token's user is
+    /// known (#70, #71).
+    pub(super) fn request_filters(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let loading = self.requests.loading && self.requests.list.is_empty();
+        if self.requests.login.is_none() || loading {
+            return None;
+        }
+        let count = |scope: Scope| {
+            self.requests
+                .list
+                .iter()
+                .filter(|m| self.in_scope(m, scope))
+                .count()
+        };
+        let filter = |scope: Scope, id: &'static str, name: &'static str| {
+            super::diff_view::chip(
+                id,
+                format!("{name} {}", count(scope)),
+                self.requests.scope == scope,
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.requests.scope = scope;
+                cx.notify();
+            }))
+        };
+        Some(
+            super::diff_view::group()
+                .child(filter(Scope::All, "scope-all", "All"))
+                .child(filter(Scope::ReviewMe, "scope-review", "To review"))
+                .child(filter(Scope::Mine, "scope-mine", "Mine")),
+        )
     }
 
     /// Keeps the typed token, asks GitLab who it is, and starts listing on success.

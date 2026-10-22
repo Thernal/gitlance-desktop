@@ -3,12 +3,12 @@
 //! the working tree), highlighted, with its line numbers. Open in editor; ⌘W closes it, esc goes
 //! up to Code.
 
-use super::{Header, ROW_RADIUS, Workspace, format, island, px, theme};
+use super::{Header, Workspace, format, island, px, theme};
 use crate::git::Repo;
 use crate::highlight::{self, Span};
 use gpui::{
-    ClickEvent, Context, FontStyle, HighlightStyle, SharedString, StyledText, Task,
-    UniformListScrollHandle, div, prelude::*, uniform_list,
+    Context, FontStyle, HighlightStyle, SharedString, StyledText, Task, UniformListScrollHandle,
+    div, prelude::*, uniform_list,
 };
 
 pub struct FileView {
@@ -22,6 +22,13 @@ pub struct FileView {
 
 /// The file being read for the view.
 pub type Reading = Option<Task<()>>;
+
+impl FileView {
+    /// What it was read at: a short id, or the working tree.
+    pub fn at(&self) -> &str {
+        &self.at
+    }
+}
 
 impl Workspace {
     /// Shows `path` as it is in the version on screen, as Code's page (#71).
@@ -86,7 +93,7 @@ impl Workspace {
         }));
     }
 
-    pub(super) fn render_file_view(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    pub(super) fn render_file_view(&self) -> Option<gpui::AnyElement> {
         let view = self.file_view.as_ref()?;
         let size = self.code_size();
         let row = (size * 1.55).round();
@@ -98,7 +105,6 @@ impl Workspace {
             .enumerate()
             .map(|(n, l)| widen(l, view.spans.get(n).map_or(&[][..], Vec::as_slice)))
             .collect();
-        let path = view.path.clone();
         let body = uniform_list("file-view", lines.len(), move |range, _, _| {
             range
                 .map(|n| {
@@ -146,70 +152,12 @@ impl Workspace {
         .flex_1()
         .font_family(theme::CODE_FONT)
         .text_size(px(size));
-        let header = div()
-            .flex_none()
-            .h(px(44.))
-            .px(px(14.))
-            .flex()
-            .items_center()
-            .gap(px(10.))
-            .border_b_1()
-            .border_color(theme::island_border())
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child(view.path.clone()),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .px(px(8.))
-                    .rounded_full()
-                    .bg(theme::hover())
-                    .text_size(px(11.))
-                    .text_color(theme::muted())
-                    .child(format!("as of {}", view.at)),
-            )
-            .child(div().flex_1())
-            .children(crate::editor::pick(self.settings.editor).map(|e| {
-                let path = path.clone();
-                div()
-                    .id("file-view-editor")
-                    .flex_none()
-                    .px(px(10.))
-                    .h(px(26.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(ROW_RADIUS))
-                    .border_1()
-                    .border_color(theme::island_border())
-                    .text_size(px(12.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme::hover()))
-                    .child(format!("Open in {} ↗", e.label()))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        let line = 1;
-                        this.run_act(
-                            super::menu::Act::OpenEditor {
-                                path: path.clone(),
-                                line,
-                            },
-                            cx,
-                        )
-                    }))
-            }))
-            .child(
-                super::button("file-view-close", "Close", "⌘W")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_shown(cx))),
-            );
         Some(
             island()
                 .flex_1()
                 .min_w_0()
                 .bg(theme::editor())
-                .child(header)
+                // Its path, revision and Open in are the page bar's (#71).
                 .child(div().flex_1().min_h_0().flex().py(px(6.)).child(body))
                 .into_any_element(),
         )

@@ -4,7 +4,7 @@
 //! header row over the panes: its title, who and where, the pipeline, approvals and Submit review.
 
 use super::tools::{ToolView, tool_button};
-use super::{ROW_RADIUS, Workspace, format, markdown, px, theme};
+use super::{Workspace, format, markdown, px, theme};
 use crate::storage;
 use gpui::{AnyElement, ClickEvent, Context, FontWeight, Rgba, div, prelude::*};
 
@@ -273,15 +273,14 @@ impl Workspace {
         }
     }
 
-    /// The header row of a merge request: its title, author and branches, then the pipeline,
-    /// approvals and Submit review.
+    /// A merge request's identity, the first block over its diff (#71): its title, author and
+    /// branches, then the pipeline; Approve and Submit review are its page bar's.
     pub(super) fn render_request_header(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let m = self
             .requests
             .current
             .filter(|_| self.showing_request())
             .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))?;
-        let pending = self.requests.drafts.len();
         Some(
             super::island()
                 .flex_none()
@@ -304,12 +303,7 @@ impl Workspace {
                                 .min_w_0()
                                 .text_size(px(15.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .text_color(theme::accent())
-                                        .child(super::words::number(m.iid)),
-                                )
+                                // Its number is the bar's.
                                 .child(div().min_w_0().truncate().child(m.title.clone()))
                                 .children(m.draft.then(|| {
                                     div()
@@ -344,29 +338,6 @@ impl Workspace {
                         ),
                 )
                 .children(self.render_pipeline_pill(cx))
-                .children(self.render_approval_chip(cx))
-                .child(
-                    div()
-                        .id("header-submit")
-                        .flex_none()
-                        .px(px(10.))
-                        .h(px(28.))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .rounded(px(ROW_RADIUS))
-                        .border_1()
-                        .border_color(theme::island_border())
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme::hover()))
-                        .child(if pending > 0 {
-                            format!("Submit review · {pending}")
-                        } else {
-                            "Submit review".to_owned()
-                        })
-                        .child(super::keys::caps("⇧⌘↵", super::keys::On::Plain))
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_submit(cx))),
-                )
                 .into_any_element(),
         )
     }

@@ -200,9 +200,8 @@ impl Workspace {
         self.load_notices(cx);
     }
 
-    /// The Inbox's header row: its name, how many are new, the filters, Mark all read.
-    pub(super) fn render_inbox_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let unread = self.notices.unread();
+    /// The Inbox's filters, in its page bar (#71).
+    pub(super) fn inbox_filters(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let filter = |f: InboxFilter, label: &'static str| {
             let id = match f {
                 InboxFilter::All => "inbox-all",
@@ -219,40 +218,10 @@ impl Workspace {
                 },
             ))
         };
-        island()
-            .flex_none()
-            .flex_row()
-            .items_center()
-            .gap_3()
-            .px_4()
-            .py(px(10.))
-            .child(
-                div()
-                    .text_size(px(15.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Inbox"),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(px(12.))
-                    .text_color(theme::muted())
-                    .child(if unread > 0 {
-                        format!("{unread} new")
-                    } else {
-                        "Nothing new".to_owned()
-                    }),
-            )
-            .child(
-                super::diff_view::group()
-                    .child(filter(InboxFilter::All, "All"))
-                    .child(filter(InboxFilter::Mentions, "Mentions"))
-                    .child(filter(InboxFilter::Reviews, "Reviews")),
-            )
-            .children((unread > 0).then(|| {
-                chip("inbox-read-all", "Mark all read", false)
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.read_all_notices(cx)))
-            }))
+        super::diff_view::group()
+            .child(filter(InboxFilter::All, "All"))
+            .child(filter(InboxFilter::Mentions, "Mentions"))
+            .child(filter(InboxFilter::Reviews, "Reviews"))
     }
 
     /// The Inbox's panes: the list, and the selected notice previewed and answerable.

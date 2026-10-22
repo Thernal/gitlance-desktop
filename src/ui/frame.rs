@@ -29,20 +29,8 @@ impl Workspace {
                         .border_2()
                         .border_color(theme::focus())
                         .shadow_lg()
-                        .child(self.render_branches_header(cx))
-                        .child(
-                            if self.requests.side == requests::Side::Requests
-                                && self.requests.connectable
-                            {
-                                self.render_connect(cx).into_any_element()
-                            } else if self.requests.side == requests::Side::Requests
-                                && self.requests.available
-                            {
-                                self.render_requests(cx).into_any_element()
-                            } else {
-                                self.render_branches(cx).into_any_element()
-                            },
-                        ),
+                        .child(self.render_branches_header())
+                        .child(self.render_branches(cx)),
                 ),
         )
     }
@@ -1047,7 +1035,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &PageUp, _, cx| this.page(false, cx)))
             .on_action(cx.listener(|this, _: &DiffStart, _, cx| this.diff_edge(false, cx)))
             .on_action(cx.listener(|this, _: &DiffEnd, _, cx| this.diff_edge(true, cx)))
-            .on_action(cx.listener(|this, _: &FocusBranches, _, cx| this.open_picker(false, cx)))
+            .on_action(cx.listener(|this, _: &FocusBranches, _, cx| this.open_picker(cx)))
             .on_action(
                 cx.listener(|this, _: &FocusCommits, _, cx| {
                     this.set_zone(zones::Zone::Commits, cx)

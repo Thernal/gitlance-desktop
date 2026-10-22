@@ -3,6 +3,7 @@
 mod agent;
 mod annotate;
 mod appearance;
+mod bar;
 mod bookmarks;
 mod comments;
 mod complete;
@@ -2656,23 +2657,12 @@ impl Workspace {
         self.go_space(spaces::Space::Requests, cx);
     }
 
-    /// The picker under the title bar: branches, or (`requests`) merge requests. The filter, or
-    /// the token field of the connect panel, takes the keyboard at once.
-    pub(super) fn open_picker(&mut self, requests: bool, cx: &mut Context<Self>) {
-        let side = if requests && (self.requests.available || self.requests.connectable) {
-            requests::Side::Requests
-        } else {
-            requests::Side::Branches
-        };
-        self.requests.side = side;
+    /// ⌃1: the branch picker beside the menu, the quick switch; its filter takes the keyboard.
+    pub(super) fn open_picker(&mut self, cx: &mut Context<Self>) {
+        self.requests.side = requests::Side::Branches;
         self.picker_open = true;
         self.zone = zones::Zone::Branches;
-        let field = if side == requests::Side::Requests && self.requests.connectable {
-            lists::Field::Token
-        } else {
-            lists::Field::Branches
-        };
-        self.start_field(field, cx);
+        self.start_field(lists::Field::Branches, cx);
     }
 
     pub(super) fn close_picker(&mut self, cx: &mut Context<Self>) {
