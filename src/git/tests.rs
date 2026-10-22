@@ -716,3 +716,29 @@ fn blame_of_the_working_tree_leaves_new_lines_unwritten() {
     let ids: Vec<Option<Oid>> = lines.iter().map(|l| l.as_ref().map(|l| l.id)).collect();
     assert_eq!(ids, [Some(a), None, Some(a)]);
 }
+
+#[test]
+fn the_main_line_is_what_origin_head_names_else_main() {
+    let mut fx = Fixture::new();
+    let a = fx.commit("refs/heads/master", &[], &[("a.txt", "1\n")], "first");
+    let b = fx.commit("refs/heads/feature", &[a], &[("a.txt", "2\n")], "second");
+    let c = fx.commit("refs/heads/feature", &[b], &[("a.txt", "3\n")], "third");
+    assert_eq!(fx.open().default_branch().as_deref(), Some("master"));
+    fx.commit(
+        "refs/remotes/origin/develop",
+        &[a],
+        &[("a.txt", "d\n")],
+        "dev",
+    );
+    fx.repo
+        .reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/develop",
+            true,
+            "clone",
+        )
+        .unwrap();
+    let repo = fx.open();
+    assert_eq!(repo.default_branch().as_deref(), Some("develop"));
+    assert_eq!(repo.ahead_behind(c, a), Some((2, 0)));
+}

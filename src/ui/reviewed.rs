@@ -19,6 +19,19 @@ pub enum State {
     Stale,
 }
 
+/// How far your review of a merge request got, against its head now.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Seen {
+    /// No file of it was ever marked.
+    Never,
+    /// Files were marked at this head.
+    Started,
+    /// Files were marked at an earlier head: it was pushed since.
+    Earlier,
+    /// Its whole diff at this head was reviewed.
+    Done,
+}
+
 /// A file marked reviewed: its fingerprint then, when (0: not known, an older mark), and the head
 /// the diff was at — its version says "at v2" (X59).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,6 +209,14 @@ impl Store {
 
     fn get(&self, scope: &str, path: &str) -> Option<u64> {
         self.marks.get(scope)?.get(path).map(|m| m.fp)
+    }
+
+    /// The heads the files of `scope` were marked at, one per file marked.
+    fn marked_heads(&self, scope: &str) -> Vec<Option<git2::Oid>> {
+        self.marks
+            .get(scope)
+            .map(|m| m.values().map(|m| m.head).collect())
+            .unwrap_or_default()
     }
 
     /// When the file was marked, and the head the diff was at then.
@@ -397,6 +418,24 @@ impl Workspace {
         self.reviewed
             .head_progress(&root, head)
             .filter(|&(done, total)| done > 0 && done < total)
+    }
+
+    /// How far your review of request `iid` got, against `head`, its head now (#72).
+    pub(super) fn request_seen(&self, iid: u64, head: Option<git2::Oid>) -> Seen {
+        let Some(root) = self.root.as_ref().map(|r| r.display().to_string()) else {
+            return Seen::Never;
+        };
+        if head.is_some_and(|h| self.reviewed.head_done(&root, h)) {
+            return Seen::Done;
+        }
+        let heads = self.reviewed.marked_heads(&format!("{root}|mr:{iid}"));
+        if heads.is_empty() {
+            Seen::Never
+        } else if head.is_some() && heads.iter().all(|h| *h == head) {
+            Seen::Started
+        } else {
+            Seen::Earlier
+        }
     }
 
     /// Whether the whole diff of a branch or request ending at `head` was reviewed.

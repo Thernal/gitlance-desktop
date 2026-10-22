@@ -1,23 +1,19 @@
 //! Notifications for the open repository's GitLab project: the user's to-dos (mentions, review
 //! requests, being addressed), new comments where they take part — in discussions they wrote in,
 //! on any open merge request, and on their own merge requests — and their discussions resolved by
-//! someone else. The bell on the right stripe has a dot while some are unread; ⌘⇧N opens the
-//! Notifications tool window (`super::tools`), newest first: j k move, ↵ opens the comment, e is done
-//! with it, esc closes.
+//! someone else. The Inbox (`super::inbox`, ⌘⇧N) lists them; the menu counts the unread (#72: the
+//! bell's tool window retired).
 //!
 //! A request seen for the first time sets its comments so far as read, and its resolved discussions
 //! as known: only what comes after is news. Kept per project in `seen-notes.txt` and
 //! `seen-resolved.txt`; what was opened or marked read in `seen-read.txt`. A request's discussions
 //! are read again only when it changed (`updated_at`), or when the list is opened.
 
-use super::keys::{self, On};
-use super::px;
-use super::tools::{Tool, ToolView, tool_button};
-use super::{ROW_RADIUS, Workspace, theme};
+use super::Workspace;
 use crate::links::{self, Target};
 use crate::mr::{self, Mr, Thread, Todo};
 use crate::storage;
-use gpui::{ClickEvent, Context, FontWeight, ScrollHandle, Task, div, prelude::*};
+use gpui::{Context, Task};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -41,16 +37,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn icon(self) -> &'static str {
-        match self {
-            Kind::Mention => "@",
-            Kind::Review => "◎",
-            Kind::Todo => "•",
-            Kind::Reply | Kind::OnYours => "↩",
-            Kind::Resolved => "✓",
-        }
-    }
-
     fn verb(self) -> &'static str {
         match self {
             Kind::Mention => "mentioned you",
@@ -95,7 +81,8 @@ pub struct Notices {
     cache: HashMap<u64, (i64, Vec<Thread>)>,
     task: Option<Task<()>>,
     poll: Option<Task<()>>,
-    scroll: ScrollHandle,
+    /// A first read finished, whatever it found: before it the Inbox shows rows loading (#72).
+    pub loaded: bool,
 }
 
 impl Notice {
@@ -106,6 +93,11 @@ impl Notice {
 }
 
 impl Notices {
+    /// Request `iid`'s discussions as last read, when it is one of those read.
+    pub fn threads_of(&self, iid: u64) -> Option<&[Thread]> {
+        self.cache.get(&iid).map(|(_, threads)| threads.as_slice())
+    }
+
     /// The discussion of request `iid` holding note `note`, as last read.
     pub fn thread_of(&self, iid: u64, note: u64) -> Option<&Thread> {
         self.cache
@@ -376,6 +368,7 @@ impl Workspace {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                this.notices.loaded = true;
                 if let Ok((list, floors, first_resolved, reopened, fresh, complete)) = found {
                     let changed =
                         !floors.is_empty() || !first_resolved.is_empty() || !reopened.is_empty();
@@ -428,20 +421,13 @@ impl Workspace {
         }
     }
 
-    /// ⌘⇧N: the list, read again as it opens.
-    pub(super) fn toggle_notices(&mut self, cx: &mut Context<Self>) {
-        self.toggle_tool(Tool::Notifications, cx);
-    }
-
-    /// The window opened: everything read afresh, not only what reports a change.
+    /// The Inbox opened: everything read afresh, not only what reports a change.
     pub(super) fn refresh_notices(&mut self, cx: &mut Context<Self>) {
         self.notices.at = 0;
-        self.notices.scroll.scroll_to_item(0);
         self.notices.cache.clear();
         self.load_notices(cx);
     }
 
-    /// Opens notice `ix`: its request, at its comment.
     /// Notice `ix` is not read yet.
     pub(super) fn notice_unread(&self, ix: usize) -> bool {
         self.notices
@@ -450,6 +436,7 @@ impl Workspace {
             .is_some_and(|n| !self.notices.read.contains(&n.key))
     }
 
+    /// Opens notice `ix`: its request, at its comment.
     pub(super) fn open_notice(&mut self, ix: usize, cx: &mut Context<Self>) {
         let Some(n) = self.notices.list.get(ix).cloned() else {
             return;
@@ -459,7 +446,7 @@ impl Workspace {
         }
         // On an outdated comment it opens on the diff since it, once that is known (#46).
         self.since_on_open = n.note.map(|note| (n.iid, note));
-        // The window stays; the keyboard goes to what was opened.
+        // The keyboard goes to what was opened.
         self.set_zone(super::zones::Zone::Diff, cx);
         self.go_to(
             Target::Request {
@@ -510,158 +497,6 @@ impl Workspace {
         self.notices.save_read();
         cx.notify();
     }
-
-    /// j k, ↑ ↓ while the window has the keyboard: the next or previous notice, scrolled into view.
-    pub(super) fn notices_step(&mut self, down: bool, cx: &mut Context<Self>) {
-        let n = self.notices.list.len();
-        if n > 0 {
-            self.notices.at = if down {
-                (self.notices.at + 1) % n
-            } else {
-                (self.notices.at + n - 1) % n
-            };
-            self.notices.scroll.scroll_to_item(self.notices.at);
-            cx.notify();
-        }
-    }
-
-    /// The Notifications tool window.
-    pub(super) fn notifications_tool(&self, cx: &mut Context<Self>) -> ToolView {
-        let unread = self.notices.unread();
-        let rows = self.notices.list.iter().enumerate().map(|(ix, n)| {
-            let fresh = !self.notices.read.contains(&n.key);
-            let on = ix == self.notices.at;
-            div()
-                .id(("notice", ix))
-                .flex()
-                .items_start()
-                .gap(px(10.))
-                .px(px(10.))
-                .py(px(8.))
-                .rounded(px(ROW_RADIUS))
-                .cursor_pointer()
-                .when(on, |s| s.bg(theme::selected()))
-                .hover(|s| s.bg(theme::hover()))
-                .child(
-                    div()
-                        .flex_none()
-                        .size(px(22.))
-                        .rounded_full()
-                        .bg(theme::hover())
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(12.))
-                        .text_color(theme::accent())
-                        .child(n.kind.icon()),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    super::hover::cut(
-                                        gpui::SharedString::from(format!("note-who-{}", n.created)),
-                                        format!("{} {}", n.who, n.kind.verb()),
-                                    )
-                                    .flex_1()
-                                    .when(fresh, |s| s.font_weight(FontWeight::SEMIBOLD)),
-                                )
-                                .child(
-                                    super::hover::ago(
-                                        gpui::SharedString::from(format!("note-ago-{}", n.created)),
-                                        n.created,
-                                    )
-                                    .text_size(px(11.))
-                                    .text_color(theme::faint()),
-                                ),
-                        )
-                        .child(
-                            super::hover::cut(
-                                gpui::SharedString::from(format!("note-title-{}", n.created)),
-                                format!("{} {}", super::words::number(n.iid), n.title),
-                            )
-                            .text_size(px(12.))
-                            .text_color(theme::accent()),
-                        )
-                        // A long hover reads what was written, whole (X59).
-                        .children((!n.text.trim().is_empty()).then(|| {
-                            super::hover::cut_to(
-                                gpui::SharedString::from(format!("note-text-{}", n.created)),
-                                self.one_line(&n.text),
-                                2,
-                            )
-                            .text_size(px(12.))
-                            .text_color(theme::muted())
-                        })),
-                )
-                .children(fresh.then(|| {
-                    div()
-                        .flex_none()
-                        .mt(px(6.))
-                        .size(px(7.))
-                        .rounded_full()
-                        .bg(theme::accent())
-                }))
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_notice(ix, cx)))
-        });
-        let empty = self.notices.list.is_empty();
-        ToolView {
-            title: "Notifications".into(),
-            count: (unread > 0).then(|| format!("{unread} new")),
-            actions: (unread > 0)
-                .then(|| {
-                    tool_button("notices-read-all", "Mark all read")
-                        .on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| this.read_all_notices(cx)),
-                        )
-                        .into_any_element()
-                })
-                .into_iter()
-                .collect(),
-            body: div()
-                .id("notices-list")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .track_scroll(&self.notices.scroll)
-                .p(px(6.))
-                .children(rows)
-                .children(empty.then(|| {
-                    div()
-                        .px_3()
-                        .py(px(14.))
-                        .text_size(px(12.))
-                        .text_color(theme::muted())
-                        .child("Nothing new. Mentions, review requests and replies in your discussions show up here.")
-                }))
-                .into_any_element(),
-            foot: Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .text_size(px(11.))
-                    .text_color(theme::faint())
-                    .child(keys::caps("J", On::Plain))
-                    .child(keys::caps("K", On::Plain))
-                    .child("move")
-                    .child(keys::caps("↵", On::Plain))
-                    .child("open")
-                    .child(keys::caps("E", On::Plain))
-                    .child("done")
-                    .into_any_element(),
-            ),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -710,6 +545,7 @@ mod tests {
             draft: false,
             author_login: author.into(),
             reviewers: vec!["you".into()],
+            description: String::new(),
         }
     }
 

@@ -204,6 +204,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.branches = branches;
+        if self.nav.space == super::spaces::Space::Branches && self.at_root_list() {
+            self.read_branch_facts(cx);
+        }
         let Some(refname) = refname else {
             return self.set_status(Status::UpToDate, cx);
         };

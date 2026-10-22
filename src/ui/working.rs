@@ -51,6 +51,9 @@ impl Workspace {
             return;
         }
         self.blames.working_changed();
+        if self.nav.space == super::spaces::Space::Branches && self.at_root_list() {
+            self.read_tree_files(cx);
+        }
         if self.selection == Selection::WorkingTree {
             // Reload in place: the selected file stays.
             let keep = self.current_path();

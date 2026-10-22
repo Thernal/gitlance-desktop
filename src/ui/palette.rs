@@ -149,7 +149,6 @@ pub enum Cmd {
     ZoomOut,
     ZoomReset,
     Switch,
-    Notifications,
     Space(Space),
 }
 
@@ -159,11 +158,6 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Branches", "⌃⌘3", Cmd::Space(Space::Branches)),
     ("Merge requests", "⌃⌘4", Cmd::Space(Space::Requests)),
     ("Switch to a branch or a merge request…", "", Cmd::Switch),
-    (
-        "Notifications — mentions, reviews, replies",
-        "⌘⇧N",
-        Cmd::Notifications,
-    ),
     ("Compare two refs…", "⌥⌘C", Cmd::Compare),
     ("Create merge request…", "⌥⌘M", Cmd::CreateRequest),
     (
@@ -1423,6 +1417,5 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::Space(Space::Code) => Box::new(super::GoToCode),
         Cmd::Space(Space::Branches) => Box::new(super::GoToBranches),
         Cmd::Space(Space::Requests) => Box::new(super::GoToMergeRequests),
-        Cmd::Notifications => Box::new(ToggleNotifications),
     }
 }

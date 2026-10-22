@@ -41,6 +41,7 @@ mod reactions;
 mod recents;
 mod requests;
 mod reviewed;
+mod roots;
 mod rows;
 mod select;
 mod settings;
@@ -133,7 +134,6 @@ actions!(
         CommentLine,
         SubmitReview,
         ApproveRequest,
-        ToggleNotifications,
         SwitchTo,
         NextDraft,
         PreviousDraft,
@@ -168,7 +168,7 @@ actions!(
         PageDown,
         DiffStart,
         DiffEnd,
-        FocusBranches,
+        SwitchBranch,
         FocusCommits,
         FocusFiles,
         FocusDiffZone,
@@ -284,7 +284,8 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("ctrl-cmd-3"), GoToBranches, Some("Workspace")),
         KeyBinding::new(&k("ctrl-cmd-4"), GoToMergeRequests, Some("Workspace")),
         KeyBinding::new(&k("a"), ApproveRequest, Some("Workspace && !Typing")),
-        KeyBinding::new(&k("cmd-shift-n"), ToggleNotifications, Some("Workspace")),
+        // The Inbox's older key, from when the bell opened a window (#72).
+        KeyBinding::new(&k("cmd-shift-n"), GoToInbox, Some("Workspace")),
         KeyBinding::new(&k("alt-n"), NextDraft, Some("Workspace && !Typing")),
         KeyBinding::new(&k("alt-p"), PreviousDraft, Some("Workspace && !Typing")),
         KeyBinding::new(&k("?"), ShowShortcuts, Some("Workspace && !Typing")),
@@ -333,7 +334,7 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("l"), NextFile, Some("Workspace && !Typing")),
         KeyBinding::new(&k("["), PreviousFile, Some("Workspace && !Typing")),
         KeyBinding::new(&k("]"), NextFile, Some("Workspace && !Typing")),
-        KeyBinding::new(&k("ctrl-1"), FocusBranches, Some("Workspace")),
+        KeyBinding::new(&k("ctrl-1"), SwitchBranch, Some("Workspace")),
         KeyBinding::new(&k("ctrl-2"), FocusCommits, Some("Workspace")),
         KeyBinding::new(&k("ctrl-3"), FocusFiles, Some("Workspace")),
         KeyBinding::new(&k("ctrl-4"), FocusDiffZone, Some("Workspace")),
@@ -679,7 +680,7 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                     }
                     let opt = match name.trim() {
                         "requests" => {
-                            this.requests.side = requests::Side::Requests;
+                            this.show(spaces::Space::Requests, None, cx);
                             continue;
                         }
                         "unified" => Opt::Unified,
@@ -873,7 +874,13 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.layout.fold_places = true;
                             continue;
                         }
-                        // The requests picker narrowed to the ones that ask for a review.
+                        // Merge requests' root narrowed to the ones you wrote (#72).
+                        "mine-requests" => {
+                            this.requests.scope = requests::Scope::Mine;
+                            this.go_space(spaces::Space::Requests, cx);
+                            continue;
+                        }
+                        // Merge requests' root narrowed to the ones that ask for a review.
                         "review-requests" => {
                             this.requests.scope = requests::Scope::ReviewMe;
                             this.go_space(spaces::Space::Requests, cx);
@@ -1321,6 +1328,8 @@ pub struct Workspace {
     agent_setup: Option<String>,
     agent_setup_busy: bool,
     requests: requests::Requests,
+    /// What the roots of Branches and Merge requests read for their rows and previews (#72).
+    roots: roots::Roots,
     /// A merge request's diff to show once its branch has loaded: base, head, request.
     pending_compare: Option<PendingCompare>,
     /// The merge request whose diff is open (or was last opened from the list).
@@ -1363,8 +1372,6 @@ pub struct Workspace {
     fps: Vec<u64>,
     /// Generated files the reader asked to see in full.
     unfolded: HashSet<String>,
-    /// The branch / merge request picker hangs from the title bar.
-    picker_open: bool,
     /// The window's width in logical pixels, as of the last frame.
     win_width: f32,
     /// The diff is narrower than 700 px: it is drawn unified whatever the option says.
@@ -1564,6 +1571,7 @@ impl Workspace {
             fetch: fetch::Fetch::default(),
             shell: None,
             requests: Default::default(),
+            roots: Default::default(),
             pending_compare: None,
             open_request: None,
             gitlab_check: None,
@@ -1589,7 +1597,6 @@ impl Workspace {
             review_scope: None,
             fps: Vec::new(),
             unfolded: HashSet::new(),
-            picker_open: false,
             win_width: 1480.,
             narrow: false,
             tight: false,
@@ -2000,10 +2007,24 @@ impl Workspace {
                         this.stack = None;
                         this.map_agent_comments(cx);
                         this.index_review();
-                        // The first file as the island lists it (a tree sorts folders first), so
+                        // A request opens at its first file not reviewed (#72); anything else at
+                        // the first file as the island lists it (a tree sorts folders first), so
                         // → walks on from the top.
+                        let request = matches!(
+                            this.diff.as_ref().map(|d| &d.header),
+                            Some(Header::Compare {
+                                request: Some(_),
+                                ..
+                            })
+                        );
+                        let order = this.file_order();
+                        let unread = order
+                            .iter()
+                            .copied()
+                            .find(|&ix| this.review_state(ix) != Some(reviewed::State::Done));
                         let ix = ix
-                            .or_else(|| this.file_order().first().copied())
+                            .or(unread.filter(|_| request))
+                            .or_else(|| order.first().copied())
                             .unwrap_or(0);
                         this.file_scroll.scroll_to_item(0, ScrollStrategy::Top);
                         if !empty {
@@ -2368,7 +2389,12 @@ impl Workspace {
         self.open_menu(at, groups, cx);
     }
 
-    fn branch_context(&mut self, ix: usize, at: Point<gpui::Pixels>, cx: &mut Context<Self>) {
+    pub(super) fn branch_context(
+        &mut self,
+        ix: usize,
+        at: Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(branch) = self.branches.get(ix) else {
             return;
         };
@@ -2657,25 +2683,6 @@ impl Workspace {
         self.go_space(spaces::Space::Requests, cx);
     }
 
-    /// ⌃1: the branch picker beside the menu, the quick switch; its filter takes the keyboard.
-    pub(super) fn open_picker(&mut self, cx: &mut Context<Self>) {
-        self.requests.side = requests::Side::Branches;
-        self.picker_open = true;
-        self.zone = zones::Zone::Branches;
-        self.start_field(lists::Field::Branches, cx);
-    }
-
-    pub(super) fn close_picker(&mut self, cx: &mut Context<Self>) {
-        if !self.picker_open {
-            return;
-        }
-        self.picker_open = false;
-        self.field = None;
-        self.bfilter.clear();
-        self.zone = zones::Zone::Commits;
-        cx.notify();
-    }
-
     /// ⌘.: zen — the diff alone, without the rail, with a line of the keys that move a review on;
     /// pressed again, the islands come back as they were.
     fn focus_diff(&mut self, _: &FocusDiff, _: &mut Window, cx: &mut Context<Self>) {
@@ -2758,9 +2765,12 @@ impl Workspace {
         self.step_match(false, cx);
     }
 
-    /// ⌘F finds in the open diff; with none open it searches the commits.
+    /// ⌘F filters a space's list (#72), finds in the open diff, and with none open searches the
+    /// commits.
     fn find_action(&mut self, _: &Find, _: &mut Window, cx: &mut Context<Self>) {
-        if self.diff.is_some() && !self.settings_open {
+        if self.at_root_list() && !self.settings_open {
+            self.start_field(lists::Field::Branches, cx);
+        } else if self.diff.is_some() && !self.settings_open {
             self.start_dfind(cx);
         } else {
             self.start_find(cx);

@@ -1,15 +1,11 @@
 //! The page of the space on screen (#71), under its bar (`bar.rs`): the Inbox, Code's project or
-//! a file, the list of branches or requests at their space's root, else a branch's or request's
-//! panes with its identity over the diff.
-//! The roots are interim until their pages come: Code's is the files opened lately and Go to a
-//! file (#75), the lists are today's, docked as a pane beside what is chosen (#72).
+//! a file, the list of branches or requests at their space's root (`roots.rs`, #72), else a
+//! branch's or request's panes with its identity over the diff.
+//! Code's root is interim until its page comes: the files opened lately and Go to a file (#75).
 
 use super::spaces::Space;
 use super::{Split, Workspace, gap, island, keys, motion, px, theme};
 use gpui::{AnyElement, ClickEvent, Context, div, prelude::*};
-
-/// The width of a root's list.
-const LIST: f32 = 420.;
 
 impl Workspace {
     pub(super) fn render_space(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -36,11 +32,20 @@ impl Workspace {
                         island().flex_1().bg(theme::editor()).into_any_element()
                     }))
                     .children(self.render_tool(cx)),
-                (Space::Branches | Space::Requests, None) => div()
+                (Space::Branches, None) => div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(self.render_root_list(cx)),
+                    .child(self.render_branches_root(cx))
+                    .children(self.render_tool(cx)),
+                (Space::Requests, None) => div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .child(self.render_requests_root(cx))
+                    .children(self.render_tool(cx)),
                 (Space::Branches | Space::Requests, Some(_)) => self.render_item(cx),
             };
         div()
@@ -132,100 +137,6 @@ impl Workspace {
                     .children(self.render_zen_keys()),
             )
             .children(self.render_tool(cx))
-    }
-
-    /// Branches' or Merge requests' root: the list, and beside it what to do with it.
-    fn render_root_list(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let requests = self.nav.space == Space::Requests;
-        let list = if requests && self.requests.connectable {
-            self.render_connect(cx).into_any_element()
-        } else if requests {
-            self.render_requests(cx).into_any_element()
-        } else {
-            self.render_branches(cx).into_any_element()
-        };
-        div()
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .gap(px(gap()))
-            .child(
-                island()
-                    .flex_none()
-                    .w(px(LIST))
-                    .pt(px(6.))
-                    .border_color(self.zone_border(super::zones::Zone::Branches))
-                    .child(list),
-            )
-            .child(if requests {
-                self.render_choose_request().into_any_element()
-            } else {
-                self.render_choose_branch(cx).into_any_element()
-            })
-            .children(self.render_tool(cx))
-    }
-
-    /// Beside the list of branches: how to open one, and the working tree when it has changes.
-    fn render_choose_branch(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let key = |k: &'static str, what: &'static str| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .child(keys::caps(k, keys::On::Plain))
-                .child(what)
-        };
-        let changes = self.wt.count;
-        island()
-            .flex_1()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .bg(theme::editor())
-            .text_color(theme::muted())
-            .child(
-                div()
-                    .text_size(px(15.))
-                    .text_color(theme::text())
-                    .child("Choose a branch"),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_4()
-                    .text_size(px(12.))
-                    .child(key("↑↓", "move"))
-                    .child(key("↵", "open")),
-            )
-            .children((changes > 0).then(|| {
-                div()
-                    .id("root-working-tree")
-                    .mt_2()
-                    .px(px(10.))
-                    .h(px(28.))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded(px(super::ROW_RADIUS))
-                    .border_1()
-                    .border_color(theme::island_border())
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
-                    .child(
-                        super::icons::icon("files")
-                            .size(px(14.))
-                            .text_color(theme::muted()),
-                    )
-                    .child(format!(
-                        "Working tree · {}",
-                        super::plural(changes, "change")
-                    ))
-                    .on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.select_working_tree(cx)),
-                    )
-            }))
     }
 
     /// Code's root until it has the project's tree: Go to a file, and the files opened lately.

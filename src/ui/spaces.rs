@@ -222,19 +222,6 @@ impl Workspace {
         self.layout.fold_places
     }
 
-    /// Where the menu ends, from the window's left edge: the picker hangs beside it.
-    pub(super) fn menu_right(&self) -> f32 {
-        if self.zen.is_some() {
-            return super::gap();
-        }
-        let rail = if super::projects() == crate::storage::Projects::Rail {
-            48.
-        } else {
-            0.
-        };
-        super::gap() + rail + if self.menu_folded() { ICONS } else { OPEN }
-    }
-
     /// The title bar's first button and ⌘B: the menu to icons and back, kept in `layout.txt`.
     pub(super) fn toggle_menu(&mut self, cx: &mut Context<Self>) {
         self.layout.fold_places = !self.layout.fold_places;

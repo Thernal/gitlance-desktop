@@ -2,23 +2,15 @@
 //! branch, and the discussions other people left on one, in the review panel. Read-only; GitLab
 //! only (see `crate::mr`).
 
-use super::hover::Hover;
 use super::px;
 use super::rows::Row;
 use super::tools::ToolView;
-use super::{Header, Selection, Workspace, format, island, plural, row, theme};
+use super::{Header, Selection, Workspace, format, plural, theme};
 use crate::git::{RefKind, Repo, Version};
 use crate::mr::{self, Draft, Mr, Pipeline, Thread};
 use gpui::{ClickEvent, Context, FontWeight, SharedString, Task, WeakEntity, div, prelude::*};
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub enum Side {
-    #[default]
-    Branches,
-    Requests,
-}
-
-/// Which requests the list shows: All · To review · Mine in the picker's head (#70).
+/// Which requests the list shows: All · To review · Mine in Merge requests' bar (#70, #72).
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Scope {
     #[default]
@@ -42,7 +34,8 @@ pub struct Requests {
     pub list: Vec<Mr>,
     pub loading: bool,
     pub error: Option<String>,
-    pub side: Side,
+    /// When the list last came in: an error or being offline says how old the list is (#72).
+    pub listed_at: Option<i64>,
     /// The request of the open branch, when it is one's source branch.
     pub current: Option<u64>,
     pub threads: Vec<Thread>,
@@ -77,15 +70,8 @@ impl Workspace {
             return;
         };
         let available = mr::available(&remote);
-        let connectable = !available;
-        let side = if available || connectable {
-            self.requests.side
-        } else {
-            Side::Branches
-        };
         self.requests.available = available;
-        self.requests.connectable = connectable;
-        self.requests.side = side;
+        self.requests.connectable = !available;
         if !available {
             self.requests.list.clear();
             self.requests.error = None;
@@ -113,6 +99,7 @@ impl Workspace {
                 match result {
                     Ok((list, login, (members, unreached))) => {
                         this.requests.list = list;
+                        this.requests.listed_at = Some(super::inbox::now());
                         if !members.is_empty() {
                             this.requests.members = members;
                         }
@@ -581,40 +568,6 @@ impl Workspace {
             && matches!(
                 self.diff.as_ref().map(|d| &d.header),
                 Some(Header::Compare { request: Some(i), .. }) if *i == iid
-            )
-    }
-
-    /// Beside the list of requests: how to open one.
-    pub(super) fn render_choose_request(&self) -> impl IntoElement + use<> {
-        let key = |k: &'static str, what: &'static str| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .child(super::keys::caps(k, super::keys::On::Plain))
-                .child(what)
-        };
-        island()
-            .flex_1()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .bg(theme::editor())
-            .text_color(theme::muted())
-            .child(
-                div()
-                    .text_size(px(15.))
-                    .text_color(theme::text())
-                    .child(super::words::say("Choose a merge request").into_owned()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_4()
-                    .text_size(px(12.))
-                    .child(key("↑↓", "move"))
-                    .child(key("↵", "open")),
             )
     }
 
@@ -1573,7 +1526,7 @@ impl Workspace {
         theirs + self.comments.len()
     }
 
-    /// The requests the filter lets through, in the order the list shows them.
+    /// The requests the scope and filter let through, in the order the list shows them.
     pub(super) fn shown_requests(&self) -> Vec<&Mr> {
         let filter = self.bfilter.to_lowercase();
         let words: Vec<&str> = filter.split_whitespace().collect();
@@ -1594,11 +1547,8 @@ impl Workspace {
                 words.iter().all(|w| hay.contains(w))
             })
             .collect();
-        if self.settings.mr_by_updated {
-            shown.sort_by_key(|m| std::cmp::Reverse(m.updated));
-        } else {
-            shown.sort_by_key(|m| std::cmp::Reverse(m.created));
-        }
+        // By what each needs from you, as the list groups them; the latest activity first.
+        shown.sort_by_key(|m| (self.group_of(m), std::cmp::Reverse(m.updated)));
         shown
     }
 
@@ -1610,21 +1560,6 @@ impl Workspace {
             Scope::ReviewMe => !me.is_empty() && m.reviewers.iter().any(|r| r == me),
             Scope::Mine => !me.is_empty() && m.author_login == me,
         }
-    }
-
-    /// Newest first, or most recently updated first.
-    fn set_mr_order(&mut self, by_updated: bool, cx: &mut Context<Self>) {
-        self.settings.mr_by_updated = by_updated;
-        self.settings.save();
-        cx.notify();
-    }
-
-    /// The branch picker's label (⌃1).
-    pub(super) fn render_branches_header(&self) -> impl IntoElement {
-        super::island_label(format!(
-            "Branches{}",
-            self.zone_tag(super::zones::Zone::Branches)
-        ))
     }
 
     /// All · To review · Mine with their counts, in Merge requests' bar, once the token's user is
@@ -1707,14 +1642,15 @@ impl Workspace {
         .detach();
     }
 
-    /// The sidebar's top island for a GitLab project without a token.
+    /// Merge requests' first run, a project without a token (#72): what a token is for, where to
+    /// make one, and the field it is pasted into, centred in the content.
     pub(super) fn render_connect(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let Some(remote) = self.web.clone() else {
             return div().into_any_element();
         };
         let host = mr::host(&remote);
         let page = mr::token_page(&remote);
-        let field = self.render_field(
+        let field = self.field_box(
             "token-field",
             super::lists::Field::Token,
             "Paste your token",
@@ -1726,248 +1662,95 @@ impl Workspace {
             (Some(Ok(who)), _) => Some((format!("Connected as {who}"), theme::added())),
             _ => None,
         };
+        let step = |text: String| {
+            div()
+                .text_size(px(12.))
+                .text_color(theme::muted())
+                .child(text)
+        };
         div()
             .flex_1()
-            .min_h_0()
             .flex()
             .flex_col()
-            .gap_2()
-            .px(px(8.))
+            .items_center()
+            .justify_center()
+            .gap(px(8.))
+            .px(px(24.))
+            .child(
+                super::icons::icon("pull-request")
+                    .size(px(24.))
+                    .text_color(theme::muted()),
+            )
             .child(
                 div()
-                    .px(px(6.))
-                    .text_size(px(12.))
+                    .text_size(px(15.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(super::words::say("Connect GitLab to see merge requests").into_owned()),
+            )
+            .child(
+                div()
+                    .max_w(px(420.))
+                    .text_size(px(13.))
+                    .line_height(px(19.))
+                    .text_center()
                     .text_color(theme::muted())
                     .child(if remote.github {
                         format!(
-                            "See the pull requests of {host}: comment, reply, resolve and review here. GitLance needs a token with the repo scope — or sign in once with the GitHub CLI (gh auth login) and it uses that. It stays on this Mac."
+                            "GitLance reads the pull requests of {host} with a token of yours (the repo scope), or the GitHub CLI's once you sign in with gh auth login. It writes nothing unless you post a comment or a review."
                         )
                     } else {
                         format!(
-                            "See the merge requests of {host}: comment, reply and resolve here. GitLance needs a personal access token with the api scope. It stays on this Mac."
+                            "GitLance reads the merge requests of {host} with a personal access token of yours (the api scope). It stays on this Mac and writes nothing unless you post a comment or a review."
                         )
                     }),
             )
             .child(
                 div()
-                    .id("token-create")
-                    .mx(px(6.))
-                    .px_2()
-                    .py(px(4.))
-                    .rounded(px(super::ROW_RADIUS))
-                    .border_1()
-                    .border_color(theme::island_border())
-                    .text_size(px(12.))
-                    .text_color(theme::accent())
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme::hover()))
-                    .child(format!("1 · Create a token on {host} ↗"))
-                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&page))),
+                    .w(px(360.))
+                    .pt(px(8.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .id("token-create")
+                            .h(px(28.))
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(super::ROW_RADIUS))
+                            .border_1()
+                            .border_color(theme::island_border())
+                            .text_size(px(13.))
+                            .text_color(theme::accent())
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::hover()))
+                            .child(format!("1 · Create a token on {host} ↗"))
+                            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&page))),
+                    )
+                    .child(step("2 · Paste it here and press ↵".to_owned()))
+                    .child(field)
+                    .children(note.map(|(text, color)| {
+                        div().text_size(px(12.)).text_color(color).child(text)
+                    })),
             )
             .child(
                 div()
-                    .px(px(6.))
-                    .text_size(px(12.))
-                    .text_color(theme::muted())
-                    .child("2 · Paste it here and press ↵"),
+                    .pt(px(4.))
+                    .text_size(px(11.))
+                    .text_color(theme::faint())
+                    .child(super::words::say("or Settings → Merge requests").into_owned()),
             )
-            .child(field)
-            .children(note.map(|(text, color)| {
-                div()
-                    .px(px(6.))
-                    .text_size(px(12.))
-                    .text_color(color)
-                    .child(text)
-            }))
             .into_any_element()
     }
 
-    pub(super) fn render_requests(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let field = self.render_field(
-            "branch-filter",
-            super::lists::Field::Branches,
-            "Filter merge requests",
-            cx,
-        );
-        let shown = self.shown_requests();
-        let note = match (&self.requests.error, shown.is_empty()) {
-            (Some(e), _) => Some(e.clone()),
-            (None, true) if self.requests.loading => {
-                Some(super::words::say("Loading merge requests…").into_owned())
-            }
-            (None, true) => Some(super::words::say("No open merge requests.").into_owned()),
-            _ => None,
-        };
-        let items = shown.into_iter().map(|m| {
-            let iid = m.iid;
-            // In the space's list the row selected; in the picker the request on screen.
-            let current = if self.at_root_list() {
-                self.nav.pick_request == Some(iid)
-            } else {
-                self.requests.current == Some(iid)
-            };
-            let head = git2::Oid::from_str(&m.head).ok();
-            let reviewed = head.is_some_and(|h| self.head_reviewed(h));
-            let part = head.and_then(|h| self.head_part(h));
-            row(("mr", iid), current)
-                // A long hover: the whole title, the branches and who opened it (#53).
-                .tip(format!(
-                    "{} {} · {} → {} · {} · updated {}",
-                    super::words::number(iid),
-                    m.title,
-                    m.source,
-                    m.target,
-                    m.author,
-                    super::hover::full_date(m.updated)
-                ))
-                .h(px(50.))
-                .flex_col()
-                .items_start()
-                .justify_center()
-                .child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .gap_2()
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_color(theme::accent())
-                                .child(super::words::number(iid)),
-                        )
-                        .child(div().flex_1().min_w_0().truncate().child(m.title.clone()))
-                        .children(reviewed.then(|| {
-                            div()
-                                .flex_none()
-                                .text_size(px(11.))
-                                .text_color(theme::added())
-                                .child("✓ reviewed")
-                        }))
-                        .children(
-                            part.map(|(done, total)| super::lists::progress_badge(done, total)),
-                        ),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .truncate()
-                        .text_size(px(11.))
-                        .text_color(theme::muted())
-                        .child(format!(
-                            "{}{} · {}{} · {} · {}",
-                            if m.draft { "draft · " } else { "" },
-                            m.author,
-                            m.source,
-                            if matches!(m.target.as_str(), "main" | "master") {
-                                String::new()
-                            } else {
-                                format!(" → {}", m.target)
-                            },
-                            plural(m.comments, "comment"),
-                            if self.settings.mr_by_updated {
-                                format!("updated {}", format::ago(m.updated))
-                            } else {
-                                format!("opened {}", format::ago(m.created))
-                            },
-                        )),
-                )
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.select_request(iid, cx);
-                    this.close_picker(cx);
-                }))
-        });
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .child(field)
-            .child({
-                let by_updated = self.settings.mr_by_updated;
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px(px(14.))
-                    .pb(px(4.))
-                    .text_size(px(11.))
-                    .text_color(theme::faint())
-                    .child("Sort")
-                    .child(
-                        super::diff_view::group()
-                            .child(
-                                super::diff_view::chip("mr-by-created", "Newest", !by_updated)
-                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        this.set_mr_order(false, cx)
-                                    })),
-                            )
-                            .child(
-                                super::diff_view::chip("mr-by-updated", "Updated", by_updated)
-                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        this.set_mr_order(true, cx)
-                                    })),
-                            ),
-                    )
-            })
-            .child(
-                div()
-                    .id("requests")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .px(px(6.))
-                    .pb(px(6.))
-                    .children(note.map(|n| {
-                        div()
-                            .px(px(8.))
-                            .py(px(6.))
-                            .text_size(px(12.))
-                            .text_color(theme::muted())
-                            .child(n)
-                    }))
-                    .children(items.map(|i| div().py(px(1.)).child(i)))
-                    .child(
-                        div().py(px(1.)).child(
-                            row("new-request", false)
-                                .h(px(32.))
-                                .gap_2()
-                                .text_color(theme::warning())
-                                .child(super::words::say("＋ New merge request…").into_owned())
-                                .child(div().flex_1())
-                                .child(super::keys::caps("⌥⌘M", super::keys::On::Plain))
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.open_create(None, cx)
-                                })),
-                        ),
-                    ),
-            )
-    }
-
-    /// "!412 · Payment retry backoff" next to the branch in the title bar.
     /// The pipeline's pill: its state, and the job that failed; a click opens it.
     pub(super) fn render_pipeline_pill(
         &self,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
         self.requests.pipeline.clone().map(|p| {
-            let (glyph, word, color) = match p.status.as_str() {
-                "success" => ("✓", "passed".to_owned(), theme::added()),
-                "failed" => (
-                    "✗",
-                    match p.failed.as_slice() {
-                        [] => "failed".to_owned(),
-                        [(job, _)] => format!("{job} failed"),
-                        [(job, _), rest @ ..] => format!("{job} +{} failed", rest.len()),
-                    },
-                    theme::removed(),
-                ),
-                "running" => ("●", "running".to_owned(), theme::warning()),
-                "pending" | "created" | "waiting_for_resource" | "preparing" => {
-                    ("○", "pending".to_owned(), theme::muted())
-                }
-                "canceled" => ("⊘", "canceled".to_owned(), theme::muted()),
-                other => ("·", other.replace('_', " "), theme::muted()),
-            };
+            let (glyph, word, color) = pipeline_word(&p);
             // A failure opens the job that failed; the rest open the pipeline.
             let url = p
                 .failed
@@ -2150,6 +1933,28 @@ impl Workspace {
 
 /// After position `at` in a list (none: before its start), the next item not reviewed, going round
 /// to the first item when the end is reached; never `at` itself.
+/// A pipeline as a glyph, a word and its colour: "✗ lint failed" in red.
+pub(super) fn pipeline_word(p: &Pipeline) -> (&'static str, String, gpui::Rgba) {
+    match p.status.as_str() {
+        "success" => ("✓", "passed".to_owned(), theme::added()),
+        "failed" => (
+            "✗",
+            match p.failed.as_slice() {
+                [] => "failed".to_owned(),
+                [(job, _)] => format!("{job} failed"),
+                [(job, _), rest @ ..] => format!("{job} +{} failed", rest.len()),
+            },
+            theme::removed(),
+        ),
+        "running" => ("●", "running".to_owned(), theme::warning()),
+        "pending" | "created" | "waiting_for_resource" | "preparing" => {
+            ("○", "pending".to_owned(), theme::muted())
+        }
+        "canceled" => ("⊘", "canceled".to_owned(), theme::muted()),
+        other => ("·", other.replace('_', " "), theme::muted()),
+    }
+}
+
 fn next_unreviewed(reviewed: &[bool], at: Option<usize>) -> Option<usize> {
     let n = reviewed.len();
     let start = at.map_or(0, |a| a + 1);

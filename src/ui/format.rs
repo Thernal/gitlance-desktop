@@ -22,6 +22,12 @@ pub fn date(time: i64) -> String {
     date_at(time + local_offset(time))
 }
 
+/// `HH:MM` in local time.
+pub fn clock(time: i64) -> String {
+    let secs = (time + local_offset(time)).rem_euclid(86400);
+    format!("{:02}:{:02}", secs / 3600, secs % 3600 / 60)
+}
+
 /// `YYYY-MM-DD` of `time` as it is.
 pub fn date_at(time: i64) -> String {
     let (y, m, d) = civil_from_days(time.div_euclid(86400));

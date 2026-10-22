@@ -1,40 +1,10 @@
 //! The window's frame: the root view and what surrounds the diff — the title bar, the rail, the
-//! welcome, the sidebar (versions and commits), the switch picker, zen's line and the splitters.
+//! welcome, the sidebar (versions and commits), zen's line and the splitters.
 
 use super::*;
 use hover::Hover;
 
 impl Workspace {
-    pub(super) fn render_picker(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        if !self.picker_open {
-            return None;
-        }
-        Some(
-            div()
-                .id("picker-backdrop")
-                .absolute()
-                .size_full()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| this.close_picker(cx)),
-                )
-                .child(
-                    island()
-                        .occlude()
-                        .absolute()
-                        .left(px(self.menu_right()))
-                        .top(px(44.))
-                        .w(px(400.))
-                        .h(px(self.picker_height()))
-                        .border_2()
-                        .border_color(theme::focus())
-                        .shadow_lg()
-                        .child(self.render_branches_header())
-                        .child(self.render_branches(cx)),
-                ),
-        )
-    }
-
     /// Zen's line at the foot of the diff: the keys of a review, from the keyboard alone.
     pub(super) fn render_zen_keys(&self) -> Option<impl IntoElement + use<>> {
         self.zen.is_some().then_some(())?;
@@ -456,20 +426,6 @@ impl Workspace {
                             }))
                     }))
             }))
-    }
-
-    /// The height of the picker: what its rows need, up to 560 px.
-    pub(super) fn picker_height(&self) -> f32 {
-        let content = if self.requests.connectable && self.requests.side == requests::Side::Requests
-        {
-            300.
-        } else if self.requests.available && self.requests.side == requests::Side::Requests {
-            92. + 56. * self.requests.list.len() as f32 + 34.
-        } else {
-            // Label and filter, a header and a row each: roughly what `branch_items` draws.
-            92. + 34. * self.branches.len() as f32 + 28. * 2.
-        };
-        content.clamp(150., 560.)
     }
 
     /// The versions, newest first, for the side panel's Versions section.
@@ -936,7 +892,6 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CommentLine, _, cx| this.open_goline(cx)))
             .on_action(cx.listener(|this, _: &SubmitReview, _, cx| this.open_submit(cx)))
             .on_action(cx.listener(|this, _: &ApproveRequest, _, cx| this.toggle_approval(cx)))
-            .on_action(cx.listener(|this, _: &ToggleNotifications, _, cx| this.toggle_notices(cx)))
             .on_action(cx.listener(|this, _: &SwitchTo, _, cx| {
                 if this.root.is_some() {
                     this.open_palette(palette::Kind::Switch, cx)
@@ -961,11 +916,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ReplyThread, _, cx| this.reply_focused(cx)))
             .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))
             .on_action(cx.listener(|this, _: &EditComment, _, cx| {
-                // In the Notifications window, e is done with the selected one.
-                if (this.zone == zones::Zone::Tool
-                    && this.tool() == Some(tools::Tool::Notifications))
-                    || (this.inbox && this.zone != zones::Zone::Tool)
-                {
+                // In the Inbox, e is done with the selected notice.
+                if this.inbox && this.zone != zones::Zone::Tool {
                     this.dismiss_notice(this.notices.at, cx)
                 } else {
                     this.edit_focused(cx)
@@ -1035,7 +987,12 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &PageUp, _, cx| this.page(false, cx)))
             .on_action(cx.listener(|this, _: &DiffStart, _, cx| this.diff_edge(false, cx)))
             .on_action(cx.listener(|this, _: &DiffEnd, _, cx| this.diff_edge(true, cx)))
-            .on_action(cx.listener(|this, _: &FocusBranches, _, cx| this.open_picker(cx)))
+            // ⌃1, the branch quick switch: search everywhere on its Branches (#72).
+            .on_action(cx.listener(|this, _: &SwitchBranch, _, cx| {
+                if this.root.is_some() {
+                    this.search(palette::Scope::Branches, cx)
+                }
+            }))
             .on_action(
                 cx.listener(|this, _: &FocusCommits, _, cx| {
                     this.set_zone(zones::Zone::Commits, cx)
@@ -1206,7 +1163,6 @@ impl Render for Workspace {
             .children(self.render_ctx_menu(window.viewport_size(), cx))
             .children(self.render_mention_card(cx))
             .children(self.render_blame_tip())
-            .children(self.render_picker(cx))
             .children(self.render_find_files(cx))
             .children(self.render_open_ask(cx))
             .children(self.render_agent_pick(cx))

@@ -224,13 +224,94 @@ impl Workspace {
             .child(filter(InboxFilter::Reviews, "Reviews"))
     }
 
-    /// The Inbox's panes: the list, and the selected notice previewed and answerable.
+    /// The Inbox: its panes, or rows loading before the first read, or one message when nothing
+    /// is listed; a banner over it while the host cannot be read (#72).
     pub(super) fn render_inbox(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let rows = self.inbox_rows();
+        let body = if !self.notices.loaded && self.notices.list.is_empty() {
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .gap(px(super::gap()))
+                .child(
+                    island()
+                        .w(px(self.layout.sidebar.max(360.)))
+                        .flex_none()
+                        .p(px(16.))
+                        .child(super::roots::skeleton(6)),
+                )
+                .child(
+                    island()
+                        .flex_1()
+                        .bg(theme::editor())
+                        .px(px(28.))
+                        .py(px(26.))
+                        .child(super::roots::skeleton(3)),
+                )
+                .into_any_element()
+        } else if rows.is_empty() {
+            let (title, text) = match self.inbox_view.filter {
+                InboxFilter::All => (
+                    "Nothing needs you",
+                    "Review requests, mentions and replies in your discussions land here.",
+                ),
+                InboxFilter::Mentions => (
+                    "No mentions",
+                    "When someone mentions you in this project, it lands here.",
+                ),
+                InboxFilter::Reviews => (
+                    "No review requests",
+                    "When someone asks for your review, it lands here.",
+                ),
+            };
+            let all = (self.inbox_view.filter != InboxFilter::All && !self.notices.list.is_empty())
+                .then(|| {
+                    div()
+                        .id("inbox-show-all")
+                        .child(super::roots::bar_button("Show all"))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.inbox_view.filter = InboxFilter::All;
+                            if let Some(&first) = this.inbox_rows().first() {
+                                this.inbox_select(first, cx);
+                            }
+                            cx.notify();
+                        }))
+                        .into_any_element()
+                });
+            island()
+                .flex_1()
+                .bg(theme::editor())
+                .child(super::roots::empty_state(
+                    "inbox",
+                    title.to_owned(),
+                    text.to_owned(),
+                    all,
+                ))
+                .into_any_element()
+        } else {
+            self.render_inbox_panes(&rows, cx).into_any_element()
+        };
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap(px(super::gap()))
+            .children(self.list_banner(cx))
+            .child(body)
+    }
+
+    /// The Inbox's panes: the list, and the selected notice previewed and answerable.
+    fn render_inbox_panes(
+        &self,
+        rows: &[usize],
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let today = format::date(now());
         let mut list: Vec<AnyElement> = Vec::new();
         let mut group = None;
-        for &ix in &rows {
+        for &ix in rows {
             let n = &self.notices.list[ix];
             let heading = if format::date(n.created) == today {
                 "Today"
@@ -265,11 +346,7 @@ impl Workspace {
                     .items_center()
                     .justify_center()
                     .text_color(theme::muted())
-                    .child(if self.notices.list.is_empty() {
-                        "Nothing here. Mentions, review requests and replies in your discussions come in here."
-                    } else {
-                        "Choose a notification."
-                    })
+                    .child("Choose a notification.")
                     .into_any_element()
             });
         div()
@@ -674,7 +751,7 @@ fn excerpt_view(path: &str, line: u32, ex: Option<&Excerpt>) -> Div {
         .child(body)
 }
 
-fn now() -> i64 {
+pub(super) fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)

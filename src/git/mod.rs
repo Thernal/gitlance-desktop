@@ -615,7 +615,34 @@ impl Repo {
         Ok(out)
     }
 
-    /// Whether local branch `name` is behind its upstream, and by how much.
+    /// The project's main line, as a local branch name: what `origin/HEAD` points at, else `main`
+    /// or `master`, here or on origin.
+    pub fn default_branch(&self) -> Option<String> {
+        let pointed = self
+            .inner
+            .find_reference("refs/remotes/origin/HEAD")
+            .ok()
+            .and_then(|r| r.symbolic_target().ok().flatten().map(str::to_owned))
+            .and_then(|t| t.strip_prefix("refs/remotes/origin/").map(str::to_owned));
+        pointed.or_else(|| {
+            ["main", "master"]
+                .into_iter()
+                .find(|name| {
+                    self.inner.find_branch(name, BranchType::Local).is_ok()
+                        || self
+                            .inner
+                            .find_branch(&format!("origin/{name}"), BranchType::Remote)
+                            .is_ok()
+                })
+                .map(str::to_owned)
+        })
+    }
+
+    /// Commits `a` has that `b` has not, and the other way round.
+    pub fn ahead_behind(&self, a: Oid, b: Oid) -> Option<(usize, usize)> {
+        self.inner.graph_ahead_behind(a, b).ok()
+    }
+
     /// A local branch's upstream and how far apart they are: (upstream, ahead, behind).
     pub fn tracking(&self, name: &str) -> Option<(String, usize, usize)> {
         let local = self.inner.find_branch(name, BranchType::Local).ok()?;

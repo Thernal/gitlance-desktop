@@ -16,7 +16,8 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
         &[
             ("⌃⌘1 ⌃⌘2 ⌃⌘3 ⌃⌘4", "Inbox, Code, Branches, Merge requests"),
             ("Tab ⇧Tab", "next / previous island"),
-            ("⌃1 ⌃2 ⌃3 ⌃4", "branches, commits, files, diff"),
+            ("⌃1", "switch to a branch"),
+            ("⌃2 ⌃3 ⌃4", "commits, files, diff"),
             ("j k", "next / previous commit"),
             ("h l  ← →", "previous / next file"),
             ("[  ]", "previous / next file"),
@@ -48,7 +49,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("a", "approve the merge request · take the approval back"),
             (
                 "⌘⇧N",
-                "the Notifications window: mentions, review requests, replies (j k ↵ e)",
+                "the Inbox: mentions, review requests, replies (j k ↵ e)",
             ),
             ("r  x  o", "reply to, resolve, fold a discussion"),
             ("e", "edit your comment in the discussion"),
@@ -67,7 +68,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌘K", "search everywhere · ⇥ the next tab, > actions"),
             ("⌘P  ⌘⇧C  ⌘⇧B", "find a file · a commit · a branch"),
             ("⌘⇧R  ⌘⇧P", "find a merge request · an action"),
-            ("⌘F", "find in the diff"),
+            ("⌘F", "find in the diff · filter a space's list"),
             ("⌘⌥F", "search all files of the diff"),
             ("⌘⇧F", "search commits"),
             ("⌥⌘P", "filter the changed files by path"),

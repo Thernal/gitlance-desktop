@@ -186,8 +186,6 @@ impl Workspace {
         self.find.text = None;
         self.palette = None;
         self.ctx_menu = None;
-        // The picker it was opened from closes with it.
-        self.picker_open = false;
         self.bfilter.clear();
         self.reset_field_edit();
         self.newreq = Some(NewRequest {
@@ -679,7 +677,6 @@ impl Workspace {
                         let iid = request.iid;
                         this.newreq = None;
                         this.requests.list.insert(0, request);
-                        this.requests.side = super::requests::Side::Requests;
                         this.layout.show_sidebar = true;
                         this.select_request(iid, cx);
                     }

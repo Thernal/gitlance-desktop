@@ -341,8 +341,6 @@ pub struct Settings {
     pub ui_zoom: u16,
     /// Comments are drawn as formatted markdown, not as the text written (⌥M).
     pub rich_comments: bool,
-    /// Merge requests are listed by when they were last updated, not when they were opened.
-    pub mr_by_updated: bool,
     /// The keyboard card was shown at a first launch; it is not shown at launch again.
     pub keys_seen: bool,
     /// Where a repository opened while another is open goes.
@@ -369,7 +367,6 @@ impl Default for Settings {
             zoom: 100,
             ui_zoom: 100,
             rich_comments: true,
-            mr_by_updated: false,
             keys_seen: false,
             open_in: OpenIn::Ask,
             last_new_tab: false,
@@ -407,7 +404,6 @@ impl Settings {
                 "fold_generated" => settings.fold_generated = value != "false",
                 "auto_reviewed" => settings.auto_reviewed = value == "true",
                 "rich_comments" => settings.rich_comments = value != "false",
-                "mr_sort" => settings.mr_by_updated = value == "updated",
                 "keys_seen" => settings.keys_seen = value == "true",
                 "open_in" => settings.open_in = OpenIn::from_key(value).unwrap_or_default(),
                 "last_new_tab" => settings.last_new_tab = value == "true",
@@ -440,12 +436,6 @@ impl std::fmt::Display for Settings {
         writeln!(f, "fold_generated={}", self.fold_generated)?;
         writeln!(f, "auto_reviewed={}", self.auto_reviewed)?;
         writeln!(f, "rich_comments={}", self.rich_comments)?;
-        let sort = if self.mr_by_updated {
-            "updated"
-        } else {
-            "created"
-        };
-        writeln!(f, "mr_sort={sort}")?;
         writeln!(f, "keys_seen={}", self.keys_seen)?;
         writeln!(f, "open_in={}", self.open_in.key())?;
         writeln!(f, "last_new_tab={}", self.last_new_tab)?;
@@ -551,7 +541,6 @@ mod tests {
             zoom: 130,
             ui_zoom: 120,
             rich_comments: false,
-            mr_by_updated: true,
             keys_seen: true,
             open_in: OpenIn::NewTab,
             last_new_tab: true,

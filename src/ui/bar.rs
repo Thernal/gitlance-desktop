@@ -229,10 +229,15 @@ impl Workspace {
                 0 => "Nothing new".to_owned(),
                 n => format!("{n} new"),
             }),
-            (Space::Requests, None) if self.requests.available => {
+            // Once the filters say it with their counts, the name has none.
+            (Space::Requests, None)
+                if self.requests.available
+                    && self.requests.login.is_none()
+                    && !self.requests.list.is_empty() =>
+            {
                 Some(self.requests.list.len().to_string())
             }
-            (Space::Branches, None) => Some(self.branches.len().to_string()),
+            (Space::Branches, None) => Some(self.branches_count()),
             (Space::Code, Some(Page::File(_))) => {
                 self.file_view.as_ref().map(|v| format!("as of {}", v.at()))
             }
@@ -256,7 +261,7 @@ impl Workspace {
         }
     }
 
-    /// The page's actions, its primary one last.
+    /// The page's actions, its primary one last; a list's filter (#72).
     fn actions_of(
         &self,
         space: Space,
@@ -265,6 +270,10 @@ impl Workspace {
     ) -> Vec<AnyElement> {
         let mut out = Vec::new();
         match (space, page) {
+            (Space::Requests, None) if self.requests.available => {
+                out.push(self.bar_filter("Filter", cx))
+            }
+            (Space::Branches, None) => out.push(self.bar_filter("Filter branches", cx)),
             (Space::Inbox, _) if self.notices.unread() > 0 => out.push(
                 bar_button("bar-read-all", "Mark all read", "", false)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.read_all_notices(cx)))

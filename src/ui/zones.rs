@@ -4,7 +4,7 @@
 //! the one that has it, and ↵ goes one step in.
 
 use super::px;
-use super::{Selection, Workspace, requests, theme};
+use super::{Selection, Workspace, theme};
 use gpui::{Context, Rgba};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -107,16 +107,16 @@ impl Workspace {
         }
         match self.zone {
             Zone::Commits => self.step_commit_row(down, cx),
-            Zone::Branches => self.step_branch(down, cx),
+            Zone::Branches => self.step_pick(down, cx),
             Zone::Files => self.step_file_item(down, cx),
             Zone::Diff => self
                 .diff_list
                 .scroll_by(px(if down { LINE } else { -LINE })),
-            Zone::Tool => match self.tool() {
-                Some(super::tools::Tool::Notifications) => return self.notices_step(down, cx),
-                Some(super::tools::Tool::Discussions) => return self.step_thread(down, cx),
-                _ => {}
-            },
+            Zone::Tool => {
+                if self.tool() == Some(super::tools::Tool::Discussions) {
+                    return self.step_thread(down, cx);
+                }
+            }
         }
         cx.notify();
     }
@@ -167,12 +167,7 @@ impl Workspace {
             return self.open_pick(cx);
         }
         match self.zone {
-            Zone::Tool => {
-                if self.tool() == Some(super::tools::Tool::Notifications) {
-                    self.open_notice(self.notices.at, cx);
-                }
-            }
-            Zone::Branches => self.close_picker(cx),
+            Zone::Tool | Zone::Branches => {}
             Zone::Commits => {
                 if self.diff.is_some() {
                     self.set_zone(
@@ -259,44 +254,12 @@ impl Workspace {
         }
     }
 
-    /// The branch (or merge request) before or after the open one, in the order the list shows.
-    fn step_branch(&mut self, down: bool, cx: &mut Context<Self>) {
-        // In a space's list ↑ ↓ only select; ↵ opens (#71).
-        if self.at_root_list() {
-            return self.step_pick(down, cx);
-        }
-        if self.requests.available && self.requests.side == requests::Side::Requests {
-            let shown: Vec<u64> = self.shown_requests().iter().map(|m| m.iid).collect();
-            let at = self
-                .requests
-                .current
-                .and_then(|iid| shown.iter().position(|i| *i == iid));
-            let to = match (at, down) {
-                (Some(i), true) => (i + 1 < shown.len()).then(|| i + 1),
-                (Some(i), false) => i.checked_sub(1),
-                (None, _) => (!shown.is_empty()).then_some(0),
-            };
-            if let Some(iid) = to.map(|i| shown[i]) {
-                self.select_request(iid, cx);
-            }
+    /// ↑ ↓ in a space's list: the row selected, nothing opened (#71); the picked request's
+    /// preview is read (#72).
+    pub(super) fn step_pick(&mut self, down: bool, cx: &mut Context<Self>) {
+        if !self.at_root_list() {
             return;
         }
-        let order = self.branch_order();
-        let at = self
-            .branch
-            .and_then(|b| order.iter().position(|ix| *ix == b));
-        let to = match (at, down) {
-            (Some(i), true) => (i + 1 < order.len()).then(|| i + 1),
-            (Some(i), false) => i.checked_sub(1),
-            (None, _) => (!order.is_empty()).then_some(0),
-        };
-        if let Some(ix) = to.map(|i| order[i]) {
-            self.open_branch(ix, None, cx);
-        }
-    }
-
-    /// ↑ ↓ in a space's list: the row selected, nothing opened.
-    fn step_pick(&mut self, down: bool, cx: &mut Context<Self>) {
         let step = |at: Option<usize>, n: usize| match (at, down) {
             (Some(i), true) => Some((i + 1).min(n.saturating_sub(1))),
             (Some(i), false) => Some(i.saturating_sub(1)),
@@ -308,14 +271,20 @@ impl Workspace {
                 .nav
                 .pick_request
                 .and_then(|iid| shown.iter().position(|i| *i == iid));
-            self.nav.pick_request = step(at, shown.len()).map(|i| shown[i]);
+            if let Some(iid) = step(at, shown.len()).map(|i| shown[i]) {
+                self.pick_request(iid, cx);
+            }
         } else {
-            let order = self.branch_order();
+            let rows = self.branch_rows();
             let at = self
                 .nav
                 .pick_branch
-                .and_then(|b| order.iter().position(|ix| *ix == b));
-            self.nav.pick_branch = step(at, order.len()).map(|i| order[i]);
+                .or_else(|| self.first_branch_row())
+                .and_then(|r| rows.iter().position(|x| *x == r));
+            self.nav.pick_branch = step(at, rows.len()).map(|i| rows[i]);
+            if self.nav.pick_branch == Some(super::nav::BranchRow::WorkingTree) {
+                self.read_tree_files(cx);
+            }
         }
         cx.notify();
     }
@@ -326,15 +295,17 @@ impl Workspace {
             let shown: Vec<u64> = self.shown_requests().iter().map(|m| m.iid).collect();
             let pick = self.nav.pick_request.filter(|iid| shown.contains(iid));
             if let Some(iid) = pick.or(shown.first().copied()) {
-                self.field = None;
-                self.select_request(iid, cx);
+                self.open_picked_request(iid, cx);
             }
         } else {
-            let order = self.branch_order();
-            let pick = self.nav.pick_branch.filter(|ix| order.contains(ix));
-            if let Some(ix) = pick.or(order.first().copied()) {
-                self.field = None;
-                self.open_branch(ix, None, cx);
+            let rows = self.branch_rows();
+            let pick = self
+                .nav
+                .pick_branch
+                .or_else(|| self.first_branch_row())
+                .filter(|r| rows.contains(r));
+            if let Some(row) = pick.or(rows.first().copied()) {
+                self.open_branch_row(row, cx);
             }
         }
     }
@@ -403,10 +374,6 @@ impl Workspace {
                 cx.notify();
             }
         }
-    }
-
-    fn branch_order(&self) -> Vec<usize> {
-        self.branch_ixs()
     }
 }
 

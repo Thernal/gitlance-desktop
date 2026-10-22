@@ -10,7 +10,6 @@
 //! differ from it, and the places that open something (a list's row, ⌘K, a notification, a link)
 //! say where they went through `arrive`.
 
-use super::requests::Side;
 use super::spaces::Space;
 use super::{Header, Selection, Workspace, zones};
 use git2::Oid;
@@ -151,6 +150,13 @@ impl Item {
     }
 }
 
+/// A row of Branches' list: the working tree, or a branch (#72).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BranchRow {
+    WorkingTree,
+    Branch(usize),
+}
+
 /// A request or branch open under its space, and where it was left.
 #[derive(Clone)]
 pub struct Opened {
@@ -196,9 +202,9 @@ pub struct Nav {
     pending: Option<Page>,
     /// A space and page to show once the request list is in (a project reopened on one).
     pending_show: Option<(Space, Option<Page>)>,
-    /// The row a root list has selected: a request, a branch.
+    /// The row a root list has selected: a request, a branch or the working tree.
     pub pick_request: Option<u64>,
-    pub pick_branch: Option<usize>,
+    pub pick_branch: Option<BranchRow>,
     /// Loading what a page needs, or coming back to a moment: no new moment, no link.
     restoring: bool,
 }
@@ -468,7 +474,6 @@ impl Workspace {
         self.nav.pending = None;
         self.inbox = space == Space::Inbox;
         self.settings_open = false;
-        self.close_picker(cx);
         self.nav.restoring = true;
         match page {
             None => self.enter_root(space, cx),
@@ -489,15 +494,16 @@ impl Workspace {
             }
             Space::Code => {}
             Space::Branches => {
-                self.requests.side = Side::Branches;
-                self.nav.pick_branch = self.nav.pick_branch.or(self.branch);
+                self.nav.pick_branch = self.nav.pick_branch.or_else(|| self.first_branch_row());
                 self.zone = zones::Zone::Branches;
+                self.read_branch_facts(cx);
+                self.read_tree_files(cx);
             }
             Space::Requests => {
-                self.requests.side = Side::Requests;
                 if self.nav.pick_request.is_none() {
                     self.nav.pick_request = self.shown_requests().first().map(|m| m.iid);
                 }
+                self.read_preview(cx);
                 self.zone = zones::Zone::Branches;
                 // A project without a token: the connect panel takes the keyboard.
                 if self.requests.connectable {
@@ -621,10 +627,13 @@ impl Workspace {
         let up = page.parent();
         if up.is_none() {
             // Back at the root: the list selects what was open.
-            match page.item() {
-                Some(Item::Request(iid)) => self.nav.pick_request = Some(iid),
-                Some(Item::Branch(refname)) => self.nav.pick_branch = self.branch_ix(&refname),
-                None => {}
+            match (&page, page.item()) {
+                (Page::WorkingTree, _) => self.nav.pick_branch = Some(BranchRow::WorkingTree),
+                (_, Some(Item::Request(iid))) => self.nav.pick_request = Some(iid),
+                (_, Some(Item::Branch(refname))) => {
+                    self.nav.pick_branch = self.branch_ix(&refname).map(BranchRow::Branch)
+                }
+                (_, None) => {}
             }
             self.nav.from = None;
         }
@@ -758,6 +767,13 @@ impl Workspace {
         if let Some((space, page)) = self.nav.pending_show.take() {
             self.show(space, page, cx);
         }
+        // The list came in under its root: the first request is picked and previewed (#72).
+        if self.nav.space == Space::Requests && self.at_root_list() {
+            if self.nav.pick_request.is_none() {
+                self.nav.pick_request = self.shown_requests().first().map(|m| m.iid);
+            }
+            self.read_preview(cx);
+        }
     }
 
     /// The project just opened: the space and pages it was left on, else its checked-out branch.
@@ -858,7 +874,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Opens branch `ix` as a page of Branches (a list's row, ⌃1's picker, ⌘K, a link).
+    /// Opens branch `ix` as a page of Branches (a list's row, ⌘K, a link).
     pub(super) fn open_branch(&mut self, ix: usize, keep: Option<Oid>, cx: &mut Context<Self>) {
         let Some(refname) = self.branches.get(ix).map(|b| b.refname.clone()) else {
             return;

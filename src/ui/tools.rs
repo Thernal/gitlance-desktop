@@ -1,6 +1,6 @@
 //! The right edge of the redesign (Design `design/shell/`, #49): an icon stripe that opens one tool
-//! window at a time beside the diff — Discussions, Agents, Notifications — and Submit review in the
-//! same place. The same icon or esc closes it; which one is open and its width are kept in
+//! window at a time beside the diff — Details, Discussions, Agents — and Submit review in the same
+//! place (the bell's Notifications window retired into the Inbox, #72). The same icon or esc closes it; which one is open and its width are kept in
 //! `layout.txt`. No stripe until a repository is open, none in zen.
 
 use super::zones::Zone;
@@ -13,7 +13,6 @@ pub enum Tool {
     Details,
     Discussions,
     Agents,
-    Notifications,
 }
 
 impl Tool {
@@ -22,19 +21,13 @@ impl Tool {
             Tool::Details => "details",
             Tool::Discussions => "discussions",
             Tool::Agents => "agents",
-            Tool::Notifications => "notifications",
         }
     }
 
     pub fn parse(name: &str) -> Option<Self> {
-        [
-            Tool::Details,
-            Tool::Discussions,
-            Tool::Agents,
-            Tool::Notifications,
-        ]
-        .into_iter()
-        .find(|t| t.name() == name)
+        [Tool::Details, Tool::Discussions, Tool::Agents]
+            .into_iter()
+            .find(|t| t.name() == name)
     }
 
     fn icon(self) -> &'static str {
@@ -42,7 +35,6 @@ impl Tool {
             Tool::Details => "info",
             Tool::Discussions => "message",
             Tool::Agents => "bot",
-            Tool::Notifications => "bell",
         }
     }
 
@@ -51,7 +43,6 @@ impl Tool {
             Tool::Details => "Request details  ⌘I",
             Tool::Discussions => "Discussions  ⌘⇧D",
             Tool::Agents => "Agents  ⇧⌘A",
-            Tool::Notifications => "Notifications  ⌘⇧N",
         }
     }
 }
@@ -67,8 +58,8 @@ pub struct ToolView {
 }
 
 impl Workspace {
-    /// The tool window open now; Notifications only where requests can be read, Details on a
-    /// request's page, Discussions on a branch's or a request's (#71).
+    /// The tool window open now; Details on a request's page, Discussions on a branch's or a
+    /// request's (#71).
     pub(super) fn tool(&self) -> Option<Tool> {
         self.root.as_ref()?;
         let tool = Tool::parse(&self.layout.tool)?;
@@ -77,7 +68,6 @@ impl Workspace {
             super::spaces::Space::Branches | super::spaces::Space::Requests
         ) && self.nav_page().is_some();
         match tool {
-            Tool::Notifications if !self.requests.available => None,
             Tool::Details
                 if !self.showing_request()
                     || !matches!(self.nav_page(), Some(super::nav::Page::Request(_))) =>
@@ -107,12 +97,8 @@ impl Workspace {
             self.layout.tool = name.to_owned();
             self.layout.save();
         }
-        match tool {
-            Some(Tool::Notifications) => self.refresh_notices(cx),
-            Some(Tool::Agents) => {
-                self.refresh_chats();
-            }
-            _ => {}
+        if tool == Some(Tool::Agents) {
+            self.refresh_chats();
         }
         if tool.is_some() {
             self.set_zone(Zone::Tool, cx);
@@ -147,7 +133,7 @@ impl Workspace {
         }
         let open = self.tool();
         // The long hover says what the count is (#53): "Discussions · 3 comments".
-        let button = |tool: Tool, badge: Option<(String, Rgba)>, dot: bool, what: String| {
+        let button = |tool: Tool, badge: Option<(String, Rgba)>, what: String| {
             let id = tool.name();
             let on = open == Some(tool);
             div()
@@ -185,15 +171,6 @@ impl Workspace {
                         .text_color(theme::base())
                         .child(text)
                 }))
-                .children(dot.then(|| {
-                    div()
-                        .absolute()
-                        .top(px(6.))
-                        .right(px(6.))
-                        .size(px(7.))
-                        .rounded_full()
-                        .bg(theme::accent())
-                }))
                 .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(move |_, cx| {
                     let tip = keys::text(tool.tip()).into_owned();
@@ -221,29 +198,18 @@ impl Workspace {
                 .pt(px(2.))
                 .children(
                     self.showing_request()
-                        .then(|| button(Tool::Details, None, false, String::new())),
+                        .then(|| button(Tool::Details, None, String::new())),
                 )
                 .child(button(
                     Tool::Discussions,
                     count(self.comments_total(), theme::accent()),
-                    false,
                     super::plural(self.comments_total(), "comment"),
                 ))
                 .child(button(
                     Tool::Agents,
                     count(drafts, theme::agent()),
-                    false,
                     super::plural(drafts, "draft"),
-                ))
-                .children(self.requests.available.then(|| {
-                    let unread = self.notices.unread();
-                    button(
-                        Tool::Notifications,
-                        None,
-                        unread > 0,
-                        format!("{unread} new"),
-                    )
-                })),
+                )),
         )
     }
 
@@ -261,7 +227,6 @@ impl Workspace {
                 Tool::Details => self.details_tool(cx),
                 Tool::Discussions => self.discussions_tool(cx),
                 Tool::Agents => self.agents_tool(cx),
-                Tool::Notifications => self.notifications_tool(cx),
             },
         };
         let submitting = self.submit.is_some();

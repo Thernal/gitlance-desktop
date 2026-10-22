@@ -28,6 +28,8 @@ pub struct Mr {
     /// The author's and the reviewers' usernames: whose request it is, who was asked to look.
     pub author_login: String,
     pub reviewers: Vec<String>,
+    /// What the author wrote about it, as the list gives it: the root page's preview (#72).
+    pub description: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -256,6 +258,13 @@ pub fn list(remote: &WebRemote) -> Result<Vec<Mr>> {
         return github::list(remote);
     }
     let value = match fixture() {
+        // `list-error.txt` stands for a host that answers with that error (#72's states).
+        Some(dir) if dir.join("list-error.txt").exists() => {
+            bail!(
+                "{}",
+                std::fs::read_to_string(dir.join("list-error.txt"))?.trim()
+            )
+        }
         Some(dir) => serde_json::from_str(&std::fs::read_to_string(dir.join("mrs.json"))?)?,
         None => get(
             remote,
@@ -1068,6 +1077,7 @@ pub fn create(
             draft,
             author_login: String::new(),
             reviewers: Vec::new(),
+            description: String::new(),
         });
     }
     let value = request(
@@ -1537,6 +1547,7 @@ pub fn parse_mrs(value: &Value) -> Vec<Mr> {
                     .map(|r| text(r, "username"))
                     .filter(|u| !u.is_empty())
                     .collect(),
+                description: text(m, "description"),
             })
         })
         .collect()

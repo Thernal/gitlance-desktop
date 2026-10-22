@@ -1,12 +1,11 @@
-//! The lists of the window beyond the commit list: branches grouped by remote with a filter, the
-//! changed files as a folder tree or a flat list with a path filter and the labels on commits.
-//! Designed in review round 1 (A9, A10, A11, A13).
+//! The lists of the window beyond the commit list: the filter fields, the changed files as a folder
+//! tree or a flat list with a path filter and the labels on commits. Designed in review round 1
+//! (A9, A10, A11, A13); the branches' list is Branches' root page (`roots.rs`, #72).
 
-use super::hover::Hover;
 use super::input::{self, Edit};
 use super::px;
 use super::{Workspace, change_badge, row, theme};
-use crate::git::{Deco, DecoKind, FileDiff, RefKind};
+use crate::git::{Deco, DecoKind, FileDiff};
 use gpui::{
     ClickEvent, Context, KeyDownEvent, MouseButton, MouseDownEvent, ScrollStrategy, div, prelude::*,
 };
@@ -60,151 +59,8 @@ pub fn deco_tags(decos: &[Deco]) -> Vec<gpui::AnyElement> {
     out
 }
 
-// ---- branches ---------------------------------------------------------------------------
-
-enum BranchItem {
-    Header(String, usize),
-    Branch(usize),
-}
-
 impl Workspace {
-    /// Local branches, then each remote's under its own heading; a filter flattens the list.
-    fn branch_items(&self) -> Vec<BranchItem> {
-        let filter = self.bfilter.to_lowercase();
-        if !filter.trim().is_empty() {
-            return crate::rank::rank(self.branches.iter().enumerate(), &filter, |(_, b)| &b.name)
-                .into_iter()
-                .map(|(ix, _)| BranchItem::Branch(ix))
-                .collect();
-        }
-        let mut out: Vec<BranchItem> = self
-            .branches
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| b.kind == RefKind::Local)
-            .map(|(ix, _)| BranchItem::Branch(ix))
-            .collect();
-        let mut remotes: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-        for (ix, b) in self.branches.iter().enumerate() {
-            if b.kind == RefKind::Remote {
-                let remote = b.name.split_once('/').map_or("", |(r, _)| r);
-                remotes.entry(remote).or_default().push(ix);
-            }
-        }
-        for (remote, ixs) in remotes {
-            out.push(BranchItem::Header(remote.to_owned(), ixs.len()));
-            out.extend(ixs.into_iter().map(BranchItem::Branch));
-        }
-        out
-    }
-
-    pub(super) fn render_branches(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let filtering = !self.bfilter.trim().is_empty();
-        let field = self.render_field("branch-filter", Field::Branches, "Filter branches", cx);
-        let items = self.branch_items().into_iter().map(|item| match item {
-            BranchItem::Header(name, n) => div()
-                .px(px(8.))
-                .pt(px(8.))
-                .pb(px(2.))
-                .text_size(px(11.))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(theme::faint())
-                .child(format!("{} · {n}", name.to_uppercase()))
-                .into_any_element(),
-            BranchItem::Branch(ix) => {
-                let b = &self.branches[ix];
-                // Under its remote's heading a name needs no prefix.
-                let name = match (b.kind, filtering) {
-                    (RefKind::Remote, false) => {
-                        b.name.split_once('/').map_or(b.name.as_str(), |(_, n)| n)
-                    }
-                    _ => b.name.as_str(),
-                };
-                let reviewed = self.head_reviewed(b.tip);
-                let part = self.head_part(b.tip);
-                div()
-                    .py(px(1.))
-                    .child(
-                        row(
-                            ("branch", ix),
-                            if self.at_root_list() {
-                                self.nav.pick_branch == Some(ix)
-                            } else {
-                                self.branch == Some(ix)
-                            },
-                        )
-                        .h(px(26.))
-                        .gap_2()
-                        .child(
-                            div()
-                                .w(px(8.))
-                                .text_color(theme::accent())
-                                .child(if b.is_head { "●" } else { "" }),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(match b.kind {
-                                    _ if reviewed => theme::added(),
-                                    RefKind::Local => theme::text(),
-                                    RefKind::Remote => theme::muted(),
-                                })
-                                .child(name.to_owned()),
-                        )
-                        .children(reviewed.then(|| {
-                            div()
-                                .flex_none()
-                                .text_size(px(11.))
-                                .text_color(theme::added())
-                                .child("✓")
-                        }))
-                        .children(part.map(|(done, total)| progress_badge(done, total)))
-                        .children(self.request_of_branch(ix).map(|m| {
-                            div()
-                                .flex_none()
-                                .text_size(px(11.))
-                                .text_color(theme::accent())
-                                .child(super::words::number(m.iid))
-                        }))
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                this.branch_context(ix, event.position, cx)
-                            }),
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.close_picker(cx);
-                            this.open_branch(ix, None, cx);
-                        }))
-                        // A long hover: the branch's card — upstream, ahead / behind, its
-                        // last commit (#53).
-                        .when_some(self.branch_card(ix), |s, card| s.card(card)),
-                    )
-                    .into_any_element()
-            }
-        });
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .child(field)
-            .child(
-                div()
-                    .id("branches")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .px(px(6.))
-                    .pb(px(6.))
-                    .children(items),
-            )
-    }
-
-    /// The one-line field of `field`, like the commit search: its text or a placeholder; a click
-    /// gives it the keyboard.
+    /// The one-line field of `field` in a list's head, inset from the list's edges.
     pub(super) fn render_field(
         &self,
         id: &'static str,
@@ -212,6 +68,20 @@ impl Workspace {
         placeholder: &'static str,
         cx: &Context<Self>,
     ) -> impl IntoElement {
+        self.field_box(id, field, placeholder, cx)
+            .mx(px(6.))
+            .mb(px(6.))
+    }
+
+    /// The one-line field of `field`, like the commit search: its text or a placeholder; a click
+    /// gives it the keyboard.
+    pub(super) fn field_box(
+        &self,
+        id: &'static str,
+        field: Field,
+        placeholder: &'static str,
+        cx: &Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         let active = self.field == Some(field);
         let (text, look) = match field {
             Field::Branches => (&self.bfilter, input::Look::default()),
@@ -232,8 +102,6 @@ impl Workspace {
             .flex()
             .items_center()
             .gap_2()
-            .mx(px(6.))
-            .mb(px(6.))
             .px_2()
             .h(px(26.))
             .rounded(px(super::ROW_RADIUS))
@@ -289,6 +157,14 @@ impl Workspace {
             cx.notify();
             return true;
         }
+        // A root list's filter keeps ↑ ↓ for the list it filters (#72).
+        if field == Field::Branches
+            && self.at_root_list()
+            && matches!(event.keystroke.key.as_str(), "up" | "down")
+        {
+            self.step_pick(event.keystroke.key == "down", cx);
+            return true;
+        }
         // Typed, the keyboard filter matches by words again.
         if field == Field::Keys {
             self.keys_exact = false;
@@ -304,10 +180,6 @@ impl Workspace {
             Edit::Escape => {
                 text.clear();
                 self.field = None;
-            }
-            Edit::Enter { .. } if field == Field::Branches && self.picker_open => {
-                self.close_picker(cx);
-                return true;
             }
             Edit::Enter { .. } if field == Field::Branches && self.at_root_list() => {
                 self.open_pick(cx);
@@ -475,17 +347,6 @@ impl Workspace {
             .map(|item| match item {
                 FileItem::File { ix, .. } => super::zones::ItemKey::File(ix),
                 FileItem::Dir { path, .. } => super::zones::ItemKey::Dir(path),
-            })
-            .collect()
-    }
-
-    /// Branch indexes in the order the list shows them.
-    pub(super) fn branch_ixs(&self) -> Vec<usize> {
-        self.branch_items()
-            .into_iter()
-            .filter_map(|item| match item {
-                BranchItem::Branch(ix) => Some(ix),
-                BranchItem::Header(..) => None,
             })
             .collect()
     }

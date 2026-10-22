@@ -444,6 +444,7 @@ fn parse_pull(p: &Value) -> Option<Mr> {
             .map(|r| s(&r["login"]))
             .filter(|l| !l.is_empty())
             .collect(),
+        description: s(&p["body"]),
     })
 }
 
@@ -1018,6 +1019,7 @@ pub fn create(
             draft,
             author_login: String::new(),
             reviewers: Vec::new(),
+            description: String::new(),
         });
     }
     let value = rest(
