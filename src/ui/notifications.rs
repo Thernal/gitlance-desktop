@@ -127,6 +127,13 @@ impl Notices {
             .count()
     }
 
+    /// Something about request `iid` is not read yet: the menu's blue dot on it (#71).
+    pub fn unread_of(&self, iid: u64) -> bool {
+        self.list
+            .iter()
+            .any(|n| n.iid == iid && !self.read.contains(&n.key))
+    }
+
     fn load_seen(&mut self) {
         if self.seen_loaded {
             return;

@@ -29,9 +29,11 @@ mod markdown;
 mod md_page;
 mod menu;
 mod motion;
+mod nav;
 mod notifications;
 mod opening;
 mod outdated;
+mod pages;
 mod palette;
 mod rail;
 mod reactions;
@@ -68,7 +70,7 @@ use gpui::{
     TitlebarOptions, UniformListScrollHandle, Window, WindowBounds, WindowOptions, actions, canvas,
     div, font, list, prelude::*, size,
 };
-use lists::{Field, History};
+use lists::Field;
 use menu::{Act, CtxMenu, Entry};
 use rows::{FileData, Row};
 use select::Sel;
@@ -170,6 +172,7 @@ actions!(
         FocusFiles,
         FocusDiffZone,
         NewTab,
+        CloseItem,
         CloseTab,
         ReopenTab,
         NextTab,
@@ -334,7 +337,9 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("ctrl-3"), FocusFiles, Some("Workspace")),
         KeyBinding::new(&k("ctrl-4"), FocusDiffZone, Some("Workspace")),
         KeyBinding::new(&k("cmd-t"), NewTab, Some("Workspace")),
-        KeyBinding::new(&k("cmd-w"), CloseTab, Some("Workspace")),
+        // ⌘W closes what is open on screen; a project's tab is ⇧⌘W (#71).
+        KeyBinding::new(&k("cmd-w"), CloseItem, Some("Workspace")),
+        KeyBinding::new(&k("cmd-shift-w"), CloseTab, Some("Workspace")),
         KeyBinding::new(&k("cmd-shift-t"), ReopenTab, Some("Workspace")),
         KeyBinding::new(&k("cmd-shift-]"), NextTab, Some("Workspace")),
         KeyBinding::new(&k("cmd-shift-["), PreviousTab, Some("Workspace")),
@@ -511,6 +516,7 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
         ]),
         Menu::new("File").items([
             MenuItem::action("New Tab", NewTab),
+            MenuItem::action("Close", CloseItem),
             MenuItem::action("Close Tab", CloseTab),
             MenuItem::action("Reopen Closed Tab", ReopenTab),
             MenuItem::separator(),
@@ -1426,8 +1432,8 @@ pub struct Workspace {
     /// The last layout of the wrapped field (the composer, a description) and the x ↑ ↓ keep.
     field_lines: input::Lines,
     field_goal: Option<gpui::Pixels>,
-    /// Back / forward through what was looked at.
-    history: History,
+    /// Where the window is: each space's page, back and forward, the open items (#71).
+    nav: nav::Nav,
     /// Where the View button was painted, so its menu hangs from it.
     view_bounds: Rc<Shared<Option<gpui::Bounds<gpui::Pixels>>>>,
     /// The branch and path filters, and which of them (if any) takes the keyboard.
@@ -1621,7 +1627,7 @@ impl Workspace {
             field_scroll: Rc::default(),
             field_lines: Rc::default(),
             field_goal: None,
-            history: History::default(),
+            nav: nav::Nav::default(),
             view_bounds: Rc::new(Shared::new(None)),
             bfilter: String::new(),
             pfilter: String::new(),
@@ -1722,13 +1728,26 @@ impl Workspace {
                         this.page.load(&crate::review::key(&root));
                         this.root = Some(root);
                         this.branches = branches;
+                        let refresh = keep.is_some();
                         let (refname, commit) = keep.unzip();
                         let ix = refname
                             .and_then(|r| this.branches.iter().position(|b| b.refname == r))
                             .or_else(|| this.branches.iter().position(|b| b.is_head))
                             .or((!this.branches.is_empty()).then_some(0));
                         this.clear_branch();
-                        if let Some(ix) = ix {
+                        if !refresh {
+                            // Opened: the space and pages it was left on (#71).
+                            this.restore_nav(ix, cx);
+                        } else if let Some(
+                            page @ (nav::Page::Request(_)
+                            | nav::Page::RequestCommit(..)
+                            | nav::Page::RequestVersions(..)),
+                        ) = this.page_of(spaces::Space::Requests).cloned()
+                            && this.nav.space == spaces::Space::Requests
+                        {
+                            // A request's page loads again as the request it is.
+                            this.show(spaces::Space::Requests, Some(page), cx);
+                        } else if let Some(ix) = ix {
                             this.select_branch(ix, commit.flatten(), cx);
                         }
                         this.follow_pending_link(cx);
@@ -1756,7 +1775,6 @@ impl Workspace {
         self.selection = Selection::None;
         self.diff = None;
         self.diff_task = None;
-        self.file_view = None;
         self.clear_file();
         self.file = 0;
     }
@@ -1779,13 +1797,13 @@ impl Workspace {
     }
 
     fn select_branch(&mut self, ix: usize, keep: Option<git2::Oid>, cx: &mut Context<Self>) {
+        self.open_request = None;
         self.sync_request(ix, cx);
         let (Some(root), Some(branch)) = (self.root.clone(), self.branches.get(ix)) else {
             return;
         };
         let (refname, tip) = (branch.refname.clone(), branch.tip);
         self.clear_branch();
-        self.open_request = None;
         self.branch = Some(ix);
         self.branch_task = Some(cx.spawn(async move |this, cx| {
             let loaded = cx
@@ -1814,7 +1832,13 @@ impl Workspace {
                             this.open_request = Some((base.clone(), head.clone(), iid));
                             this.show_request_commits(&base, &head);
                             this.apply_mr_versions();
-                            this.run_compare(base, head, true, Some(iid), cx);
+                            // A commit or versions of it waited for its commits (#71); else the
+                            // whole request.
+                            if !this.finish_pending(cx) {
+                                this.run_compare(base, head, true, Some(iid), cx);
+                            }
+                        } else {
+                            this.finish_pending(cx);
                         }
                         this.follow_pending_link(cx);
                     }
@@ -1964,13 +1988,15 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 match loaded {
                     Ok(diff) => {
+                        // The file asked for, else the one a page comes back to (#71).
+                        let keep = keep
+                            .or_else(|| this.restore_scroll.as_ref().map(|(path, _)| path.clone()));
                         let ix =
                             keep.and_then(|path| diff.files.iter().position(|f| f.path() == path));
                         let empty = diff.files.is_empty();
                         this.diff = Some(diff);
                         // The files of the diff it replaces are gone.
                         this.stack = None;
-                        this.file_view = None;
                         this.map_agent_comments(cx);
                         this.index_review();
                         // The first file as the island lists it (a tree sorts folders first), so
@@ -1997,7 +2023,6 @@ impl Workspace {
         let Some(file) = self.diff.as_ref().and_then(|d| d.files.get(ix)).cloned() else {
             return;
         };
-        self.file_view = None;
         self.remember_place(
             recents::Key::File(file.path().to_owned()),
             file.path().to_owned(),
@@ -2626,18 +2651,9 @@ impl Workspace {
         self.fold_section(2, cx);
     }
 
-    /// ⌥⌘3 or the rail's third button: the sidebar's top island shows the merge requests; again,
-    /// the branches.
+    /// ⌥⌘3: the Merge requests space, as ⌃⌘4 (#71).
     fn toggle_requests(&mut self, _: &ToggleRequests, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.requests.available && !self.requests.connectable {
-            return;
-        }
-        if self.picker_open && self.requests.side == requests::Side::Requests {
-            return self.close_picker(cx);
-        }
-        // ⌥⌘3 lists every request; the picker's head narrows it.
-        self.requests.scope = requests::Scope::All;
-        self.open_picker(true, cx);
+        self.go_space(spaces::Space::Requests, cx);
     }
 
     /// The picker under the title bar: branches, or (`requests`) merge requests. The filter, or
@@ -2826,10 +2842,6 @@ impl Workspace {
     // ---- resizing ------------------------------------------------------------------------
 
     fn render_diff(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // A file the diff does not change, opened from the Files tab (D18).
-        if let Some(view) = self.render_file_view(cx) {
-            return view;
-        }
         // A new merge request is written in the diff's place; Changes shows the diff again.
         if self.create_in_place() && !self.create_shows_changes() {
             return island()

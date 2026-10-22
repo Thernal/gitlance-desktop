@@ -1,7 +1,7 @@
-//! A file the diff does not change, opened from search everywhere's Files tab (D18, X53): shown in
-//! the diff's place, read only, as of the revision on screen (`HEAD` when there is none, the file
-//! on disk for the working tree), highlighted, with its line numbers. Open in editor; esc goes back
-//! to the diff.
+//! A file read in Code (#71), opened from search everywhere's Files tab (D18, X53): read only, as
+//! of the revision on screen when it was opened (`HEAD` when there is none, the file on disk for
+//! the working tree), highlighted, with its line numbers. Open in editor; ⌘W closes it, esc goes
+//! up to Code.
 
 use super::{Header, ROW_RADIUS, Workspace, format, island, px, theme};
 use crate::git::Repo;
@@ -24,11 +24,17 @@ pub struct FileView {
 pub type Reading = Option<Task<()>>;
 
 impl Workspace {
-    /// Shows `path` as it is in the version on screen, in the diff's place.
+    /// Shows `path` as it is in the version on screen, as Code's page (#71).
     pub(super) fn open_file_view(&mut self, path: String, cx: &mut Context<Self>) {
         let Some(root) = self.root.clone() else {
             return;
         };
+        self.arrive(super::nav::Page::File(path.clone()));
+        self.remember_place(
+            super::recents::Key::File(path.clone()),
+            path.clone(),
+            "file".to_owned(),
+        );
         let working = matches!(
             self.diff.as_ref().map(|d| &d.header),
             Some(Header::WorkingTree { .. })
@@ -78,13 +84,6 @@ impl Workspace {
             })
             .ok();
         }));
-    }
-
-    /// Back to the diff.
-    pub(super) fn close_file_view(&mut self, cx: &mut Context<Self>) {
-        if self.file_view.take().is_some() {
-            cx.notify();
-        }
     }
 
     pub(super) fn render_file_view(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
@@ -171,7 +170,7 @@ impl Workspace {
                     .bg(theme::hover())
                     .text_size(px(11.))
                     .text_color(theme::muted())
-                    .child(format!("Not changed here · as of {}", view.at)),
+                    .child(format!("as of {}", view.at)),
             )
             .child(div().flex_1())
             .children(crate::editor::pick(self.settings.editor).map(|e| {
@@ -202,8 +201,8 @@ impl Workspace {
                     }))
             }))
             .child(
-                super::button("file-view-close", "Back to the diff", "esc")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_file_view(cx))),
+                super::button("file-view-close", "Close", "⌘W")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_shown(cx))),
             );
         Some(
             island()

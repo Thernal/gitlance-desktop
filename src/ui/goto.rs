@@ -75,7 +75,9 @@ impl Workspace {
                     return cx.notify();
                 }
                 self.spot = note.map(Spot::Note).or(line.map(Spot::Line));
-                if self.requests.current == Some(iid) && self.showing_request() {
+                // Loaded under another page: it only comes on screen (#71).
+                if self.request_loaded(iid) {
+                    self.arrive(super::nav::Page::Request(iid));
                     self.resolve_spot(true, cx);
                 } else {
                     self.select_request(iid, cx);
@@ -87,15 +89,13 @@ impl Workspace {
                     .iter()
                     .position(|c| c.id.to_string().starts_with(&sha))
                 {
-                    Some(ix) => self.select_commit(ix, cx),
+                    Some(ix) => {
+                        self.select_commit(ix, cx);
+                        self.follow_loaded();
+                    }
                     // Elsewhere in the repository: the first branch that has it, at that commit.
                     None => match self.branch_with(&sha) {
-                        Some((ix, id)) => {
-                            if self.requests.current.is_some() {
-                                self.leave_request(cx);
-                            }
-                            self.select_branch(ix, Some(id), cx);
-                        }
+                        Some((ix, id)) => self.open_branch(ix, Some(id), cx),
                         None => {
                             self.error = Some(
                                 format!(
@@ -119,12 +119,7 @@ impl Workspace {
                             .position(|b| b.name.split_once('/').is_some_and(|(_, n)| n == name))
                     });
                 match ix {
-                    Some(ix) => {
-                        if self.requests.current.is_some() {
-                            self.leave_request(cx);
-                        }
-                        self.select_branch(ix, None, cx);
-                    }
+                    Some(ix) => self.open_branch(ix, None, cx),
                     None => {
                         self.error =
                             Some(format!("No branch {name} here (fetch to see it).").into())

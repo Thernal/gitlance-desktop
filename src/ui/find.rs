@@ -271,6 +271,8 @@ impl Workspace {
             return self.reaction_key(event, cx);
         }
         let key = &event.keystroke;
+        // Esc closes the innermost thing — a card, menu or popover, a field, the find bar, the
+        // tool window with the keyboard — then goes one page up (#71).
         if key.key == "escape" {
             if self.done_card {
                 self.done_card = false;
@@ -285,8 +287,6 @@ impl Workspace {
             } else if self.repo_menu {
                 self.repo_menu = false;
                 cx.notify();
-            } else if self.file_view.is_some() && !self.settings_open {
-                self.close_file_view(cx);
             } else if self.field.is_some() {
                 self.filter_key(event, cx);
             } else if self.dfind.is_some() {
@@ -296,13 +296,12 @@ impl Workspace {
             } else if self.settings_open {
                 self.settings_open = false;
                 cx.notify();
-            } else if self.inbox {
-                self.inbox = false;
-                cx.notify();
             } else if self.note_sel.take().is_some() || self.sel.take().is_some() {
                 cx.notify();
-            } else if self.tool().is_some() {
+            } else if self.tool().is_some() && self.zone == super::zones::Zone::Tool {
                 self.set_tool(None, cx);
+            } else {
+                self.go_up(cx);
             }
             return;
         }

@@ -997,7 +997,9 @@ impl Workspace {
                     }
                     Some(Kind::Head(base)) => {
                         self.palette = None;
-                        self.run_compare(base, (name, id), true, None, cx);
+                        let head = (name, id);
+                        self.arrive(super::nav::Page::Compare(base.clone(), head.clone()));
+                        self.run_compare(base, head, true, None, cx);
                     }
                     _ => self.palette = None,
                 }
@@ -1016,22 +1018,22 @@ impl Workspace {
                     self.jump_to_line(&path, line, old, cx);
                 }
             }
+            // A result opens in its space (#71): a commit or a file of what is loaded on its page.
             Pick::Commit(id) => {
                 self.palette = None;
                 if let Some(ix) = self.commits.iter().position(|c| c.id == id) {
                     self.select_commit(ix, cx);
+                    self.follow_loaded();
                 }
             }
             Pick::File(ix) => {
                 self.palette = None;
                 self.select_file(ix, cx);
+                self.follow_loaded();
             }
             Pick::Branch(ix) => {
                 self.palette = None;
-                if self.requests.current.is_some() {
-                    self.leave_request(cx);
-                }
-                self.select_branch(ix, None, cx);
+                self.open_branch(ix, None, cx);
             }
             Pick::Request(iid) => {
                 self.palette = None;
@@ -1039,7 +1041,7 @@ impl Workspace {
             }
             Pick::RepoFile(path) => {
                 self.palette = None;
-                // Not changed here: shown in the diff's place (D18).
+                // Not changed here: read in Code (D18, #71).
                 self.open_file_view(path, cx);
             }
             Pick::Link(link) => {
@@ -1075,6 +1077,10 @@ impl Workspace {
         };
         self.clear_diff();
         self.selection = Selection::None;
+        // The whole request is its page; a commit or versions of it were (#71).
+        if request.is_some() {
+            self.record();
+        }
         let settings = self.settings();
         self.load_diff(None, cx, move || {
             let repo = Repo::open(&root)?;

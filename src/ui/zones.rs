@@ -56,6 +56,20 @@ impl Workspace {
     /// The zones that exist right now, in Tab order.
     fn zones(&self) -> Vec<Zone> {
         let mut out = Vec::new();
+        // A page with no side panel and no diff: a space's list, the Inbox, Code (#71).
+        let item = matches!(
+            self.nav.space,
+            super::spaces::Space::Branches | super::spaces::Space::Requests
+        ) && !self.at_root_list();
+        if !item {
+            if self.at_root_list() {
+                out.push(Zone::Branches);
+            }
+            if self.tool_shown() && !self.settings_open {
+                out.push(Zone::Tool);
+            }
+            return out;
+        }
         if self.layout.show_sidebar && !self.layout.fold_commits {
             out.push(Zone::Commits);
         }
@@ -146,8 +160,11 @@ impl Workspace {
     /// ↵: one step in.
     pub(super) fn activate(&mut self, cx: &mut Context<Self>) {
         if self.inbox && self.zone != Zone::Tool {
-            self.inbox = false;
             return self.open_notice(self.notices.at, cx);
+        }
+        // A space's list: what is selected in it opens (#71).
+        if self.at_root_list() && self.zone == Zone::Branches {
+            return self.open_pick(cx);
         }
         match self.zone {
             Zone::Tool => {
@@ -244,6 +261,10 @@ impl Workspace {
 
     /// The branch (or merge request) before or after the open one, in the order the list shows.
     fn step_branch(&mut self, down: bool, cx: &mut Context<Self>) {
+        // In a space's list ↑ ↓ only select; ↵ opens (#71).
+        if self.at_root_list() {
+            return self.step_pick(down, cx);
+        }
         if self.requests.available && self.requests.side == requests::Side::Requests {
             let shown: Vec<u64> = self.shown_requests().iter().map(|m| m.iid).collect();
             let at = self
@@ -270,8 +291,51 @@ impl Workspace {
             (None, _) => (!order.is_empty()).then_some(0),
         };
         if let Some(ix) = to.map(|i| order[i]) {
-            self.select_branch(ix, None, cx);
-            self.record();
+            self.open_branch(ix, None, cx);
+        }
+    }
+
+    /// ↑ ↓ in a space's list: the row selected, nothing opened.
+    fn step_pick(&mut self, down: bool, cx: &mut Context<Self>) {
+        let step = |at: Option<usize>, n: usize| match (at, down) {
+            (Some(i), true) => Some((i + 1).min(n.saturating_sub(1))),
+            (Some(i), false) => Some(i.saturating_sub(1)),
+            (None, _) => (n > 0).then_some(0),
+        };
+        if self.nav.space == super::spaces::Space::Requests {
+            let shown: Vec<u64> = self.shown_requests().iter().map(|m| m.iid).collect();
+            let at = self
+                .nav
+                .pick_request
+                .and_then(|iid| shown.iter().position(|i| *i == iid));
+            self.nav.pick_request = step(at, shown.len()).map(|i| shown[i]);
+        } else {
+            let order = self.branch_order();
+            let at = self
+                .nav
+                .pick_branch
+                .and_then(|b| order.iter().position(|ix| *ix == b));
+            self.nav.pick_branch = step(at, order.len()).map(|i| order[i]);
+        }
+        cx.notify();
+    }
+
+    /// ↵ in a space's list: the row selected opens.
+    pub(super) fn open_pick(&mut self, cx: &mut Context<Self>) {
+        if self.nav.space == super::spaces::Space::Requests {
+            let shown: Vec<u64> = self.shown_requests().iter().map(|m| m.iid).collect();
+            let pick = self.nav.pick_request.filter(|iid| shown.contains(iid));
+            if let Some(iid) = pick.or(shown.first().copied()) {
+                self.field = None;
+                self.select_request(iid, cx);
+            }
+        } else {
+            let order = self.branch_order();
+            let pick = self.nav.pick_branch.filter(|ix| order.contains(ix));
+            if let Some(ix) = pick.or(order.first().copied()) {
+                self.field = None;
+                self.open_branch(ix, None, cx);
+            }
         }
     }
 

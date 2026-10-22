@@ -63,8 +63,6 @@ pub struct Requests {
     /// The pushes GitLab kept for a request, as versions of this repository.
     pub versions: Option<(u64, Vec<Version>)>,
     version_task: Option<Task<()>>,
-    /// The request left with ✕: its branch shows as a plain branch until a request is picked again.
-    pub dismissed: Option<u64>,
     /// The token's username: one's own notes are the ones it wrote, and can be edited.
     pub login: Option<String>,
     task: Option<Task<()>>,
@@ -129,6 +127,7 @@ impl Workspace {
                 if let Some(ix) = this.branch {
                     this.sync_request(ix, cx);
                 }
+                this.requests_listed(cx);
                 this.follow_pending_link(cx);
                 this.load_notices(cx);
                 cx.notify();
@@ -155,14 +154,16 @@ impl Workspace {
         }
     }
 
-    /// Follows the branch selection: the request of the branch becomes the current one and its
-    /// discussions are read.
+    /// Follows the branch selection: a request opened as one (or being opened) whose source
+    /// branch is branch `ix` becomes the current one and its discussions are read. A branch opened
+    /// in Branches is a branch: no request rides on it (#71).
     pub(super) fn sync_request(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let dismissed = self.requests.dismissed;
         let iid = self
-            .request_of_branch(ix)
-            .map(|m| m.iid)
-            .filter(|iid| dismissed != Some(*iid));
+            .pending_compare
+            .as_ref()
+            .or(self.open_request.as_ref())
+            .map(|r| r.2)
+            .filter(|iid| self.request_of_branch(ix).is_some_and(|m| m.iid == *iid));
         if iid == self.requests.current && iid.is_none() {
             return;
         }
@@ -242,7 +243,6 @@ impl Workspace {
         else {
             return;
         };
-        self.requests.dismissed = None;
         self.load_request_versions(iid, cx);
         if let Some(m) = self.requests.list.iter().find(|m| m.iid == iid) {
             let (label, detail) = (m.title.clone(), super::words::number(iid));
@@ -280,29 +280,30 @@ impl Workspace {
             return;
         };
         self.error = None;
-        if let Some(tgt) = pick(&target) {
+        let tgt = pick(&target);
+        // Its page now, before the branch it is read from replaces what is loaded (#71).
+        self.arrive(super::nav::Page::Request(iid));
+        if let Some(tgt) = tgt {
             let side = |ix: usize| (self.branches[ix].name.clone(), self.branches[ix].tip);
             self.pending_compare = Some((side(tgt), side(src), iid));
         }
         self.select_branch(src, None, cx);
-        self.record();
     }
 
-    /// ✕ on the request (⌥⌘L): back to the checked-out branch, as a plain branch, with the branches
-    /// in the rail.
+    /// ⌥⌘L: closes the request on screen, back to the list (as ⌘W on it does).
     pub(super) fn leave_request(&mut self, cx: &mut Context<Self>) {
-        let Some(iid) = self.requests.current else {
-            return;
-        };
-        self.requests.dismissed = Some(iid);
-        self.requests.side = Side::Branches;
-        self.pending_compare = None;
-        self.close_picker(cx);
-        match self.branches.iter().position(|b| b.is_head).or(self.branch) {
-            Some(ix) => self.select_branch(ix, None, cx),
-            None => self.sync_request(0, cx),
+        if let Some(iid) = self.requests.current {
+            self.close_open(&super::nav::Item::Request(iid), cx);
         }
-        cx.notify();
+    }
+
+    /// The request's state goes: what is loaded is its branch, as a branch.
+    pub(super) fn drop_request(&mut self, cx: &mut Context<Self>) {
+        self.open_request = None;
+        self.pending_compare = None;
+        if let Some(ix) = self.branch {
+            self.sync_request(ix, cx);
+        }
     }
 
     /// ⌥↓: the next merge request, in list order, that is not reviewed yet; ⌥↑: the previous one,
@@ -477,7 +478,7 @@ impl Workspace {
                             this.done_card = false;
                             match to {
                                 Err(iid) => this.select_request(iid, cx),
-                                Ok(ix) => this.select_branch(ix, None, cx),
+                                Ok(ix) => this.open_branch(ix, None, cx),
                             }
                         },
                     ))
@@ -530,6 +531,8 @@ impl Workspace {
                 if let Ok(list) = built {
                     this.requests.versions = Some((iid, list));
                     this.apply_mr_versions();
+                    // Two versions of it waited for them (#71).
+                    this.finish_pending(cx);
                     this.compute_histories(cx);
                     cx.notify();
                 }
@@ -562,25 +565,26 @@ impl Workspace {
         }
     }
 
-    /// Is the open diff the one of the request whose discussions are loaded?
+    /// Is the whole request whose discussions are loaded on screen, as its page (#71)? Its keys
+    /// (`a`, ⇧N, Submit review) act only then, never on one loaded under another page.
     pub(super) fn showing_request(&self) -> bool {
-        matches!(
-            self.diff.as_ref().map(|d| &d.header),
-            Some(Header::Compare { request: Some(iid), .. }) if Some(*iid) == self.requests.current
-        )
+        self.requests.current.is_some_and(|iid| {
+            self.request_loaded(iid)
+                && self.nav.space == super::spaces::Space::Requests
+                && self.nav_page() == Some(&super::nav::Page::Request(iid))
+        })
     }
 
-    /// The requests list is open and no request is shown (nor loading): the diff of the branch
-    /// behind it would read as the request's, so the right side waits for a choice.
-    pub(super) fn choosing_request(&self) -> bool {
-        self.picker_open
-            && self.requests.side == Side::Requests
-            && self.requests.available
-            && self.open_request.is_none()
-            && !self.showing_request()
+    /// The diff loaded is the whole of request `iid`, whatever page is on screen.
+    pub(super) fn request_loaded(&self, iid: u64) -> bool {
+        self.requests.current == Some(iid)
+            && matches!(
+                self.diff.as_ref().map(|d| &d.header),
+                Some(Header::Compare { request: Some(i), .. }) if *i == iid
+            )
     }
 
-    /// The right side while a request is being chosen.
+    /// Beside the list of requests: how to open one.
     pub(super) fn render_choose_request(&self) -> impl IntoElement + use<> {
         let key = |k: &'static str, what: &'static str| {
             div()
@@ -610,8 +614,7 @@ impl Workspace {
                     .gap_4()
                     .text_size(px(12.))
                     .child(key("↑↓", "move"))
-                    .child(key("↵", "open"))
-                    .child(key("esc", "back to the branch")),
+                    .child(key("↵", "open")),
             )
     }
 
@@ -1820,7 +1823,12 @@ impl Workspace {
         };
         let items = shown.into_iter().map(|m| {
             let iid = m.iid;
-            let current = self.requests.current == Some(iid);
+            // In the space's list the row selected; in the picker the request on screen.
+            let current = if self.at_root_list() {
+                self.nav.pick_request == Some(iid)
+            } else {
+                self.requests.current == Some(iid)
+            };
             let head = git2::Oid::from_str(&m.head).ok();
             let reviewed = head.is_some_and(|h| self.head_reviewed(h));
             let part = head.and_then(|h| self.head_part(h));

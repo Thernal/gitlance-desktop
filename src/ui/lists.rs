@@ -1,119 +1,16 @@
 //! The lists of the window beyond the commit list: branches grouped by remote with a filter, the
-//! changed files as a folder tree or a flat list with a path filter, the labels on commits, and
-//! back / forward through what was looked at. Designed in review round 1 (A9, A10, A11, A13).
+//! changed files as a folder tree or a flat list with a path filter and the labels on commits.
+//! Designed in review round 1 (A9, A10, A11, A13).
 
 use super::hover::Hover;
 use super::input::{self, Edit};
 use super::px;
 use super::{Workspace, change_badge, row, theme};
 use crate::git::{Deco, DecoKind, FileDiff, RefKind};
-use git2::Oid;
 use gpui::{
     ClickEvent, Context, KeyDownEvent, MouseButton, MouseDownEvent, ScrollStrategy, div, prelude::*,
 };
 use std::collections::{BTreeMap, HashSet};
-
-// ---- back / forward ---------------------------------------------------------------------
-
-/// Something looked at: a commit on a branch, or a range of versions of it.
-#[derive(Clone, PartialEq, Eq)]
-pub enum Nav {
-    Commit {
-        refname: String,
-        id: Oid,
-    },
-    Versions {
-        refname: String,
-        from: usize,
-        to: usize,
-    },
-}
-
-#[derive(Default)]
-pub struct History {
-    entries: Vec<Nav>,
-    at: usize,
-}
-
-impl History {
-    pub fn can_back(&self) -> bool {
-        self.at > 0
-    }
-
-    pub fn can_forward(&self) -> bool {
-        self.at + 1 < self.entries.len()
-    }
-}
-
-impl Workspace {
-    fn current_nav(&self) -> Option<Nav> {
-        let refname = self.branches.get(self.branch?)?.refname.clone();
-        match self.selection {
-            super::Selection::Commit(ix) => Some(Nav::Commit {
-                refname,
-                id: self.commits.get(ix)?.id,
-            }),
-            super::Selection::Versions { from, to } => Some(Nav::Versions { refname, from, to }),
-            super::Selection::WorkingTree | super::Selection::None => None,
-        }
-    }
-
-    /// Remembers what is shown now as the newest place in the history (dropping any "forward").
-    pub(super) fn record(&mut self) {
-        let Some(nav) = self.current_nav() else {
-            return;
-        };
-        if self.history.entries.get(self.history.at) == Some(&nav) {
-            return;
-        }
-        let keep = (self.history.at + 1).min(self.history.entries.len());
-        self.history.entries.truncate(keep);
-        self.history.entries.push(nav);
-        self.history.at = self.history.entries.len() - 1;
-    }
-
-    pub(super) fn go_back(&mut self, cx: &mut Context<Self>) {
-        if self.history.can_back() {
-            self.history.at -= 1;
-            self.goto(self.history.entries[self.history.at].clone(), cx);
-        }
-    }
-
-    pub(super) fn go_forward(&mut self, cx: &mut Context<Self>) {
-        if self.history.can_forward() {
-            self.history.at += 1;
-            self.goto(self.history.entries[self.history.at].clone(), cx);
-        }
-    }
-
-    fn goto(&mut self, nav: Nav, cx: &mut Context<Self>) {
-        let (refname, commit) = match &nav {
-            Nav::Commit { refname, id } => (refname, Some(*id)),
-            Nav::Versions { refname, .. } => (refname, None),
-        };
-        let here = self
-            .branch
-            .and_then(|ix| self.branches.get(ix))
-            .is_some_and(|b| &b.refname == refname);
-        if !here {
-            if let Some(ix) = self.branches.iter().position(|b| &b.refname == refname) {
-                self.select_branch(ix, commit, cx);
-            }
-            return;
-        }
-        match nav {
-            Nav::Commit { id, .. } => {
-                if let Some(ix) = self.commits.iter().position(|c| c.id == id) {
-                    self.select_commit(ix, cx);
-                }
-            }
-            Nav::Versions { from, to, .. } if to < self.versions.len() => {
-                self.select_versions(from, to, cx)
-            }
-            Nav::Versions { .. } => {}
-        }
-    }
-}
 
 // ---- labels on commits ------------------------------------------------------------------
 
@@ -228,56 +125,62 @@ impl Workspace {
                 div()
                     .py(px(1.))
                     .child(
-                        row(("branch", ix), self.branch == Some(ix))
-                            .h(px(26.))
-                            .gap_2()
-                            .child(
-                                div()
-                                    .w(px(8.))
-                                    .text_color(theme::accent())
-                                    .child(if b.is_head { "●" } else { "" }),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_color(match b.kind {
-                                        _ if reviewed => theme::added(),
-                                        RefKind::Local => theme::text(),
-                                        RefKind::Remote => theme::muted(),
-                                    })
-                                    .child(name.to_owned()),
-                            )
-                            .children(reviewed.then(|| {
-                                div()
-                                    .flex_none()
-                                    .text_size(px(11.))
-                                    .text_color(theme::added())
-                                    .child("✓")
-                            }))
-                            .children(part.map(|(done, total)| progress_badge(done, total)))
-                            .children(self.request_of_branch(ix).map(|m| {
-                                div()
-                                    .flex_none()
-                                    .text_size(px(11.))
-                                    .text_color(theme::accent())
-                                    .child(super::words::number(m.iid))
-                            }))
-                            .on_mouse_down(
-                                MouseButton::Right,
-                                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                    this.branch_context(ix, event.position, cx)
-                                }),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.select_branch(ix, None, cx);
-                                this.record();
-                                this.close_picker(cx);
-                            }))
-                            // A long hover: the branch's card — upstream, ahead / behind, its
-                            // last commit (#53).
-                            .when_some(self.branch_card(ix), |s, card| s.card(card)),
+                        row(
+                            ("branch", ix),
+                            if self.at_root_list() {
+                                self.nav.pick_branch == Some(ix)
+                            } else {
+                                self.branch == Some(ix)
+                            },
+                        )
+                        .h(px(26.))
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(8.))
+                                .text_color(theme::accent())
+                                .child(if b.is_head { "●" } else { "" }),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(match b.kind {
+                                    _ if reviewed => theme::added(),
+                                    RefKind::Local => theme::text(),
+                                    RefKind::Remote => theme::muted(),
+                                })
+                                .child(name.to_owned()),
+                        )
+                        .children(reviewed.then(|| {
+                            div()
+                                .flex_none()
+                                .text_size(px(11.))
+                                .text_color(theme::added())
+                                .child("✓")
+                        }))
+                        .children(part.map(|(done, total)| progress_badge(done, total)))
+                        .children(self.request_of_branch(ix).map(|m| {
+                            div()
+                                .flex_none()
+                                .text_size(px(11.))
+                                .text_color(theme::accent())
+                                .child(super::words::number(m.iid))
+                        }))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                this.branch_context(ix, event.position, cx)
+                            }),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.close_picker(cx);
+                            this.open_branch(ix, None, cx);
+                        }))
+                        // A long hover: the branch's card — upstream, ahead / behind, its
+                        // last commit (#53).
+                        .when_some(self.branch_card(ix), |s, card| s.card(card)),
                     )
                     .into_any_element()
             }
@@ -404,6 +307,10 @@ impl Workspace {
             }
             Edit::Enter { .. } if field == Field::Branches && self.picker_open => {
                 self.close_picker(cx);
+                return true;
+            }
+            Edit::Enter { .. } if field == Field::Branches && self.at_root_list() => {
+                self.open_pick(cx);
                 return true;
             }
             Edit::Enter { .. } if field == Field::Token => {

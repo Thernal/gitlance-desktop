@@ -60,6 +60,7 @@ impl Workspace {
     }
 
     pub(super) fn select_working_tree(&mut self, cx: &mut Context<Self>) {
+        self.arrive(super::nav::Page::WorkingTree);
         self.load_working_tree(None, cx);
     }
 

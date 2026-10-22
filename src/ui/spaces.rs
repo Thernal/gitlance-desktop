@@ -6,9 +6,10 @@
 //! (D2); Settings is the title bar's gear. Until the spaces get pages of their own (#72, #75), Code
 //! opens search everywhere on Files, Branches and Merge requests the picker beside the menu.
 
-use super::requests::{Scope, Side};
-use super::{Workspace, icons, palette, px, theme};
-use gpui::{ClickEvent, Context, FontWeight, MouseButton, div, prelude::*};
+use super::nav::{Item, Page};
+use super::requests::Scope;
+use super::{Workspace, icons, px, theme};
+use gpui::{ClickEvent, Context, FontWeight, MouseButton, SharedString, div, prelude::*};
 
 /// The menu's width, open and folded to icons.
 const OPEN: f32 = 216.;
@@ -81,37 +82,38 @@ impl Missing {
     }
 }
 
-/// What is open under a space.
-struct Open {
+/// What is open under a space, as its row in the menu.
+struct OpenRow {
+    /// The request or branch; None for Code's file.
+    item: Option<Item>,
     icon: &'static str,
     label: String,
     mono: bool,
     tip: String,
-    /// × closes it: the request is left, the file view closed.
-    closes: bool,
+    /// It is the page on screen.
+    on: bool,
+    /// Agent comments not sent yet on its files.
+    drafts: bool,
+    /// Notifications of it not read yet.
+    news: bool,
+}
+
+impl Space {
+    /// Its place in `Space::ALL`.
+    pub fn ix(self) -> usize {
+        match self {
+            Space::Inbox => 0,
+            Space::Code => 1,
+            Space::Branches => 2,
+            Space::Requests => 3,
+        }
+    }
 }
 
 impl Workspace {
     /// The space on screen; none while Settings shows or no repository is open.
     pub(super) fn space(&self) -> Option<Space> {
-        if self.settings_open || self.root.is_none() {
-            return None;
-        }
-        Some(if self.inbox {
-            Space::Inbox
-        } else if self.file_view.is_some() {
-            Space::Code
-        } else if self.picker_open {
-            if self.requests.side == Side::Requests {
-                Space::Requests
-            } else {
-                Space::Branches
-            }
-        } else if self.requests.current.is_some() {
-            Space::Requests
-        } else {
-            Space::Branches
-        })
+        (!self.settings_open && self.root.is_some()).then_some(self.nav.space)
     }
 
     fn missing(&self, space: Space) -> Option<Missing> {
@@ -137,49 +139,83 @@ impl Workspace {
         }
     }
 
-    fn open_item(&self, space: Space) -> Option<Open> {
-        match space {
-            Space::Inbox => None,
-            Space::Code => self.file_view.as_ref().map(|view| Open {
-                icon: "file",
-                label: view
-                    .path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&view.path)
-                    .to_owned(),
-                mono: false,
-                tip: view.path.clone(),
-                closes: true,
-            }),
-            Space::Branches => {
-                let branch = self
-                    .branch
-                    .filter(|_| self.requests.current.is_none())
-                    .and_then(|ix| self.branches.get(ix))?;
-                Some(Open {
-                    icon: "branch",
-                    label: branch.name.clone(),
-                    mono: true,
-                    tip: branch.name.clone(),
-                    closes: false,
-                })
-            }
-            Space::Requests => {
-                let m = self
-                    .requests
-                    .current
-                    .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))?;
-                let label = format!("{} {}", super::words::number(m.iid), m.title);
-                Some(Open {
-                    icon: "pull-request",
-                    tip: label.clone(),
-                    label,
+    /// The rows open under `space`: its requests or branches, Code's file.
+    fn open_rows(&self, space: Space) -> Vec<OpenRow> {
+        let here = self.space() == Some(space);
+        if space == Space::Code {
+            return match self.page_of(Space::Code) {
+                Some(Page::File(path)) => vec![OpenRow {
+                    item: None,
+                    icon: "file",
+                    label: path.rsplit('/').next().unwrap_or(path).to_owned(),
                     mono: false,
-                    closes: true,
-                })
-            }
+                    tip: path.clone(),
+                    on: here,
+                    drafts: false,
+                    news: false,
+                }],
+                _ => Vec::new(),
+            };
         }
+        let loaded = self.page_of(space).and_then(Page::item);
+        self.open_items(space)
+            .into_iter()
+            .map(|open| {
+                let on = here && self.is_shown(&open.item);
+                // The one loaded says its files as they are now.
+                let now: Vec<String>;
+                let paths = match &self.diff {
+                    Some(diff) if loaded.as_ref() == Some(&open.item) => {
+                        now = diff.files.iter().map(|f| f.path().to_owned()).collect();
+                        &now
+                    }
+                    _ => &open.paths,
+                };
+                let drafts = self
+                    .comments
+                    .iter()
+                    .any(|c| c.state == crate::review::State::Draft && paths.contains(&c.path));
+                match &open.item {
+                    Item::Request(iid) => {
+                        let title = self
+                            .requests
+                            .list
+                            .iter()
+                            .find(|m| m.iid == *iid)
+                            .map(|m| m.title.clone())
+                            .unwrap_or_default();
+                        let label = format!("{} {title}", super::words::number(*iid));
+                        OpenRow {
+                            item: Some(open.item.clone()),
+                            icon: "pull-request",
+                            tip: label.clone(),
+                            label,
+                            mono: false,
+                            on,
+                            drafts,
+                            news: self.notices.unread_of(*iid),
+                        }
+                    }
+                    Item::Branch(refname) => {
+                        let name = self
+                            .branches
+                            .iter()
+                            .find(|b| &b.refname == refname)
+                            .map_or_else(|| refname.clone(), |b| b.name.clone());
+                        OpenRow {
+                            item: Some(open.item.clone()),
+                            icon: "branch",
+                            tip: name.clone(),
+                            label: name,
+                            mono: true,
+                            on,
+                            drafts,
+                            news: false,
+                        }
+                    }
+                }
+            })
+            .collect()
     }
 
     pub(super) fn menu_folded(&self) -> bool {
@@ -206,59 +242,15 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A space's row or ⌃⌘1…4. One the project lacks a token for opens the connect panel; one it
-    /// lacks a remote for does nothing.
+    /// A space's row or ⌃⌘1…4: the page it was left on, its root when it is already on screen.
+    /// One the project lacks a token for opens the connect panel; one it lacks a remote for
+    /// does nothing.
     pub(super) fn go_space(&mut self, space: Space, cx: &mut Context<Self>) {
-        if self.root.is_none() || self.missing(space) == Some(Missing::Remote) {
-            return;
-        }
-        self.settings_open = false;
-        if space != Space::Inbox {
-            self.inbox = false;
-        }
-        if space != Space::Code {
-            self.close_file_view(cx);
-        }
-        if self.missing(space) == Some(Missing::Token) {
-            self.open_picker(true, cx);
-            return cx.notify();
-        }
-        match space {
-            Space::Inbox => {
-                self.close_picker(cx);
-                self.inbox = true;
-                self.notices.at = self.inbox_rows().first().copied().unwrap_or(0);
-                self.refresh_notices(cx);
-            }
-            Space::Code => {
-                self.close_picker(cx);
-                if self.file_view.is_none() {
-                    self.search(palette::Scope::Files, cx);
-                }
-            }
-            Space::Branches => self.open_picker(false, cx),
-            // The filter chosen last stays (All · To review · Mine in the picker's head).
-            Space::Requests => self.open_picker(true, cx),
-        }
-        cx.notify();
-    }
-
-    /// Back to what is open under a space: the overlays over it close.
-    fn show_open(&mut self, space: Space, cx: &mut Context<Self>) {
-        self.settings_open = false;
-        self.inbox = false;
-        self.close_picker(cx);
-        if space != Space::Code {
-            self.close_file_view(cx);
-        }
-        cx.notify();
-    }
-
-    fn close_open(&mut self, space: Space, cx: &mut Context<Self>) {
-        match space {
-            Space::Requests => self.leave_request(cx),
-            Space::Code => self.close_file_view(cx),
-            Space::Inbox | Space::Branches => {}
+        match self.missing(space) {
+            _ if self.root.is_none() => {}
+            Some(Missing::Remote) => {}
+            Some(Missing::Token) => self.show(Space::Requests, None, cx),
+            None => self.enter_space(space, cx),
         }
     }
 
@@ -276,16 +268,54 @@ impl Workspace {
             let id = space.id();
             let label = space.label();
             let missing = self.missing(space);
-            let open = self.open_item(space);
-            // The space's row is marked when nothing open under it is the page, or folded.
+            let opens = self.open_rows(space);
+            let shut = self.nav.folded[space.ix()];
+            // The space's row is marked when none of what is open under it is the page — at its
+            // root, or with them folded away.
             let within = here == Some(space);
-            let on = within && (open.is_none() || folded);
+            let on = within && (folded || shut || !opens.iter().any(|o| o.on));
             let n = Some(self.waiting(space)).filter(|&n| n > 0 && missing.is_none());
             let tip: gpui::SharedString = match missing {
                 Some(m) => format!("{label} — {}", m.line()),
                 None => format!("{label}  {}", space.key()),
             }
             .into();
+            let disclose = (!folded && !opens.is_empty()).then(|| {
+                div()
+                    .id((id, 5usize))
+                    .flex_none()
+                    .size(px(18.))
+                    .mr(px(-4.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .hover(|s| s.bg(theme::hover()))
+                    // Folded it points right, open down (#56).
+                    .child(super::motion::toward(
+                        icons::icon("chevron")
+                            .size(px(13.))
+                            .text_color(theme::faint()),
+                        (id, 6usize),
+                        !shut,
+                        false,
+                        super::motion::FAST,
+                        |chevron, v| {
+                            chevron.with_transformation(gpui::Transformation::rotate(
+                                gpui::radians(-std::f32::consts::FRAC_PI_2 * (1. - v)),
+                            ))
+                        },
+                    ))
+                    .tooltip_show_delay(crate::ui::hover::LONG)
+                    .tooltip(|_, cx| {
+                        cx.new(|_| super::Tip("Show or hide what is open here"))
+                            .into()
+                    })
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.toggle_open_items(space, cx)
+                    }))
+            });
             let line = div()
                 .id(id)
                 .relative()
@@ -341,6 +371,7 @@ impl Workspace {
                             .text_color(theme::faint())
                             .child(n.to_string())
                     }))
+                    .children(disclose)
                 })
                 // Folded, a badge says something waits for you.
                 .when(folded, |s| {
@@ -376,77 +407,100 @@ impl Workspace {
                     .text_color(theme::faint())
                     .child(super::words::say(m.line()).into_owned())
             });
-            let open = open.filter(|_| !folded).map(|open| {
-                let on = within;
-                let group: gpui::SharedString = format!("{id}-open").into();
-                div()
-                    .id((id, 2usize))
-                    .group(group.clone())
-                    .flex_none()
-                    .min_h(px(28.))
-                    .ml(px(if nested { 35. } else { 17. }))
-                    .pl(px(12.))
-                    .pr(px(6.))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .text_size(px(12.))
-                    .cursor_pointer()
-                    .when(on, |s| {
-                        s.border_l_2()
-                            .border_color(theme::accent())
-                            .rounded_r(px(super::ROW_RADIUS))
-                            .bg(theme::selected())
-                            .text_color(theme::text())
-                    })
-                    .when(!on, |s| {
-                        s.border_l_1()
-                            .border_color(theme::island_border())
-                            .text_color(theme::muted())
-                            .hover(|s| s.text_color(theme::text()))
-                    })
-                    .child(
-                        icons::icon(open.icon)
-                            .size(px(14.))
-                            .text_color(theme::faint()),
-                    )
-                    .child(
-                        super::hover::cut((id, 3usize), open.label)
-                            .flex_1()
-                            .when(open.mono, |s| s.font_family(theme::CODE_FONT)),
-                    )
-                    .children(open.closes.then(|| {
-                        let tip = match space {
-                            Space::Requests => "Leave the merge request — back to your branch  ⌥⌘L",
-                            _ => "Close the file  esc",
-                        };
+            let opens = opens
+                .into_iter()
+                .enumerate()
+                .filter(|_| !folded && !shut)
+                .map(|(n, open)| {
+                    let group: gpui::SharedString = format!("{id}-open-{n}").into();
+                    let on = open.on;
+                    let item = open.item.clone();
+                    let close = item.clone();
+                    let dot = |color: gpui::Rgba, tip: &'static str| {
                         div()
-                            .id((id, 4usize))
+                            .id(SharedString::from(format!("{id}-dot-{n}-{tip}")))
                             .flex_none()
-                            .size(px(18.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(4.))
-                            .when(!on, |s| s.invisible().group_hover(group, |s| s.visible()))
-                            .hover(|s| s.bg(theme::hover()))
-                            .child(icons::icon("x").size(px(12.)).text_color(theme::faint()))
+                            .size(px(7.))
+                            .rounded_full()
+                            .bg(color)
                             .tooltip_show_delay(crate::ui::hover::LONG)
                             .tooltip(move |_, cx| cx.new(|_| super::Tip(tip)).into())
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.close_open(space, cx)
-                            }))
-                    }))
-                    .tooltip_show_delay(crate::ui::hover::LONG)
-                    .tooltip({
-                        let tip: gpui::SharedString = open.tip.into();
-                        move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into()
-                    })
-                    .on_click(
-                        cx.listener(move |this, _: &ClickEvent, _, cx| this.show_open(space, cx)),
-                    )
-            });
+                    };
+                    div()
+                        .id(SharedString::from(format!("{id}-open-{n}")))
+                        .group(group.clone())
+                        .flex_none()
+                        .min_h(px(28.))
+                        .ml(px(if nested { 35. } else { 17. }))
+                        .pl(px(12.))
+                        .pr(px(6.))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .text_size(px(12.))
+                        .cursor_pointer()
+                        .when(on, |s| {
+                            s.border_l_2()
+                                .border_color(theme::accent())
+                                .rounded_r(px(super::ROW_RADIUS))
+                                .bg(theme::selected())
+                                .text_color(theme::text())
+                        })
+                        .when(!on, |s| {
+                            s.border_l_1()
+                                .border_color(theme::island_border())
+                                .text_color(theme::muted())
+                                .hover(|s| s.text_color(theme::text()))
+                        })
+                        .child(
+                            icons::icon(open.icon)
+                                .size(px(14.))
+                                .text_color(theme::faint()),
+                        )
+                        .child(
+                            super::hover::cut(
+                                SharedString::from(format!("{id}-label-{n}")),
+                                open.label,
+                            )
+                            .flex_1()
+                            .when(open.mono, |s| s.font_family(theme::CODE_FONT)),
+                        )
+                        .children(open.drafts.then(|| dot(theme::agent(), "Unsent drafts")))
+                        .children(open.news.then(|| dot(theme::accent(), "New activity")))
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("{id}-close-{n}")))
+                                .flex_none()
+                                .size(px(18.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(4.))
+                                .when(!on, |s| s.invisible().group_hover(group, |s| s.visible()))
+                                .hover(|s| s.bg(theme::hover()))
+                                .child(icons::icon("x").size(px(12.)).text_color(theme::faint()))
+                                .tooltip_show_delay(crate::ui::hover::LONG)
+                                .tooltip(|_, cx| cx.new(|_| super::Tip("Close  ⌘W")).into())
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    match &close {
+                                        Some(item) => this.close_open(item, cx),
+                                        None => this.close_shown(cx),
+                                    }
+                                })),
+                        )
+                        .tooltip_show_delay(crate::ui::hover::LONG)
+                        .tooltip({
+                            let tip: SharedString = open.tip.into();
+                            move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into()
+                        })
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| match &item {
+                            Some(item) => this.show_open(item, cx),
+                            None => this.go_space(space, cx),
+                        }))
+                        .into_any_element()
+                })
+                .collect::<Vec<_>>();
             div()
                 .flex_none()
                 .flex()
@@ -454,7 +508,7 @@ impl Workspace {
                 .gap(px(2.))
                 .child(line)
                 .children(why)
-                .children(open)
+                .children(opens)
                 .into_any_element()
         };
         let menu = div()

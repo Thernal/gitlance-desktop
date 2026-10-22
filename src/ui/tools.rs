@@ -67,13 +67,24 @@ pub struct ToolView {
 }
 
 impl Workspace {
-    /// The tool window open now; Notifications only where requests can be read.
+    /// The tool window open now; Notifications only where requests can be read, Details on a
+    /// request's page, Discussions on a branch's or a request's (#71).
     pub(super) fn tool(&self) -> Option<Tool> {
         self.root.as_ref()?;
         let tool = Tool::parse(&self.layout.tool)?;
+        let item = matches!(
+            self.nav.space,
+            super::spaces::Space::Branches | super::spaces::Space::Requests
+        ) && self.nav_page().is_some();
         match tool {
             Tool::Notifications if !self.requests.available => None,
-            Tool::Details if !self.showing_request() => None,
+            Tool::Details
+                if !self.showing_request()
+                    || !matches!(self.nav_page(), Some(super::nav::Page::Request(_))) =>
+            {
+                None
+            }
+            Tool::Discussions if !item => None,
             tool => Some(tool),
         }
     }

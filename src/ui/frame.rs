@@ -213,7 +213,7 @@ impl Workspace {
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_menu(cx)))
                     }))
                     .child(
-                        nav_button("go-back", "back", "Back  ⌘[", self.history.can_back())
+                        nav_button("go-back", "back", "Back  ⌘[", self.nav.can_back())
                             .on_click(cx.listener(|this, _, _, cx| this.go_back(cx))),
                     )
                     .child(
@@ -221,7 +221,7 @@ impl Workspace {
                             "go-forward",
                             "forward",
                             "Forward  ⌘]",
-                            self.history.can_forward(),
+                            self.nav.can_forward(),
                         )
                         .on_click(cx.listener(|this, _, _, cx| this.go_forward(cx))),
                     ),
@@ -1062,6 +1062,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &NewTab, window, cx| {
                 this.with_shell(window, cx, |s, window, cx| s.new_tab(window, cx))
             }))
+            .on_action(cx.listener(|this, _: &CloseItem, _, cx| this.close_shown(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 this.with_shell(window, cx, |s, window, cx| {
                     let active = s.active_ix();
@@ -1197,95 +1198,8 @@ impl Render for Workspace {
                         )
                     }))
                     .children(self.render_spaces(cx))
-                    // The header row over the panes, then the panes: side panel, diff, tool window.
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .min_h_0()
-                            .flex()
-                            .flex_col()
-                            .children(self.inbox.then(|| {
-                                div()
-                                    .flex_none()
-                                    .flex()
-                                    .flex_col()
-                                    .child(self.render_inbox_header(cx))
-                                    .child(div().h(px(gap())))
-                            }))
-                            .children(
-                                self.diff
-                                    .as_ref()
-                                    .filter(|_| !self.choosing_request() && !self.inbox)
-                                    .map(|diff| {
-                                        div()
-                                            .flex_none()
-                                            .flex()
-                                            .flex_col()
-                                            .child(if self.zen.is_some() {
-                                                self.render_zen_head(diff).into_any_element()
-                                            } else if let Some(head) = self.render_create_header(cx)
-                                            {
-                                                head
-                                            } else if let Some(head) =
-                                                self.render_request_header(cx)
-                                            {
-                                                head
-                                            } else {
-                                                self.render_header(diff, cx).into_any_element()
-                                            })
-                                            .child(div().h(px(gap())))
-                                    }),
-                            )
-                            .children(self.inbox.then(|| {
-                                div()
-                                    .relative()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .flex()
-                                    .child(self.render_inbox(cx))
-                                    .children(self.render_tool(cx))
-                            }))
-                            .children((!self.inbox).then(|| {
-                                div()
-                                    .relative()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .flex()
-                                    .children(self.render_side(cx).map(|side| {
-                                        // It slides in and out at its width (#56, 4, 16).
-                                        let room = self.layout.sidebar + 12.;
-                                        motion::toward(
-                                            div()
-                                                .flex()
-                                                .flex_none()
-                                                .overflow_hidden()
-                                                .child(side)
-                                                .child(self.handle(Split::Sidebar, cx)),
-                                            "side-pane",
-                                            self.layout.show_sidebar,
-                                            self.motion.recent("side"),
-                                            motion::BASE,
-                                            move |pane, v| pane.max_w(px(room * v)),
-                                        )
-                                    }))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .min_h_0()
-                                            .flex()
-                                            .flex_col()
-                                            .child(if self.choosing_request() {
-                                                self.render_choose_request().into_any_element()
-                                            } else {
-                                                self.render_diff(cx).into_any_element()
-                                            })
-                                            .children(self.render_zen_keys()),
-                                    )
-                                    .children(self.render_tool(cx))
-                            })),
-                    )
+                    // The page of the space on screen (#71).
+                    .child(self.render_space(cx))
                     .children(self.stripe_gap())
                     .children(self.render_stripe(cx).map(|stripe| {
                         motion::toward(

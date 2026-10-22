@@ -39,15 +39,19 @@ impl Workspace {
                     .as_ref()
                     .and_then(|d| d.files.iter().position(|f| f.path() == path));
                 match ix {
-                    Some(ix) => self.select_file(ix, cx),
-                    None => {
-                        self.error = Some(format!("{path} is not in the open diff.").into());
-                        cx.notify();
+                    Some(ix) => {
+                        self.select_file(ix, cx);
+                        self.follow_loaded();
                     }
+                    // Not in the diff on screen: read in Code (#71).
+                    None => self.open_file_view(path, cx),
                 }
             }
             Key::Commit(id) => match self.commits.iter().position(|c| c.id == id) {
-                Some(ix) => self.select_commit(ix, cx),
+                Some(ix) => {
+                    self.select_commit(ix, cx);
+                    self.follow_loaded();
+                }
                 None => {
                     self.error = Some(
                         format!("{} is not in the open list of commits.", format::short(id)).into(),
