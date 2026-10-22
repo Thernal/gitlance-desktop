@@ -10,7 +10,8 @@ use gpui::{Div, FontWeight, Rgba, div, prelude::*};
 use std::borrow::Cow;
 
 /// The app writes shortcuts the macOS way (`⇧⌘↵`). On Windows and Linux they are shown in that
-/// OS's words (`Ctrl+Shift+Enter`), as `platform::pc_keys` binds them: ⌘ is Ctrl, ⌘1…⌘9 are Alt.
+/// OS's words (`Ctrl+Shift+Enter`), as `platform::pc_keys` binds them: ⌘ is Ctrl, ⌘1…⌘9 are Alt,
+/// ⌃⌘ is Ctrl+Shift.
 fn is_modifier(c: char) -> bool {
     matches!(c, '⌘' | '⇧' | '⌥' | '⌃')
 }
@@ -69,7 +70,7 @@ fn pc_caps(mods: &[char], key: &str) -> Vec<String> {
     if tab || mods.contains(&'⌥') {
         caps.push("Alt".to_owned());
     }
-    if mods.contains(&'⇧') {
+    if mods.contains(&'⇧') || (mods.contains(&'⌃') && mods.contains(&'⌘')) {
         caps.push("Shift".to_owned());
     }
     if !key.is_empty() {
@@ -234,6 +235,7 @@ mod tests {
         assert_eq!(pc_text("Post  ⇧⌘↵"), "Post  Ctrl+Shift+Enter");
         assert_eq!(pc_text("⌥⌘1 and ⌘1…9"), "Ctrl+Alt+1 and Alt+1…9");
         assert_eq!(pc_text("⌃2, ⌘F3, ⌥↓"), "Ctrl+2, Ctrl+F3, Alt+↓");
+        assert_eq!(pc_text("Inbox  ⌃⌘1"), "Inbox  Ctrl+Shift+1");
         assert_eq!(
             pc_text("⌘+ and ⌘− zoom, ⌘0"),
             "Ctrl++ and Ctrl+- zoom, Ctrl+0"

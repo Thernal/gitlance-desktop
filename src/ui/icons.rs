@@ -269,6 +269,20 @@ const ICONS: &[(&str, &str)] = &[
             r#"<path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>"#
         ),
     ),
+    // The Code space and a file open in it (the shell, #70).
+    (
+        "folder",
+        lucide!(
+            r#"<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>"#
+        ),
+    ),
+    (
+        "file",
+        lucide!(
+            r#"<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/>"#
+            r#"<path d="M14 2v4a2 2 0 0 0 2 2h4"/>"#
+        ),
+    ),
 ];
 
 /// Serves the embedded icons to GPUI's SVG renderer.

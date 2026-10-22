@@ -25,7 +25,7 @@ pub enum Act {
     Annotate,
     /// Settings → Diff → Mark reviewed as I scroll past, from the View menu.
     AutoReviewed,
-    /// The menu of places folds to icons, or opens.
+    /// The menu of spaces folds to icons, or opens.
     FoldPlaces,
     /// A tool window on the right opens or closes.
     Tool(super::tools::Tool),
@@ -148,7 +148,7 @@ impl Workspace {
                 self.settings.auto_reviewed = !self.settings.auto_reviewed;
                 self.settings.save();
             }
-            Act::FoldPlaces => self.toggle_places(cx),
+            Act::FoldPlaces => self.toggle_menu(cx),
             Act::Tool(tool) => self.toggle_tool(tool, cx),
             Act::Reveal(path) => cx.reveal_path(&path),
             Act::NewWindow(path) => cx.defer(move |cx| super::open_new_window(path, cx)),

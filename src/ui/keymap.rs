@@ -68,11 +68,11 @@ impl Preset {
                 ("FocusDiff", &["cmd-shift-f12"]),
                 ("Refresh", &["cmd-alt-y"]),
             ],
-            // Toggle Side Bar ⌘B, Open Recent ⌃R, Find in Files ⌘⇧F, Go Back ⌃− and Go Forward
-            // ⌃⇧− beside ⌘[ ⌘]; branches are switched from the palette.
+            // Toggle Side Bar ⌘B (the menu folds with ⌥⌘0 there), Open Recent ⌃R, Find in Files
+            // ⌘⇧F, Go Back ⌃− and Go Forward ⌃⇧− beside ⌘[ ⌘].
             Preset::VsCode => &[
                 ("ToggleSidebar", &["cmd-b"]),
-                ("SwitchTo", &[]),
+                ("FoldMenu", &["cmd-alt-0"]),
                 ("OpenRecent", &["ctrl-r"]),
                 ("FindInFiles", &["cmd-shift-f"]),
                 ("FindCommits", &[]),

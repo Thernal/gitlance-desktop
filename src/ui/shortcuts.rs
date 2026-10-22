@@ -14,12 +14,12 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
     (
         "Move",
         &[
+            ("⌃⌘1 ⌃⌘2 ⌃⌘3 ⌃⌘4", "Inbox, Code, Branches, Merge requests"),
             ("Tab ⇧Tab", "next / previous island"),
             ("⌃1 ⌃2 ⌃3 ⌃4", "branches, commits, files, diff"),
             ("j k", "next / previous commit"),
             ("h l  ← →", "previous / next file"),
             ("[  ]", "previous / next file"),
-            ("⌘B", "switch to a branch or a merge request"),
             ("n p", "next / previous change"),
             (
                 "v  ⇧v",
@@ -83,7 +83,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌥E ⌥W", "full file, whitespace"),
             ("⌥⌘B", "annotate: who wrote each line"),
             ("⌥⌘1 ⌥⌘2 ⌥⌘3", "side panel, fold Changes, merge requests"),
-            ("⌥⌘0", "fold the menu of places to icons"),
+            ("⌘B", "fold the menu to icons"),
             ("⌘.", "zen: the diff alone, the keys of a review below"),
             ("⌘+  ⌘−  ⌘0", "interface bigger, smaller, actual size"),
             ("⌘T ⌘W ⌘1…9", "tabs"),

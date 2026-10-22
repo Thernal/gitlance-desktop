@@ -33,7 +33,6 @@ mod notifications;
 mod opening;
 mod outdated;
 mod palette;
-mod places;
 mod rail;
 mod reactions;
 mod recents;
@@ -45,6 +44,7 @@ mod settings;
 mod shell;
 mod shortcuts;
 mod side;
+mod spaces;
 mod stack;
 mod submit;
 mod theme;
@@ -85,6 +85,10 @@ actions!(
         SaveTheme,
         ToggleAgents,
         FoldMenu,
+        GoToInbox,
+        GoToCode,
+        GoToBranches,
+        GoToMergeRequests,
         Refresh,
         PreviousCommit,
         NextCommit,
@@ -268,10 +272,14 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
             ToggleAgents,
             Some("Workspace && !Typing"),
         ),
-        // ⌘0 stays zoom reset; the menu of places folds with ⌥⌘0 (D12, X8).
-        KeyBinding::new(&k("cmd-alt-0"), FoldMenu, Some("Workspace")),
+        // The menu folds with ⌘B (D2; ⌘0 stays zoom reset, the switch picker has no
+        // key); in a field ⌘B is bold. ⌃⌘1…4 the spaces, Ctrl+Shift+1…4 on Windows and Linux.
+        KeyBinding::new(&k("cmd-b"), FoldMenu, Some("Workspace && !Typing")),
+        KeyBinding::new(&k("ctrl-cmd-1"), GoToInbox, Some("Workspace")),
+        KeyBinding::new(&k("ctrl-cmd-2"), GoToCode, Some("Workspace")),
+        KeyBinding::new(&k("ctrl-cmd-3"), GoToBranches, Some("Workspace")),
+        KeyBinding::new(&k("ctrl-cmd-4"), GoToMergeRequests, Some("Workspace")),
         KeyBinding::new(&k("a"), ApproveRequest, Some("Workspace && !Typing")),
-        KeyBinding::new(&k("cmd-b"), SwitchTo, Some("Workspace && !Typing")),
         KeyBinding::new(&k("cmd-shift-n"), ToggleNotifications, Some("Workspace")),
         KeyBinding::new(&k("alt-n"), NextDraft, Some("Workspace && !Typing")),
         KeyBinding::new(&k("alt-p"), PreviousDraft, Some("Workspace && !Typing")),
@@ -521,6 +529,11 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
             MenuItem::action("Previous Change", PreviousChange),
         ]),
         Menu::new("Go").items([
+            MenuItem::action("Inbox", GoToInbox),
+            MenuItem::action("Code", GoToCode),
+            MenuItem::action("Branches", GoToBranches),
+            MenuItem::action("Merge Requests", GoToMergeRequests),
+            MenuItem::separator(),
             MenuItem::action("Back", GoBack),
             MenuItem::action("Forward", GoForward),
             MenuItem::separator(),
@@ -853,6 +866,12 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.layout.fold_places = true;
                             continue;
                         }
+                        // The requests picker narrowed to the ones that ask for a review.
+                        "review-requests" => {
+                            this.requests.scope = requests::Scope::ReviewMe;
+                            this.go_space(spaces::Space::Requests, cx);
+                            continue;
+                        }
                         "rail-tabs" => {
                             this.settings.projects = crate::storage::Projects::Tabs;
                             share_settings(&this.settings);
@@ -876,7 +895,7 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                         // Applied last, once the request's discussions are in (below).
                         "hover-note" | "reaction-grid" => continue,
                         "inbox" => {
-                            this.go_place(places::Place::Inbox, cx);
+                            this.go_space(spaces::Space::Inbox, cx);
                             continue;
                         }
                         // The new request for the open branch, and one of its lists open.
@@ -893,11 +912,8 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             continue;
                         }
                         "all-requests" => {
-                            this.go_place(places::Place::Requests, cx);
-                            continue;
-                        }
-                        "review-requests" => {
-                            this.go_place(places::Place::ReviewRequests, cx);
+                            this.requests.scope = requests::Scope::All;
+                            this.go_space(spaces::Space::Requests, cx);
                             continue;
                         }
                         "fold-changes" => {
@@ -1288,8 +1304,6 @@ pub struct Workspace {
     /// The Inbox place is shown, and which of its notifications it lists.
     inbox: bool,
     inbox_view: inbox::InboxView,
-    /// The menu of places opened while a merge request is reviewed (it is folded there).
-    places_peek: bool,
     /// The note under the pointer (its reaction bar shows), and the one whose ☺+ is open (#9).
     hover_note: Option<u64>,
     reaction_grid: Option<u64>,
@@ -1522,7 +1536,6 @@ impl Workspace {
             agent_chats: Vec::new(),
             inbox: false,
             inbox_view: Default::default(),
-            places_peek: false,
             hover_note: None,
             reaction_grid: None,
             reaction_query: String::new(),
@@ -2192,8 +2205,8 @@ impl Workspace {
                 Some("Panels"),
                 vec![
                     Entry::new("Fold the menu to icons", Act::FoldPlaces)
-                        .key("⌥⌘0")
-                        .checked(self.places_folded()),
+                        .key("⌘B")
+                        .checked(self.menu_folded()),
                     Entry::new("Discussions", Act::Tool(tools::Tool::Discussions))
                         .key("⌘⇧D")
                         .checked(tool == Some(tools::Tool::Discussions)),
@@ -2622,7 +2635,7 @@ impl Workspace {
         if self.picker_open && self.requests.side == requests::Side::Requests {
             return self.close_picker(cx);
         }
-        // ⌥⌘3 lists every request; the menu's places narrow it.
+        // ⌥⌘3 lists every request; the picker's head narrows it.
         self.requests.scope = requests::Scope::All;
         self.open_picker(true, cx);
     }

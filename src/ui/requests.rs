@@ -18,7 +18,7 @@ pub enum Side {
     Requests,
 }
 
-/// Which requests the list shows: the menu of places picks one (#49).
+/// Which requests the list shows: All · To review · Mine in the picker's head (#70).
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum Scope {
     #[default]
@@ -94,7 +94,7 @@ impl Workspace {
             return;
         }
         self.requests.loading = true;
-        // Who the token is, once: the menu of places counts the requests asking for them.
+        // Who the token is, once: the menu counts the requests asking for them.
         let known = self.requests.login.is_some();
         self.requests.task = Some(cx.spawn(async move |this, cx| {
             let result = cx
@@ -1616,8 +1616,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The island's label: which of the two lists the rail's button chose.
-    pub(super) fn render_branches_header(&self) -> impl IntoElement {
+    /// The island's label: which of the two lists the rail's button chose. The requests' carries
+    /// the filters All · To review · Mine (the shell's Merge requests space, #70) once the token's
+    /// user is known.
+    pub(super) fn render_branches_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         if self.requests.connectable && self.requests.side == Side::Requests {
             return super::island_label(format!(
                 "Connect GitLab{}",
@@ -1627,27 +1629,52 @@ impl Workspace {
         }
         if self.requests.available && self.requests.side == Side::Requests {
             let n = self.requests.list.len();
-            let label = if self.requests.loading && n == 0 {
-                super::words::say("Merge requests …").into_owned()
-            } else {
-                let name = match self.requests.scope {
-                    Scope::All => "Merge requests",
-                    Scope::ReviewMe => "Review requests",
-                    Scope::Mine => "My requests",
-                };
-                let n = self
-                    .requests
+            let loading = self.requests.loading && n == 0;
+            let count = |scope: Scope| {
+                self.requests
                     .list
                     .iter()
-                    .filter(|m| self.in_scope(m, self.requests.scope))
-                    .count();
-                super::words::say(&format!("{name} · {n}")).into_owned()
+                    .filter(|m| self.in_scope(m, scope))
+                    .count()
             };
-            return super::island_label(format!(
-                "{label}{}",
-                self.zone_tag(super::zones::Zone::Branches)
-            ))
-            .into_any_element();
+            let label = if loading {
+                super::words::say("Merge requests …").into_owned()
+            } else if self.requests.login.is_some() {
+                super::words::say("Merge requests").into_owned()
+            } else {
+                super::words::say(&format!("Merge requests · {n}")).into_owned()
+            };
+            let filter = |scope: Scope, id: &'static str, name: &'static str| {
+                super::diff_view::chip(
+                    id,
+                    format!("{name} {}", count(scope)),
+                    self.requests.scope == scope,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.requests.scope = scope;
+                    cx.notify();
+                }))
+            };
+            return div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .pr(px(10.))
+                .child(
+                    super::island_label(format!(
+                        "{label}{}",
+                        self.zone_tag(super::zones::Zone::Branches)
+                    ))
+                    .flex_1()
+                    .min_w_0(),
+                )
+                .children((self.requests.login.is_some() && !loading).then(|| {
+                    super::diff_view::group()
+                        .child(filter(Scope::All, "scope-all", "All"))
+                        .child(filter(Scope::ReviewMe, "scope-review", "To review"))
+                        .child(filter(Scope::Mine, "scope-mine", "Mine"))
+                }))
+                .into_any_element();
         }
         super::island_label(format!(
             "Branches{}",
@@ -2090,73 +2117,6 @@ impl Workspace {
                 .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_approval(cx)))
         })
-    }
-
-    /// The request in the title bar: its number and ✕ to leave it; its title, pipeline and
-    /// approvals are in its header row (`details.rs`).
-    pub(super) fn render_request_title(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement + use<>> {
-        let m = self
-            .requests
-            .current
-            .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))?;
-        Some(
-            div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .gap_3()
-                .min_w_0()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .min_w_0()
-                        .max_w(px(480.))
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_color(theme::accent())
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(super::words::number(m.iid)),
-                        )
-                        // Its title only while the header row shows something else (a commit of it).
-                        .children((!self.showing_request()).then(|| {
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(theme::muted())
-                                .child(m.title.clone())
-                        })),
-                )
-                .child(
-                    div()
-                        .id("leave-request")
-                        .flex_none()
-                        .size(px(22.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(4.))
-                        .text_color(theme::faint())
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
-                        .child("✕")
-                        .tooltip_show_delay(crate::ui::hover::LONG)
-                        .tooltip(|_, cx| {
-                            cx.new(|_| {
-                                super::Tip("Leave the merge request — back to your branch  ⌥⌘L")
-                            })
-                            .into()
-                        })
-                        .on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| this.leave_request(cx)),
-                        ),
-                ),
-        )
     }
 
     /// Shows `line` of `path`: that file first when it is another one.

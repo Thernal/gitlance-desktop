@@ -286,7 +286,7 @@ impl Workspace {
         self.open_menu(at, vec![moves, open, close], cx);
     }
 
-    /// The projects in the menu of places (Settings → Appearance → Menu): one row each.
+    /// The projects in the menu of spaces (Settings → Appearance → Menu): one row each.
     pub(super) fn menu_projects(&self) -> Vec<(usize, TabInfo)> {
         if super::projects() != Projects::Menu {
             return Vec::new();

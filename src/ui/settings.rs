@@ -193,14 +193,6 @@ impl Workspace {
                 super::motion::set(this.settings.animations, cx);
             },
         ));
-        let fold_reviewing = switch("fold-reviewing", s.fold_reviewing).on_click(cx.listener(
-            |this, _: &ClickEvent, _, cx| {
-                this.change_settings(
-                    |this| this.settings.fold_reviewing = !this.settings.fold_reviewing,
-                    cx,
-                )
-            },
-        ));
         let refresh = switch("refresh", s.auto_refresh).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.change_settings(
@@ -324,7 +316,7 @@ impl Workspace {
             Section::Appearance => self.render_appearance(
                 item(
                     "Several projects",
-                    "How the open repositories are shown: a rail of their marks on the left (⌘1…9 in its order, a right-click moves or closes one, a drag reorders), tabs in the title bar, or listed in the menu of places.",
+                    "How the open repositories are shown: a rail of their marks on the left (⌘1…9 in its order, a right-click moves or closes one, a drag reorders), tabs in the title bar, or listed in the menu with the spaces nested under the one open.",
                     projects,
                 )
                 .into_any_element(),
@@ -334,21 +326,12 @@ impl Workspace {
                     panes,
                 )
                 .into_any_element(),
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_5()
-                    .child(item(
-                        "Fold the menu while reviewing",
-                        "While a merge request is reviewed, the menu of places folds to icons and the diff takes the room; its first button in the title bar opens it for a while. Off: the menu stays as you left it.",
-                        fold_reviewing,
-                    ))
-                    .child(item(
-                        "Animations",
-                        "Panels, menus and folds move instead of jumping, in 120 or 200 ms; nothing waits for them. Off, or with Reduce motion on in System Settings → Accessibility → Display, everything appears at once.",
-                        animations,
-                    ))
-                    .into_any_element(),
+                item(
+                    "Animations",
+                    "Panels, menus and folds move instead of jumping, in 120 or 200 ms; nothing waits for them. Off, or with Reduce motion on in System Settings → Accessibility → Display, everything appears at once.",
+                    animations,
+                )
+                .into_any_element(),
                 cx,
             ),
             Section::General => column()

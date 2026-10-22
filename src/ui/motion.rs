@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 /// `--motion-fast`: tooltips, cards, menus, pills, chevrons.
 pub const FAST: Duration = Duration::from_millis(120);
-/// `--motion-base`: panes — side sections, the menu of places, tool windows, zen.
+/// `--motion-base`: panes — side sections, the menu of spaces, tool windows, zen.
 pub const BASE: Duration = Duration::from_millis(200);
 
 /// Settings → Appearance → Animations, shared by every window.

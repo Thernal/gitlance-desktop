@@ -5,6 +5,7 @@
 
 use super::input::{self, Edit};
 use super::px;
+use super::spaces::Space;
 use super::{
     Diff, Header, ISLAND_RADIUS, ROW_RADIUS, Selection, Workspace, format, island_label, theme,
 };
@@ -149,10 +150,15 @@ pub enum Cmd {
     ZoomReset,
     Switch,
     Notifications,
+    Space(Space),
 }
 
 const COMMANDS: &[(&str, &str, Cmd)] = &[
-    ("Switch to a branch or a merge request…", "⌘B", Cmd::Switch),
+    ("Inbox", "⌃⌘1", Cmd::Space(Space::Inbox)),
+    ("Code", "⌃⌘2", Cmd::Space(Space::Code)),
+    ("Branches", "⌃⌘3", Cmd::Space(Space::Branches)),
+    ("Merge requests", "⌃⌘4", Cmd::Space(Space::Requests)),
+    ("Switch to a branch or a merge request…", "", Cmd::Switch),
     (
         "Notifications — mentions, reviews, replies",
         "⌘⇧N",
@@ -166,7 +172,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
         Cmd::SendToAgent,
     ),
     ("Show or hide the Agents window", "⇧⌘A", Cmd::Agents),
-    ("Fold the menu to icons", "⌥⌘0", Cmd::FoldMenu),
+    ("Fold the menu to icons", "⌘B", Cmd::FoldMenu),
     ("Keyboard shortcuts", "?", Cmd::Shortcuts),
     ("Show or hide the Discussions window", "⌘⇧D", Cmd::Comments),
     ("Show or hide the request's details", "⌘I", Cmd::Details),
@@ -1407,6 +1413,10 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::ZoomOut => Box::new(ZoomOut),
         Cmd::ZoomReset => Box::new(ZoomReset),
         Cmd::Switch => Box::new(SwitchTo),
+        Cmd::Space(Space::Inbox) => Box::new(super::GoToInbox),
+        Cmd::Space(Space::Code) => Box::new(super::GoToCode),
+        Cmd::Space(Space::Branches) => Box::new(super::GoToBranches),
+        Cmd::Space(Space::Requests) => Box::new(super::GoToMergeRequests),
         Cmd::Notifications => Box::new(ToggleNotifications),
     }
 }

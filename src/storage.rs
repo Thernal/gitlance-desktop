@@ -103,7 +103,7 @@ pub struct Layout {
     /// The side panel's Versions and Commits sections are folded to their headers.
     pub fold_versions: bool,
     pub fold_commits: bool,
-    /// The menu of places is folded to icons.
+    /// The menu of spaces is folded to icons.
     pub fold_places: bool,
     /// The tool window open on the right (`discussions`, `agents`, `notifications`), empty for none.
     pub tool: String,
@@ -254,7 +254,7 @@ impl MarkStyle {
 }
 
 /// How several open repositories are shown (redesign round 2): a rail of projects on the left,
-/// tabs in the title bar, or the projects inside the menu of places.
+/// tabs in the title bar, or the projects inside the menu of spaces.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Projects {
     #[default]
@@ -353,8 +353,6 @@ pub struct Settings {
     pub projects: Projects,
     /// Flat panes (hairlines, no gaps) instead of islands.
     pub flat: bool,
-    /// The menu of places folds to icons while a merge request is reviewed.
-    pub fold_reviewing: bool,
     /// Panels, menus and folds move instead of jumping (#56).
     pub animations: bool,
 }
@@ -377,7 +375,6 @@ impl Default for Settings {
             last_new_tab: false,
             projects: Projects::Rail,
             flat: false,
-            fold_reviewing: true,
             animations: true,
         }
     }
@@ -416,7 +413,6 @@ impl Settings {
                 "last_new_tab" => settings.last_new_tab = value == "true",
                 "projects" => settings.projects = Projects::from_key(value).unwrap_or_default(),
                 "flat" => settings.flat = value == "true",
-                "fold_reviewing" => settings.fold_reviewing = value != "false",
                 "animations" => settings.animations = value != "false",
                 "ui_zoom" => {
                     settings.ui_zoom = value.parse().map_or(100, |z: u16| {
@@ -455,7 +451,6 @@ impl std::fmt::Display for Settings {
         writeln!(f, "last_new_tab={}", self.last_new_tab)?;
         writeln!(f, "projects={}", self.projects.key())?;
         writeln!(f, "flat={}", self.flat)?;
-        writeln!(f, "fold_reviewing={}", self.fold_reviewing)?;
         writeln!(f, "animations={}", self.animations)?;
         writeln!(f, "zoom={}", self.zoom)?;
         writeln!(f, "ui_zoom={}", self.ui_zoom)?;
@@ -562,7 +557,6 @@ mod tests {
             last_new_tab: true,
             projects: Projects::Menu,
             flat: true,
-            fold_reviewing: false,
             animations: false,
         };
         assert_eq!(Settings::parse(&settings.to_string()), settings);

@@ -22,14 +22,14 @@ impl Workspace {
                     island()
                         .occlude()
                         .absolute()
-                        .left(px(56.))
+                        .left(px(self.menu_right()))
                         .top(px(44.))
                         .w(px(400.))
                         .h(px(self.picker_height()))
                         .border_2()
                         .border_color(theme::focus())
                         .shadow_lg()
-                        .child(self.render_branches_header())
+                        .child(self.render_branches_header(cx))
                         .child(
                             if self.requests.side == requests::Side::Requests
                                 && self.requests.connectable
@@ -71,7 +71,6 @@ impl Workspace {
                 .py(px(6.))
                 .text_size(px(12.))
                 .text_color(theme::muted())
-                .child(pair("⌘B", "switch"))
                 .child(pair("[ ]", "files"))
                 .child(pair("v", "reviewed, next"))
                 .child(pair("⌥↓", "next request"))
@@ -176,18 +175,17 @@ impl Workspace {
 
     // ---- rendering -----------------------------------------------------------------------
 
+    /// The title bar is the window's, never the page's (#70): the menu's fold, back and
+    /// forward, the project, search and Settings — and the project's own quiet words, the fetch
+    /// and the refresh status, before the gear.
     pub(super) fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let repo = self.root.as_ref().and_then(|r| r.file_name()).map_or_else(
             || "GitLance".to_owned(),
             |n| n.to_string_lossy().into_owned(),
         );
-        // In Tabs mode the tabs take the repository's and the branch's place (D21).
+        // In Tabs mode the tabs take the project's place (D21).
         let tabs = self.render_title_tabs(cx);
-        let branch = self
-            .branch
-            .and_then(|ix| self.branches.get(ix))
-            .map(|b| b.name.clone())
-            .filter(|_| tabs.is_none());
+        let tabbed = tabs.is_some();
         let repo = tabs.is_none().then_some(repo);
         div()
             .h(px(TITLE_BAR))
@@ -205,10 +203,14 @@ impl Workspace {
                         nav_button(
                             "fold-places",
                             "sidebar",
-                            "Fold the menu to icons  ⌥⌘0",
+                            if self.menu_folded() {
+                                "Expand the menu  ⌘B"
+                            } else {
+                                "Collapse the menu  ⌘B"
+                            },
                             true,
                         )
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_places(cx)))
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_menu(cx)))
                     }))
                     .child(
                         nav_button("go-back", "back", "Back  ⌘[", self.history.can_back())
@@ -248,8 +250,8 @@ impl Workspace {
             }))
             .child(
                 // The empty part of the bar: a double click zooms the window, as in other apps.
-                // It gives way first when the window is narrow: the request's title shortens, the
-                // buttons on the right stay.
+                // Search sits in its middle (at its end beside the tabs) and gives way first when
+                // the window is narrow; the buttons on the right stay.
                 div()
                     .id("title-bar")
                     .flex_1()
@@ -258,49 +260,61 @@ impl Workspace {
                     .h_full()
                     .flex()
                     .items_center()
-                    .gap_3()
+                    .when(tabbed, |s| s.justify_end())
+                    .when(!tabbed, |s| s.justify_center())
                     .on_click(|event, window, _| {
                         if event.click_count() == 2 {
                             window.titlebar_double_click();
                         }
                     })
-                    .children(branch.map(|b| {
+                    .children(self.root.is_some().then(|| {
                         div()
-                            .id("branch-picker")
-                            .flex_none()
-                            .max_w(px(260.))
+                            .id("title-search")
+                            .flex_shrink(1.)
+                            .min_w(px(40.))
+                            .w(px(if tabbed { 220. } else { 360. }))
+                            .h(px(26.))
                             .flex()
                             .items_center()
-                            .gap_1()
-                            .px_2()
-                            .h(px(26.))
+                            .gap(px(8.))
+                            .px(px(10.))
+                            .overflow_hidden()
                             .rounded(px(ROW_RADIUS))
-                            .text_color(theme::muted())
+                            .border_1()
+                            .border_color(theme::island_border())
+                            .bg(theme::panel())
+                            .text_size(px(12.))
+                            .text_color(theme::faint())
                             .cursor_pointer()
-                            .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
-                            .tooltip_show_delay(crate::ui::hover::LONG)
-                            .tooltip(|_, cx| cx.new(|_| Tip("Branches  ⌃1")).into())
-                            .child(icons::icon("branch").text_color(theme::muted()))
-                            .child(div().min_w_0().truncate().child(b))
-                            .child(icons::icon("chevron").text_color(theme::muted()))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if this.picker_open
-                                    && this.requests.side == requests::Side::Branches
-                                {
-                                    this.close_picker(cx)
-                                } else {
-                                    this.open_picker(false, cx)
-                                }
-                            }))
-                    }))
-                    .children(self.render_request_title(cx)),
+                            .hover(|s| s.border_color(theme::border()))
+                            .child(
+                                icons::icon("search")
+                                    .size(px(14.))
+                                    .text_color(theme::faint()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child("Search or run a command"),
+                            )
+                            .child(keys::caps("⌘K", keys::On::Plain))
+                            // A double click here is not the bar's: the window keeps its size.
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.search(palette::Scope::All, cx)),
+                            )
+                    })),
             )
             // The right end never gives way.
             .child(
                 div()
                     .flex_none()
+                    .min_w(px(if tabbed { 0. } else { 180. }))
                     .flex()
                     .items_center()
+                    .justify_end()
                     .gap_3()
                     .children(self.render_fetch(cx))
                     .children(self.render_status(cx))
@@ -1013,7 +1027,19 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToggleAgents, _, cx| {
                 this.toggle_tool(tools::Tool::Agents, cx)
             }))
-            .on_action(cx.listener(|this, _: &FoldMenu, _, cx| this.toggle_places(cx)))
+            .on_action(cx.listener(|this, _: &FoldMenu, _, cx| this.toggle_menu(cx)))
+            .on_action(
+                cx.listener(|this, _: &GoToInbox, _, cx| this.go_space(spaces::Space::Inbox, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &GoToCode, _, cx| this.go_space(spaces::Space::Code, cx)),
+            )
+            .on_action(cx.listener(|this, _: &GoToBranches, _, cx| {
+                this.go_space(spaces::Space::Branches, cx)
+            }))
+            .on_action(cx.listener(|this, _: &GoToMergeRequests, _, cx| {
+                this.go_space(spaces::Space::Requests, cx)
+            }))
             .on_action(cx.listener(|this, _: &NextZone, _, cx| this.step_zone(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousZone, _, cx| this.step_zone(false, cx)))
             .on_action(cx.listener(|this, _: &Activate, _, cx| this.activate(cx)))
@@ -1170,7 +1196,7 @@ impl Render for Workspace {
                             |rail, v| rail.max_w(px(48. * v)),
                         )
                     }))
-                    .children(self.render_places(cx))
+                    .children(self.render_spaces(cx))
                     // The header row over the panes, then the panes: side panel, diff, tool window.
                     .child(
                         div()
