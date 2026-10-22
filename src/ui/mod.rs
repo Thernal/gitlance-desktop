@@ -6,6 +6,7 @@ mod appearance;
 mod bar;
 mod bookmarks;
 mod branch_page;
+mod code;
 mod comments;
 mod complete;
 mod create;
@@ -1300,6 +1301,10 @@ pub struct Workspace {
     branch: Option<usize>,
     /// The loaded branch's page: its main line, how far from it, where it is pushed (#74).
     branch_page: Option<branch_page::Facts>,
+    /// The Code space: its tree, revision and tabs (#75).
+    code: code::Code,
+    /// The project is a plain folder, not a git repository: Code is all it has (#75).
+    plain: bool,
     versions: Vec<Version>,
     commits: Vec<CommitInfo>,
     selection: Selection,
@@ -1568,6 +1573,8 @@ impl Workspace {
             branches: Vec::new(),
             branch: None,
             branch_page: None,
+            code: Default::default(),
+            plain: false,
             versions: Vec::new(),
             commits: Vec::new(),
             selection: Selection::None,
@@ -1705,25 +1712,35 @@ impl Workspace {
             let loaded = cx
                 .background_executor()
                 .spawn(async move {
-                    let repo = Repo::open(&path)?;
+                    let repo = match Repo::open(&path) {
+                        Ok(repo) => repo,
+                        // A folder that is not a git repository opens too: Code is what it has
+                        // (#75).
+                        Err(_) if path.is_dir() => {
+                            return anyhow::Ok(Err(path.canonicalize().unwrap_or(path)));
+                        }
+                        Err(err) => return Err(err),
+                    };
                     let git_dir = repo.git_dir();
                     let fingerprint = crate::git::fingerprint(&git_dir);
                     let web = repo.web_remote();
                     let decor = repo.decorations();
                     let me = repo.user_name();
-                    anyhow::Ok((
+                    anyhow::Ok(Ok((
                         repo.root(),
                         repo.branches()?,
                         git_dir,
                         fingerprint,
                         web,
                         (decor, me),
-                    ))
+                    )))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 match loaded {
-                    Ok((root, branches, git_dir, fingerprint, web, (decor, me))) => {
+                    Ok(Err(folder)) => this.open_plain(folder, cx),
+                    Ok(Ok((root, branches, git_dir, fingerprint, web, (decor, me)))) => {
+                        this.plain = false;
                         this.web = web;
                         this.decor = decor;
                         this.me = me.unwrap_or_else(|| "You".to_owned());
@@ -1732,6 +1749,7 @@ impl Workspace {
                             this.find.reset();
                         }
                         if this.root.as_ref() != Some(&root) {
+                            this.code = Default::default();
                             this.comments = crate::review::load(&root);
                             this.answers_stamp = None;
                             this.compose = None;
@@ -1776,6 +1794,32 @@ impl Workspace {
             })
             .ok();
         }));
+    }
+
+    /// A folder that is not a git repository: its files in Code, the other spaces greyed with
+    /// what they need (#75).
+    fn open_plain(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        self.plain = true;
+        self.web = None;
+        self.recent = storage::remember(&root);
+        if self.root.as_ref() != Some(&root) {
+            self.find.reset();
+            self.code = Default::default();
+            self.comments = crate::review::load(&root);
+            self.answers_stamp = None;
+            self.compose = None;
+        }
+        // Nothing of git's to watch or fetch; the poll only brings the agents' answers.
+        self.fetch = Default::default();
+        self.start_working_poll(cx);
+        self.load_requests(cx);
+        self.page.load(&crate::review::key(&root));
+        self.roots.load(&crate::review::key(&root));
+        self.root = Some(root);
+        self.branches.clear();
+        self.clear_branch();
+        self.nav = nav::Nav::default();
+        self.show(spaces::Space::Code, None, cx);
     }
 
     fn clear_branch(&mut self) {

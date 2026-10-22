@@ -375,6 +375,13 @@ impl Workspace {
         self.reset_field_edit();
         let theme = matches!(kind, Kind::Theme);
         let files = match (&kind, &self.root) {
+            // Code's own: the tree it shows, a plain folder's files on disk (#75).
+            (Kind::Search(_), Some(_)) if !self.code.files().is_empty() => {
+                Arc::new(self.code.files().to_vec())
+            }
+            (Kind::Search(_), Some(root)) if self.plain => {
+                Arc::new(crate::files::on_disk(root, 200_000))
+            }
             (Kind::Search(_), Some(root)) => Arc::new(
                 Repo::open(root)
                     .map(|r| r.all_files(200_000))
@@ -1020,6 +1027,18 @@ impl Workspace {
                 if let Some(ix) = self.commits.iter().position(|c| c.id == id) {
                     self.select_commit(ix, cx);
                     self.follow_loaded();
+                }
+            }
+            // In Code a file opens there, as a tab, changed or not (#75).
+            Pick::File(ix) if self.nav.space == super::spaces::Space::Code => {
+                self.palette = None;
+                if let Some(path) = self
+                    .diff
+                    .as_ref()
+                    .and_then(|d| d.files.get(ix))
+                    .map(|f| f.path().to_owned())
+                {
+                    self.open_file_view(path, cx);
                 }
             }
             Pick::File(ix) => {

@@ -83,7 +83,7 @@ impl Images {
     }
 }
 
-fn format(kind: ImageKind) -> ImageFormat {
+pub(super) fn format(kind: ImageKind) -> ImageFormat {
     match kind {
         ImageKind::Png => ImageFormat::Png,
         ImageKind::Jpeg => ImageFormat::Jpeg,

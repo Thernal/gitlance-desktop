@@ -7,6 +7,7 @@ mod agents;
 mod codeowners;
 mod editor;
 mod emoji;
+mod files;
 mod generated;
 mod git;
 mod github;
@@ -32,7 +33,7 @@ mod worddiff;
 use std::path::PathBuf;
 
 fn main() {
-    // An explicit path opens just that repository; without one the window comes back as it was
+    // An explicit path opens just that folder (a repository or not, #75); without one the window comes back as it was
     // left (the tabs of the last session), or offers to open one.
     // What an agent runs in its chat (`claude mcp add gitlance -- <this> mcp`): no window.
     match std::env::args().nth(1).as_deref() {
@@ -43,6 +44,6 @@ fn main() {
     let path = std::env::args_os()
         .nth(1)
         .map(PathBuf::from)
-        .filter(|p| git::Repo::open(p).is_ok());
+        .filter(|p| p.is_dir() || git::Repo::open(p).is_ok());
     ui::run(path);
 }

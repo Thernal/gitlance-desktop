@@ -1,7 +1,7 @@
 //! The page of the space on screen (#71), under its bar (`bar.rs`): the Inbox, Code's project or
 //! a file, the list of branches or requests at their space's root (`roots.rs`, #72), else a
 //! branch's or request's panes with its identity over the diff.
-//! Code's root is interim until its page comes: the files opened lately and Go to a file (#75).
+//! Code is the project's tree beside its folder page or a file's tabs (`code.rs`, #75).
 
 use super::nav::Section;
 use super::spaces::Space;
@@ -10,52 +10,39 @@ use gpui::{AnyElement, ClickEvent, Context, div, prelude::*};
 
 impl Workspace {
     pub(super) fn render_space(&self, cx: &mut Context<Self>) -> AnyElement {
-        let body =
-            match (self.nav.space, self.nav_page()) {
-                (Space::Inbox, _) => div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(self.render_inbox(cx))
-                    .children(self.render_tool(cx)),
-                (Space::Code, None) => div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(self.render_code_root(cx)),
-                (Space::Code, Some(_)) => div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(self.render_file_view().unwrap_or_else(|| {
-                        island().flex_1().bg(theme::editor()).into_any_element()
-                    }))
-                    .children(self.render_tool(cx)),
-                (Space::Branches, None) => div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(self.render_branches_root(cx))
-                    .children(self.render_tool(cx)),
-                (Space::Requests, None) => div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(self.render_requests_root(cx))
-                    .children(self.render_tool(cx)),
-                // A request's Overview and Commits, a branch's Commits, are pages of their own
-                // (#73, #74).
-                (Space::Requests | Space::Branches, Some(_))
-                    if let Some(tab @ (Section::Overview | Section::Commits)) = self.page_tab() =>
-                {
-                    self.render_tab_page(tab, cx)
-                }
-                (Space::Branches | Space::Requests, Some(_)) => self.render_item(cx),
-            };
+        let body = match (self.nav.space, self.nav_page()) {
+            (Space::Inbox, _) => div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(self.render_inbox(cx))
+                .children(self.render_tool(cx)),
+            // The project's tree beside its folder page or a file's tabs (#75).
+            (Space::Code, _) => self.render_code_space(cx),
+            (Space::Branches, None) => div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(self.render_branches_root(cx))
+                .children(self.render_tool(cx)),
+            (Space::Requests, None) => div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(self.render_requests_root(cx))
+                .children(self.render_tool(cx)),
+            // A request's Overview and Commits, a branch's Commits, are pages of their own
+            // (#73, #74).
+            (Space::Requests | Space::Branches, Some(_))
+                if let Some(tab @ (Section::Overview | Section::Commits)) = self.page_tab() =>
+            {
+                self.render_tab_page(tab, cx)
+            }
+            (Space::Branches | Space::Requests, Some(_)) => self.render_item(cx),
+        };
         div()
             .flex_1()
             .min_w_0()
@@ -149,8 +136,8 @@ impl Workspace {
             .children(self.render_tool(cx))
     }
 
-    /// Code's root until it has the project's tree: Go to a file, and the files opened lately.
-    fn render_code_root(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// Code's folder page when it has no README: Go to a file, and the files opened lately.
+    pub(super) fn render_code_root(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let recent: Vec<String> = self
             .recents
             .iter()

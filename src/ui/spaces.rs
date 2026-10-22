@@ -71,6 +71,8 @@ enum Missing {
     Remote,
     /// A remote but no token: the space opens the connect panel.
     Token,
+    /// A plain folder, not a git repository (#75).
+    Git,
 }
 
 impl Missing {
@@ -78,6 +80,7 @@ impl Missing {
         match self {
             Missing::Remote => "Needs a GitLab or GitHub remote",
             Missing::Token => "Connect a GitLab token",
+            Missing::Git => "Not a git repository · git init",
         }
     }
 }
@@ -118,6 +121,7 @@ impl Workspace {
 
     fn missing(&self, space: Space) -> Option<Missing> {
         match space {
+            Space::Branches if self.plain => Some(Missing::Git),
             Space::Code | Space::Branches => None,
             Space::Inbox | Space::Requests if self.requests.available => None,
             Space::Inbox | Space::Requests if self.requests.connectable => Some(Missing::Token),
@@ -230,12 +234,12 @@ impl Workspace {
     }
 
     /// A space's row or ⌃⌘1…4: the page it was left on, its root when it is already on screen.
-    /// One the project lacks a token for opens the connect panel; one it lacks a remote for
-    /// does nothing.
+    /// One the project lacks a token for opens the connect panel; one it lacks a remote or git
+    /// for does nothing.
     pub(super) fn go_space(&mut self, space: Space, cx: &mut Context<Self>) {
         match self.missing(space) {
             _ if self.root.is_none() => {}
-            Some(Missing::Remote) => {}
+            Some(Missing::Remote | Missing::Git) => {}
             Some(Missing::Token) => self.show(Space::Requests, None, cx),
             None => self.enter_space(space, cx),
         }

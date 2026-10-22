@@ -43,6 +43,8 @@ pub enum Act {
     AgentCopy,
     /// The theme being edited is built on this one (its extends ▾).
     ThemeBase(String),
+    /// Code reads at a branch or commit, by name; None the working tree (#75).
+    CodeRevision(Option<(String, git2::Oid)>),
 }
 
 #[derive(Clone)]
@@ -156,6 +158,7 @@ impl Workspace {
             Act::AgentChooseChat => self.add_and_pick_chat(cx),
             Act::AgentCopy => self.add_and_copy(cx),
             Act::ThemeBase(id) => self.set_theme_base(&id, cx),
+            Act::CodeRevision(rev) => self.set_code_revision(rev, cx),
             // Need the window: `run_act_in` runs them.
             Act::MoveProject { .. } | Act::CloseProject(_) => {}
         }

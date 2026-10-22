@@ -239,6 +239,70 @@ impl Repo {
         out
     }
 
+    /// The bytes of `path` in commit `rev`: an image Code shows (#75).
+    pub fn bytes_at(&self, rev: Oid, path: &str) -> Option<Vec<u8>> {
+        let tree = self.inner.find_commit(rev).ok()?.tree().ok()?;
+        let entry = tree.get_path(Path::new(path)).ok()?;
+        Some(self.inner.find_blob(entry.id()).ok()?.content().to_vec())
+    }
+
+    /// Every file of commit `rev`'s tree, up to `limit` (Code's tree at a revision, #75).
+    pub fn files_of(&self, rev: Oid, limit: usize) -> Vec<String> {
+        let Ok(tree) = self.inner.find_commit(rev).and_then(|c| c.tree()) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let _ = tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+            if out.len() >= limit {
+                return git2::TreeWalkResult::Abort;
+            }
+            if entry.kind() == Some(git2::ObjectType::Blob)
+                && let Ok(name) = entry.name()
+            {
+                out.push(format!("{dir}{name}"));
+            }
+            git2::TreeWalkResult::Ok
+        });
+        out
+    }
+
+    /// The working tree's files, up to `limit`: what the index tracks and is still on disk, and
+    /// what is new and not ignored — git's own `.gitignore` (Code's tree, #75).
+    pub fn working_files(&self, limit: usize) -> Vec<String> {
+        let Some(root) = self.inner.workdir().map(Path::to_path_buf) else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = self
+            .inner
+            .index()
+            .map(|index| {
+                index
+                    .iter()
+                    .filter_map(|e| String::from_utf8(e.path).ok())
+                    .filter(|p| root.join(p).is_file())
+                    .take(limit)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Ok(statuses) = self.inner.statuses(Some(
+            git2::StatusOptions::new()
+                .include_untracked(true)
+                .recurse_untracked_dirs(true)
+                .include_ignored(false),
+        )) {
+            out.extend(
+                statuses
+                    .iter()
+                    .filter(|s| s.status().contains(git2::Status::WT_NEW))
+                    .filter_map(|s| s.path().ok().map(str::to_owned)),
+            );
+        }
+        out.sort_unstable();
+        out.dedup();
+        out.truncate(limit);
+        out
+    }
+
     /// The names of the files directly in folder `dir` of commit `rev`.
     pub fn files_at(&self, rev: Oid, dir: &str) -> Vec<String> {
         let names = || -> Option<Vec<String>> {

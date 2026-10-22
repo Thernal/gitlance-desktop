@@ -87,6 +87,9 @@ pub struct Compose {
     /// Written on a document read as a page: its file in the diff, the composer under the block
     /// (#11).
     page: Option<usize>,
+    /// Written on a file read in Code, at its commit (None: the working tree) — a note on a plain
+    /// line, under it in the file (#75).
+    file: Option<Option<git2::Oid>>,
 }
 
 impl Workspace {
@@ -451,10 +454,47 @@ impl Workspace {
             pick: 0,
             closed: None,
             page: Some(ix),
+            file: None,
         });
         self.reset_field_edit();
         self.remeasure_pages();
         cx.notify();
+    }
+
+    /// A note on line `line` of the file read in Code: for the agent, kept on the path, the line
+    /// and its text, written under the line (#75).
+    pub(super) fn start_file_comment(&mut self, line: u32, cx: &mut Context<Self>) {
+        let Some(view) = &self.file_view else {
+            return;
+        };
+        let Some(code) = view.line(line) else {
+            return;
+        };
+        self.compose = Some(Compose {
+            path: view.path.clone(),
+            old: false,
+            first: None,
+            line,
+            code: code.to_owned(),
+            edit: TextEdit::default(),
+            at: view.at().to_owned(),
+            target: Target::Agent,
+            error: None,
+            posting: false,
+            preview: false,
+            pick: 0,
+            closed: None,
+            page: None,
+            file: Some(view.rev()),
+        });
+        self.reset_field_edit();
+        cx.notify();
+    }
+
+    /// The composer written on Code's file: its path and line.
+    pub(super) fn file_compose(&self) -> Option<(&str, u32)> {
+        let c = self.compose.as_ref().filter(|c| c.file.is_some())?;
+        Some((&c.path, c.line))
     }
 
     /// The composer written on a page: its file, side and line.
@@ -504,6 +544,7 @@ impl Workspace {
             pick: 0,
             closed: None,
             page: None,
+            file: None,
         });
         self.refresh_rows();
         cx.notify();
@@ -580,6 +621,7 @@ impl Workspace {
             pick: 0,
             closed: None,
             page: None,
+            file: None,
         });
         self.reset_field_edit();
         self.refresh_rows();
@@ -702,6 +744,7 @@ impl Workspace {
             pick: 0,
             closed: None,
             page: None,
+            file: None,
         });
         self.reset_field_edit();
         self.thread_at = Some(ix);
@@ -745,6 +788,7 @@ impl Workspace {
             pick: 0,
             closed: None,
             page: None,
+            file: None,
         });
         self.reset_field_edit();
         self.inbox_view.reply = Some((iid, discussion));
@@ -820,6 +864,7 @@ impl Workspace {
             pick: 0,
             closed: None,
             page: None,
+            file: None,
         });
         self.reset_field_edit();
         self.refresh_rows();
@@ -1027,7 +1072,10 @@ impl Workspace {
             above,
             body: compose.edit.text().trim().to_owned(),
             at: compose.at,
-            commit: self.shown_head().map(|id| id.to_string()),
+            commit: match compose.file {
+                Some(rev) => rev.map(|id| id.to_string()),
+                None => self.shown_head().map(|id| id.to_string()),
+            },
             ..Default::default()
         });
         self.save_comments();
@@ -1198,6 +1246,12 @@ impl Workspace {
     /// `c`: on the lines selected in the diff, the composer at once; else a marker appears on the
     /// diff, typing a line number moves it, ↵ opens the comment there.
     pub(super) fn open_goline(&mut self, cx: &mut Context<Self>) {
+        // On a file read in Code: the number of the line to write a note on (#75).
+        if self.code_file_shown() && !self.settings_open && self.compose.is_none() {
+            self.reset_field_edit();
+            self.goline = Some(String::new());
+            return cx.notify();
+        }
         if self.data.is_none() || self.settings_open || self.compose.is_some() {
             return;
         }
@@ -1311,6 +1365,20 @@ impl Workspace {
 
     /// Opens the composer under the marked line.
     fn finish_goline(&mut self, cx: &mut Context<Self>) {
+        if self.code_file_shown() {
+            let line = self
+                .goline
+                .as_deref()
+                .and_then(|t| t.parse::<u32>().ok())
+                .unwrap_or(0);
+            let count = self.file_view.as_ref().map_or(0, |v| v.line_count());
+            if line == 0 || line as usize > count {
+                self.error = Some(format!("This file has {count} lines.").into());
+                return cx.notify();
+            }
+            self.goline = None;
+            return self.start_file_comment(line, cx);
+        }
         let Some(data) = self.data.clone() else {
             return;
         };

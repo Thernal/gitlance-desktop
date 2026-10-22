@@ -20,13 +20,22 @@ impl Workspace {
         };
         self.wt.task = Some(cx.spawn(async move |this, cx| {
             loop {
-                let Ok(Some(root)) = this.read_with(cx, |this, _| this.root.clone()) else {
+                let Ok(Some((root, plain))) =
+                    this.read_with(cx, |this, _| this.root.clone().map(|r| (r, this.plain)))
+                else {
                     return;
                 };
-                let summary = cx
-                    .background_executor()
-                    .spawn(async move { Repo::open(&root).and_then(|r| r.working_summary()) })
-                    .await;
+                // A plain folder has no git to ask; the agents' answers still come (#75).
+                let summary = match plain {
+                    true => Err(anyhow::anyhow!("not a git repository")),
+                    false => {
+                        cx.background_executor()
+                            .spawn(
+                                async move { Repo::open(&root).and_then(|r| r.working_summary()) },
+                            )
+                            .await
+                    }
+                };
                 if let Ok((count, hash)) = summary
                     && this
                         .update(cx, |this, cx| this.working_summary_arrived(count, hash, cx))
@@ -53,6 +62,10 @@ impl Workspace {
         self.blames.working_changed();
         if self.nav.space == super::spaces::Space::Branches && self.at_root_list() {
             self.read_tree_files(cx);
+        }
+        // Code's tree of the working tree follows it (#75).
+        if self.nav.space == super::spaces::Space::Code && self.code.at().is_none() {
+            self.read_code_files(true, cx);
         }
         if self.selection == Selection::WorkingTree {
             // Reload in place: the selected file stays.

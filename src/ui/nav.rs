@@ -489,6 +489,10 @@ impl Workspace {
 
     /// ⌃⇥ and ⌃⇧⇥: the next or the previous section tab, going round.
     pub(super) fn step_section(&mut self, forward: bool, cx: &mut Context<Self>) {
+        // In Code they walk the files open as tabs (#75).
+        if self.nav.space == Space::Code {
+            return self.step_code_tab(forward, cx);
+        }
         let (sections, Some(at)) = (self.item_sections(), self.page_section()) else {
             return;
         };
@@ -636,7 +640,7 @@ impl Workspace {
                 self.notices.at = self.inbox_rows().first().copied().unwrap_or(0);
                 self.refresh_notices(cx);
             }
-            Space::Code => {}
+            Space::Code => self.read_code_files(false, cx),
             Space::Branches => {
                 self.nav.pick_branch = self.nav.pick_branch.or_else(|| self.first_branch_row());
                 self.zone = zones::Zone::Branches;
@@ -887,10 +891,7 @@ impl Workspace {
     /// ⌘W: closes what is open on screen — a request, a branch, a file in Code.
     pub(super) fn close_shown(&mut self, cx: &mut Context<Self>) {
         match self.nav_page().cloned() {
-            Some(Page::File(_)) => {
-                self.file_view = None;
-                self.show(Space::Code, None, cx);
-            }
+            Some(Page::File(path)) => self.close_code_tab(&path, cx),
             Some(page) => match page.item() {
                 Some(item) => self.close_open(&item, cx),
                 None => self.go_up(cx),
