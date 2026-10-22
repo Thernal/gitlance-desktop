@@ -1,6 +1,6 @@
 //! Errors as desktop notifications: toasts stacked at the top right, newest at the bottom, each with
 //! ✕ and gone after a few seconds. Code still reports an error by setting `Workspace::error`; each
-//! frame moves it here.
+//! frame moves it here. A deleted draft's toast says so and offers Undo instead (#76).
 
 use super::{Tip, Workspace, icons, px, theme};
 use gpui::{ClickEvent, Context, SharedString, Task, div, prelude::*};
@@ -14,6 +14,8 @@ const MOST: usize = 4;
 struct Toast {
     id: u64,
     text: SharedString,
+    /// The draft it deleted: Undo puts it back (#76).
+    undo: Option<crate::review::Comment>,
     /// Dismissed: drawn on its way out until it is removed (#56, 8).
     leaving: bool,
     /// Dismisses it when `SHOWN` is up; dropping it (✕, the same text again) cancels that.
@@ -36,6 +38,27 @@ impl Workspace {
 
     /// Shows `text`; the same text already showing starts over at the bottom instead.
     fn toast(&mut self, text: SharedString, cx: &mut Context<Self>) {
+        self.toast_with(text, None, cx);
+    }
+
+    /// "Draft deleted · Money.kt:23" with Undo, which puts `comment` back.
+    pub(super) fn toast_deleted(
+        &mut self,
+        comment: crate::review::Comment,
+        cx: &mut Context<Self>,
+    ) {
+        let name = comment.path.rsplit('/').next().unwrap_or(&comment.path);
+        let text = format!("Draft deleted · {name}:{}", comment.line).into();
+        self.toast_with(text, Some(comment), cx);
+        cx.notify();
+    }
+
+    fn toast_with(
+        &mut self,
+        text: SharedString,
+        undo: Option<crate::review::Comment>,
+        cx: &mut Context<Self>,
+    ) {
         self.toasts.list.retain(|t| t.text != text);
         let id = self.toasts.next;
         self.toasts.next += 1;
@@ -46,11 +69,30 @@ impl Workspace {
         self.toasts.list.push(Toast {
             id,
             text,
+            undo,
             leaving: false,
             _timer: timer,
         });
         let over = self.toasts.list.len().saturating_sub(MOST);
         self.toasts.list.drain(..over);
+    }
+
+    /// Undo on toast `id`: its draft is back where it was.
+    fn undo(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(comment) = self
+            .toasts
+            .list
+            .iter_mut()
+            .find(|t| t.id == id)
+            .and_then(|t| t.undo.take())
+        else {
+            return;
+        };
+        self.comments.push(comment);
+        self.comments.sort_by_key(|c| c.id);
+        self.save_comments();
+        self.refresh_rows();
+        self.dismiss(id, cx);
     }
 
     /// It slides out, then it is gone.
@@ -85,6 +127,7 @@ impl Workspace {
         let toasts = self.toasts.list.iter().map(|t| {
             let id = t.id;
             let leaving = t.leaving;
+            let undo = t.undo.is_some();
             let toast = div()
                 .id(("toast", id as usize))
                 .occlude()
@@ -102,12 +145,12 @@ impl Workspace {
                 .shadow_lg()
                 .text_size(px(13.))
                 .line_height(px(19.))
-                .child(
+                .children((!undo).then(|| {
                     icons::icon("alert")
                         .size(px(16.))
                         .mt(px(2.))
-                        .text_color(theme::removed()),
-                )
+                        .text_color(theme::removed())
+                }))
                 .child(
                     div()
                         .flex_1()
@@ -115,6 +158,18 @@ impl Workspace {
                         .text_color(theme::text())
                         .child(super::keys::text(&t.text).into_owned()),
                 )
+                .children(undo.then(|| {
+                    div()
+                        .id(("toast-undo", id as usize))
+                        .flex_none()
+                        .px(px(6.))
+                        .rounded(px(6.))
+                        .text_color(theme::accent())
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme::hover()))
+                        .child("Undo")
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.undo(id, cx)))
+                }))
                 .child(
                     div()
                         .id(("toast-close", id as usize))

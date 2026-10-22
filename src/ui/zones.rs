@@ -75,7 +75,9 @@ impl Workspace {
             }
             return out;
         }
-        if self.layout.show_sidebar && !self.layout.fold_commits {
+        // A tabbed item's commits are its Commits tab, not a section of the panel (#73, #74).
+        if self.layout.show_sidebar && !self.layout.fold_commits && self.item_sections().is_empty()
+        {
             out.push(Zone::Commits);
         }
         if self.diff.is_some() && !self.settings_open {
@@ -120,11 +122,11 @@ impl Workspace {
             Zone::Diff => self
                 .diff_list
                 .scroll_by(px(if down { LINE } else { -LINE })),
-            Zone::Tool => {
-                if self.tool() == Some(super::tools::Tool::Discussions) {
-                    return self.step_thread(down, cx);
-                }
-            }
+            Zone::Tool => match self.tool() {
+                Some(super::tools::Tool::Discussions) => return self.step_thread(down, cx),
+                Some(super::tools::Tool::Agents) => return self.step_agent_row(down, cx),
+                _ => {}
+            },
         }
         cx.notify();
     }
@@ -182,6 +184,9 @@ impl Workspace {
             return self.open_commit_pick(cx);
         }
         match self.zone {
+            Zone::Tool if self.tool() == Some(super::tools::Tool::Agents) => {
+                self.agent_row_action(cx)
+            }
             Zone::Tool | Zone::Branches => {}
             Zone::Commits => {
                 if self.diff.is_some() {

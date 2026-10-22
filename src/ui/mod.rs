@@ -1327,6 +1327,12 @@ pub struct Workspace {
     answers_stamp: Option<std::time::SystemTime>,
     /// The chats of this repository, for the Agents window (read while it is open).
     agent_chats: Vec<crate::agents::Chat>,
+    /// The Agents window (#76): its filter, the row picked, whether the archived ones show.
+    agents_filter: agent::Filter,
+    agent_row: Option<u64>,
+    agents_archived: bool,
+    /// One's own public note asked about before it is deleted (#76).
+    confirm_note: Option<u64>,
     /// The Inbox place is shown, and which of its notifications it lists.
     inbox: bool,
     inbox_view: inbox::InboxView,
@@ -1560,6 +1566,10 @@ impl Workspace {
             agent_pick: None,
             answers_stamp: None,
             agent_chats: Vec::new(),
+            agents_filter: Default::default(),
+            agent_row: None,
+            agents_archived: false,
+            confirm_note: None,
             inbox: false,
             inbox_view: Default::default(),
             hover_note: None,

@@ -1175,6 +1175,23 @@ pub fn edit_note(
     Ok(())
 }
 
+/// Deletes one's own note `note` of discussion `discussion` on request `iid` (#76).
+pub fn delete_note(remote: &WebRemote, iid: u64, discussion: &str, note: u64) -> Result<()> {
+    if record(format!("delete-note {iid} {note}"))? {
+        return Ok(());
+    }
+    if remote.github {
+        return github::delete_note(remote, discussion, note);
+    }
+    call(
+        remote,
+        &format!("merge_requests/{iid}/discussions/{discussion}/notes/{note}"),
+        "DELETE",
+        &[],
+    )?;
+    Ok(())
+}
+
 /// `group/project` of a remote.
 fn project_path(remote: &WebRemote) -> Option<String> {
     remote
@@ -1913,8 +1930,11 @@ mod tests {
             range: None,
         };
         post_discussion(&remote, 412, "abc", &place, "Why?", false).unwrap();
+        // One's own note deleted (#76).
+        delete_note(&remote, 412, "d1", 7).unwrap();
         let posted = std::fs::read_to_string(dir.join("posted.txt")).unwrap();
         assert!(posted.contains("412 a.rs Some(3) None Why?"));
+        assert!(posted.contains("delete-note 412 7"));
         unsafe { std::env::remove_var("GITLANCE_MR_FIXTURE") };
         let _ = std::fs::remove_dir_all(dir);
     }

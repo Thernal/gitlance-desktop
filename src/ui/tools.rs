@@ -1,5 +1,6 @@
 //! The right edge of the redesign (Design `design/shell/`, #49): an icon stripe that opens one tool
-//! window at a time beside the diff — Discussions, Agents — and Submit review in the same
+//! window at a time beside the page — only what is about it (#76): Code Outline · Agents, Branches
+//! Agents, Merge requests Discussions · Agents, the Inbox nothing — and Submit review in the same
 //! place (the bell's Notifications window retired into the Inbox, #72). The same icon or esc closes it; which one is open and its width are kept in
 //! `layout.txt`. No stripe until a repository is open, none in zen.
 
@@ -9,6 +10,8 @@ use gpui::{AnyElement, ClickEvent, Context, FontWeight, Rgba, SharedString, div,
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
+    /// The declarations of the file read in Code (#76).
+    Outline,
     Discussions,
     Agents,
 }
@@ -16,19 +19,21 @@ pub enum Tool {
 impl Tool {
     fn name(self) -> &'static str {
         match self {
+            Tool::Outline => "outline",
             Tool::Discussions => "discussions",
             Tool::Agents => "agents",
         }
     }
 
     pub fn parse(name: &str) -> Option<Self> {
-        [Tool::Discussions, Tool::Agents]
+        [Tool::Outline, Tool::Discussions, Tool::Agents]
             .into_iter()
             .find(|t| t.name() == name)
     }
 
     fn icon(self) -> &'static str {
         match self {
+            Tool::Outline => "list",
             Tool::Discussions => "message",
             Tool::Agents => "bot",
         }
@@ -36,6 +41,7 @@ impl Tool {
 
     fn tip(self) -> &'static str {
         match self {
+            Tool::Outline => "Outline",
             Tool::Discussions => "Discussions  ⌘⇧D",
             Tool::Agents => "Agents  ⇧⌘A",
         }
@@ -53,19 +59,25 @@ pub struct ToolView {
 }
 
 impl Workspace {
-    /// The tool window open now; Discussions on a branch's or a request's page (#71); a
-    /// request's details are its Overview (#73).
+    /// The tool windows of the space on screen (#76): Code Outline · Agents, Branches Agents,
+    /// a request's page Discussions · Agents, the Inbox none.
+    fn space_tools(&self) -> &'static [Tool] {
+        use super::spaces::Space;
+        match self.nav.space {
+            Space::Inbox => &[],
+            Space::Code => &[Tool::Outline, Tool::Agents],
+            Space::Branches => &[Tool::Agents],
+            Space::Requests if self.nav_page().is_some() => &[Tool::Discussions, Tool::Agents],
+            Space::Requests => &[Tool::Agents],
+        }
+    }
+
+    /// The tool window open now, when its space has it; a request's details are its Overview
+    /// (#73).
     pub(super) fn tool(&self) -> Option<Tool> {
         self.root.as_ref()?;
         let tool = Tool::parse(&self.layout.tool)?;
-        let item = matches!(
-            self.nav.space,
-            super::spaces::Space::Branches | super::spaces::Space::Requests
-        ) && self.nav_page().is_some();
-        match tool {
-            Tool::Discussions if !item => None,
-            tool => Some(tool),
-        }
+        self.space_tools().contains(&tool).then_some(tool)
     }
 
     /// The window on the right is drawn: a tool, or Submit review.
@@ -185,16 +197,19 @@ impl Workspace {
                 .items_center()
                 .gap(px(4.))
                 .pt(px(2.))
-                .child(button(
-                    Tool::Discussions,
-                    count(self.comments_total(), theme::accent()),
-                    super::plural(self.comments_total(), "comment"),
-                ))
-                .child(button(
-                    Tool::Agents,
-                    count(drafts, theme::agent()),
-                    super::plural(drafts, "draft"),
-                )),
+                .children(self.space_tools().iter().map(|&tool| match tool {
+                    Tool::Outline => button(tool, None, String::new()),
+                    Tool::Discussions => button(
+                        tool,
+                        count(self.comments_total(), theme::accent()),
+                        super::plural(self.comments_total(), "comment"),
+                    ),
+                    Tool::Agents => button(
+                        tool,
+                        count(drafts, theme::agent()),
+                        super::plural(drafts, "draft"),
+                    ),
+                })),
         )
     }
 
@@ -209,6 +224,7 @@ impl Workspace {
         let view = match self.submit_tool(cx) {
             Some(view) => view,
             None => match self.tool().or(self.last_tool.filter(|_| leaving))? {
+                Tool::Outline => self.outline_tool(cx),
                 Tool::Discussions => self.discussions_tool(cx),
                 Tool::Agents => self.agents_tool(cx),
             },

@@ -776,6 +776,10 @@ impl Workspace {
                                 edit.clone(),
                             )
                         }))
+                        // One's own note goes from GitLab too, after a confirm (#76).
+                        .children(
+                            editable.then(|| self.delete_note_button(ix, note_id, edit.clone())),
+                        )
                         .into_any_element()
                 }),
                 (!own).then(|| {
@@ -1242,8 +1246,107 @@ impl Workspace {
         self.request_action(move |remote| mr::delete_draft(&remote, iid, id), cx);
     }
 
-    /// The Discussions tool window: every comment on the open diff, the request's in orange and the
-    /// agent's in purple; a click shows it in the diff.
+    /// Delete on one's own note, then "Delete on GitLab?" with Delete and Cancel (#76).
+    fn delete_note_button(
+        &self,
+        thread: usize,
+        note: u64,
+        this: gpui::WeakEntity<Self>,
+    ) -> gpui::AnyElement {
+        use super::discussion::{Kind, icon_button};
+        if self.confirm_note != Some(note) {
+            let ask = this.clone();
+            return icon_button(
+                ("delete-note", note as usize),
+                "trash",
+                "Delete",
+                None,
+                None,
+                Kind::Quiet,
+                self.tight,
+            )
+            .h(px(22.))
+            .px(px(6.))
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                ask.update(cx, |this, cx| {
+                    this.confirm_note = Some(note);
+                    cx.notify()
+                })
+                .ok();
+            })
+            .into_any_element();
+        }
+        let (yes, no) = (this.clone(), this);
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(12.))
+            .child(
+                div()
+                    .text_color(theme::removed())
+                    .child(super::words::say("Delete on GitLab?").into_owned()),
+            )
+            .child(
+                icon_button(
+                    ("delete-note-yes", note as usize),
+                    "trash",
+                    "Delete",
+                    None,
+                    None,
+                    Kind::Danger,
+                    false,
+                )
+                .h(px(22.))
+                .px(px(6.))
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    yes.update(cx, |this, cx| this.delete_own_note(thread, note, cx))
+                        .ok();
+                }),
+            )
+            .child(
+                div()
+                    .id(("delete-note-no", note as usize))
+                    .px(px(6.))
+                    .h(px(22.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(super::ROW_RADIUS))
+                    .text_color(theme::muted())
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::hover()))
+                    .child("Cancel")
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        no.update(cx, |this, cx| {
+                            this.confirm_note = None;
+                            cx.notify()
+                        })
+                        .ok();
+                    }),
+            )
+            .into_any_element()
+    }
+
+    /// Deletes one's own note `note` of discussion number `thread` on GitLab or GitHub.
+    fn delete_own_note(&mut self, thread: usize, note: u64, cx: &mut Context<Self>) {
+        self.confirm_note = None;
+        let (Some(iid), Some(discussion)) = (
+            self.requests.current,
+            self.requests.threads.get(thread).map(|t| t.id.clone()),
+        ) else {
+            return;
+        };
+        self.request_action(
+            move |remote| mr::delete_note(&remote, iid, &discussion, note),
+            cx,
+        );
+    }
+
+    /// The Discussions tool window: the request's discussions and pending notes — public ones only,
+    /// the agent's are the Agents window's (#76); a click shows one in the diff.
     pub(super) fn discussions_tool(&self, cx: &mut Context<Self>) -> ToolView {
         let theirs: Vec<(usize, &Thread)> = if self.showing_request() {
             self.requests.threads.iter().enumerate().collect()
@@ -1256,14 +1359,11 @@ impl Workspace {
             Vec::new()
         };
         let pending = drafts.len();
-        let (discussions, agents) = (theirs.len(), self.comments.len());
-        let total = discussions + pending + agents;
+        // Public only: the agent's comments are the Agents window's (#76).
+        let discussions = theirs.len();
+        let total = discussions + pending;
         // Group headings once there is more than one kind; the pending ones say how to walk them.
-        let grouped = [discussions, pending, agents]
-            .iter()
-            .filter(|&&n| n > 0)
-            .count()
-            > 1;
+        let grouped = [discussions, pending].iter().filter(|&&n| n > 0).count() > 1;
         // Written on an earlier version: listed apart, grouped by that version (#46).
         let outdated = if self.showing_request() {
             self.outdated_by_version()
@@ -1333,45 +1433,6 @@ impl Workspace {
                 }
             }))
         });
-        let agent_items = self.comments.iter().map(|c| {
-            let id = c.id;
-            comment_item(
-                ("comment-agent", id as usize),
-                theme::agent(),
-                format!(
-                    "{}:{}",
-                    c.path.rsplit('/').next().unwrap_or(&c.path),
-                    c.line
-                ),
-                self.one_line(&c.body),
-            )
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.jump_to(id, cx)))
-        });
-        let copy = (!self.comments.is_empty()).then(|| {
-            div()
-                .id("copy-for-agent")
-                .px_2()
-                .h(px(24.))
-                .flex()
-                .items_center()
-                .rounded(px(super::ROW_RADIUS))
-                .border_1()
-                .border_color(theme::agent())
-                .text_color(theme::agent())
-                .text_size(px(12.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .cursor_pointer()
-                .hover(|s| s.bg(theme::hover()))
-                .child(if self.copied {
-                    "Copied ✓".to_owned()
-                } else {
-                    format!(
-                        "Copy for agent · {}",
-                        self.comments.iter().filter(|c| c.open()).count()
-                    )
-                })
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.copy_for_agent(cx)))
-        });
         let submit = (pending > 0).then(|| {
             div()
                 .id("submit-review")
@@ -1425,11 +1486,6 @@ impl Workspace {
                         )
                 }))
                 .children(outdated_items)
-                .children(
-                    (grouped && agents > 0)
-                        .then(|| group_heading(format!("For your agent · {agents}"), None)),
-                )
-                .children(agent_items)
                 .children((total == 0).then(|| {
                     div()
                         .px(px(14.))
@@ -1439,15 +1495,7 @@ impl Workspace {
                         .child("No comments yet. Press c to comment on a line, or hover a line and press +.")
                 }))
                 .into_any_element(),
-            foot: (copy.is_some() || submit.is_some()).then(|| {
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .children(copy)
-                    .children(submit)
-                    .into_any_element()
-            }),
+            foot: submit.map(IntoElement::into_any_element),
         }
     }
 
@@ -1511,13 +1559,13 @@ impl Workspace {
     }
 
     /// Every comment of the open diff: the request's discussions and pending ones, and the agent's.
+    /// The Discussions window's count: the request's own discussions and pending notes (#76).
     pub(super) fn comments_total(&self) -> usize {
-        let theirs = if self.showing_request() {
+        if self.showing_request() {
             self.requests.threads.len() + self.requests.drafts.len()
         } else {
             0
-        };
-        theirs + self.comments.len()
+        }
     }
 
     /// The requests the scope and filter let through, in the order the list shows them.

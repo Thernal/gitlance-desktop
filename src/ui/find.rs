@@ -271,6 +271,18 @@ impl Workspace {
             return self.reaction_key(event, cx);
         }
         let key = &event.keystroke;
+        // ⌫ on the draft picked in the Agents window deletes it; Undo is in its toast (#76).
+        if key.key == "backspace"
+            && self.field.is_none()
+            && self.tool() == Some(super::tools::Tool::Agents)
+            && let Some(id) = self.agent_row.filter(|id| {
+                self.comments
+                    .iter()
+                    .any(|c| c.id == *id && c.state == crate::review::State::Draft)
+            })
+        {
+            return self.delete_draft(id, cx);
+        }
         // Esc closes the innermost thing — a card, menu or popover, a field, the find bar, the
         // tool window with the keyboard — then goes one page up (#71).
         if key.key == "escape" {

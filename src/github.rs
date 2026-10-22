@@ -897,6 +897,16 @@ pub fn edit_note(remote: &WebRemote, thread: &str, note: u64, body: &str) -> Res
     Ok(())
 }
 
+/// Deletes one's own comment `note` of thread `thread` (#76).
+pub fn delete_note(remote: &WebRemote, thread: &str, note: u64) -> Result<()> {
+    let endpoint = match thread_ids(thread) {
+        ("issue", _) => format!("issues/comments/{note}"),
+        _ => format!("pulls/comments/{note}"),
+    };
+    rest(remote, "DELETE", &endpoint, None)?;
+    Ok(())
+}
+
 pub fn resolve(remote: &WebRemote, number: u64, thread: &str, resolved: bool) -> Result<()> {
     if crate::mr::record(format!("resolve {number} {thread} {resolved}"))? {
         return Ok(());

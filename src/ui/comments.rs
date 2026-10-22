@@ -213,8 +213,11 @@ impl Workspace {
     }
 
     /// Where `comment` sits in file `path` built as `data`: by its line's text, else, its line
-    /// changed since, where that line went (`agent_lines`).
+    /// changed since, where that line went (`agent_lines`); nowhere once archived (#76).
     fn place_in_file(&self, comment: &Comment, path: &str, data: &FileData) -> Option<Place> {
+        if comment.archived {
+            return None;
+        }
         match place_in(comment, path, data)? {
             Place::Outdated => Some(
                 self.agent_lines
@@ -302,7 +305,11 @@ impl Workspace {
                 Place::Outdated => None,
             })
             .collect();
-        let compose = self.compose.as_ref().filter(|c| c.path == path);
+        // A note written on Code's file is drawn there, not in a diff (#75).
+        let compose = self
+            .compose
+            .as_ref()
+            .filter(|c| c.path == path && c.file.is_none());
         let theirs = if self.showing_request() {
             self.request_threads_in(path)
         } else {

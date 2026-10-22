@@ -183,12 +183,50 @@ impl Workspace {
         }));
     }
 
+    /// The file's declarations, by keyword: (1-based line, depth, kind, name) — its Outline (#76).
+    pub(super) fn file_outline(&self) -> Vec<(u32, usize, &'static str, String)> {
+        let Some(view) = self.file_view.as_ref().filter(|v| v.image.is_none()) else {
+            return Vec::new();
+        };
+        view.lines
+            .iter()
+            .enumerate()
+            .filter_map(|(n, line)| {
+                let (kind, name) = crate::symbols::declaration(line)?;
+                let indent = line.len() - line.trim_start().len();
+                Some((n as u32 + 1, indent / 4, kind, name))
+            })
+            .collect()
+    }
+
+    /// Line `line` of the file comes into view, its source shown.
+    pub(super) fn reveal_file_line(&mut self, line: u32, cx: &mut Context<Self>) {
+        let Some(view) = self.file_view.as_mut() else {
+            return;
+        };
+        view.rendered = false;
+        let Some(view) = self.file_view.as_ref() else {
+            return;
+        };
+        let rows = self.file_rows(view);
+        if view.list.item_count() != rows.len() {
+            view.list.reset(rows.len());
+        }
+        if let Some(ix) = rows
+            .iter()
+            .position(|r| matches!(r, Row::Line(n) if *n + 1 == line as usize))
+        {
+            view.list.scroll_to_reveal_item(ix);
+        }
+        cx.notify();
+    }
+
     /// The file's rows: its lines, each with the notes on it and the note being written.
     fn file_rows(&self, view: &FileView) -> Vec<Row> {
         let mut notes: Vec<(usize, u64)> = self
             .comments
             .iter()
-            .filter(|c| c.path == view.path && !c.old)
+            .filter(|c| c.path == view.path && !c.old && !c.archived)
             .filter_map(|c| Some((place_note(&view.lines, c.line, &c.code)?, c.id)))
             .collect();
         notes.sort_unstable();

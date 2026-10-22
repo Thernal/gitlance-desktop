@@ -384,6 +384,63 @@ impl Workspace {
         self.open_menu(at, vec![entries, branches], cx);
     }
 
+    /// The Outline tool window: the declarations of the file read in Code; a click goes to one.
+    pub(super) fn outline_tool(&self, cx: &mut Context<Self>) -> super::tools::ToolView {
+        let outline = self.file_outline();
+        let n = outline.len();
+        let rows = outline.into_iter().map(|(line, depth, kind, name)| {
+            super::row(SharedString::from(format!("outline-{line}")), false)
+                .h(px(26.))
+                .pl(px(10. + depth as f32 * 14.))
+                .gap(px(8.))
+                .text_size(px(12.))
+                .child(
+                    div()
+                        .flex_none()
+                        .font_family(theme::CODE_FONT)
+                        .text_color(theme::faint())
+                        .child(kind),
+                )
+                .child(div().flex_1().min_w_0().truncate().child(name))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(theme::faint())
+                        .child(line.to_string()),
+                )
+                .on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.reveal_file_line(line, cx)),
+                )
+        });
+        let empty = match &self.file_view {
+            None => "Open a file to see what it declares.",
+            Some(_) => "Nothing declared here that GitLance reads.",
+        };
+        super::tools::ToolView {
+            title: "Outline".into(),
+            count: (n > 0).then(|| n.to_string()),
+            actions: Vec::new(),
+            body: div()
+                .id("outline-list")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .p(px(6.))
+                .children(rows)
+                .children((n == 0).then(|| {
+                    div()
+                        .px(px(8.))
+                        .py(px(6.))
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child(empty)
+                }))
+                .into_any_element(),
+            foot: None,
+        }
+    }
+
     /// The menu's choice: Code reads there.
     pub(super) fn set_code_revision(&mut self, rev: Option<(String, Oid)>, cx: &mut Context<Self>) {
         self.read_code_at(rev, cx);

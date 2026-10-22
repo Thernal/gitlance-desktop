@@ -3,9 +3,10 @@
 //! then Claude Code's recent ones, which get the comments when they listen — and a new chat. The
 //! agent's answers come back every couple of seconds, and the reviewer resolves or reopens each.
 
+use super::icons;
 use super::keys::{self, On};
 use super::px;
-use super::requests::{comment_item, group_heading};
+use super::requests::group_heading;
 use super::tools::ToolView;
 use super::{ISLAND_RADIUS, ROW_RADIUS, Workspace, theme};
 use crate::agents::{self, Bus};
@@ -875,53 +876,43 @@ impl Workspace {
                             .tooltip(move |_, cx| cx.new(|_| super::TipOwned(said.clone())).into())
                     }))
             });
-        // Where each comment is in its life with the agent (#50: Drafts · Asks you · Sent ·
-        // Addressed · Sent back · Resolved).
-        #[derive(PartialEq)]
-        enum Group {
-            Drafts,
-            Asks,
-            Sent,
-            Addressed,
-            Back,
-            Resolved,
-        }
-        let group_of = |c: &crate::review::Comment| match c.state {
-            State::Draft if c.sent.is_some() && c.answer.is_none() => Group::Back,
-            State::Draft => Group::Drafts,
-            State::Sent if !c.replies.is_empty() && c.answer.is_none() => Group::Asks,
-            State::Sent => Group::Sent,
-            State::Addressed => Group::Addressed,
-            State::Resolved => Group::Resolved,
-        };
-        let group = |which: Group, label: &'static str| {
-            let items: Vec<_> = self
-                .comments
+        // One list, newest first, each row its kind as a chip (#76, B1); the filter narrows it.
+        let alive = |session: &str| self.agent_chats.iter().any(|c| c.session == session);
+        let archived = self.comments.iter().filter(|c| c.archived).count();
+        let listed: Vec<&crate::review::Comment> = self
+            .listed_agent_ids()
+            .into_iter()
+            .filter_map(|id| self.comments.iter().find(|c| c.id == id))
+            .collect();
+        let counts = |f: Filter| {
+            self.comments
                 .iter()
-                .filter(|c| group_of(c) == which)
-                .map(|c| {
-                    let id = c.id;
-                    comment_item(
-                        ("agent-comment", id as usize),
-                        theme::agent(),
-                        format!(
-                            "{}:{}",
-                            c.path.rsplit('/').next().unwrap_or(&c.path),
-                            c.line
-                        ),
-                        self.one_line(&c.body),
-                    )
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.jump_to(id, cx)))
-                })
-                .collect();
-            (!items.is_empty()).then(|| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(group_heading(format!("{label} · {}", items.len()), None))
-                    .children(items)
-            })
+                .filter(|c| !c.archived && f.takes(kind_of(c, &alive)))
+                .count()
         };
+        let filters = [Filter::All, Filter::NeedsYou, Filter::Waiting, Filter::Done]
+            .into_iter()
+            .fold(super::diff_view::group(), |group, f| {
+                group.child(
+                    super::diff_view::chip(
+                        f.id(),
+                        format!("{} {}", f.label(), counts(f)),
+                        self.agents_filter == f && !self.agents_archived,
+                    )
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.agents_filter = f;
+                            this.agents_archived = false;
+                            cx.notify();
+                        },
+                    )),
+                )
+            });
+        let rows: Vec<_> = listed
+            .into_iter()
+            .map(|c| self.agent_row(c, kind_of(c, &alive), cx))
+            .collect();
+        let empty = rows.is_empty();
         let send = (drafts > 0).then(|| {
             let send = div()
                 .id("send-to-agent")
@@ -942,7 +933,6 @@ impl Workspace {
                 } else {
                     "Send".to_owned()
                 })
-                .child(keys::caps("⌥⌘A", On::Filled))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     let ids = this.agent_drafts();
                     this.send_agent(ids, cx)
@@ -989,23 +979,291 @@ impl Workspace {
                         .text_color(theme::muted())
                         .child("No chat listens in this repository. An agent starts listening with GitLance agent-watch (Settings → Agents).")
                 }))
-                .children(group(Group::Drafts, "Drafts"))
-                .children(group(Group::Asks, "Asks you"))
-                .children(group(Group::Sent, "Sent"))
-                .children(group(Group::Addressed, "Addressed"))
-                .children(group(Group::Back, "Sent back"))
-                .children(group(Group::Resolved, "Resolved"))
-                .children(self.comments.is_empty().then(|| {
+                .child(div().px(px(10.)).pt(px(8.)).pb(px(6.)).child(filters))
+                .children(rows)
+                .children(empty.then(|| {
                     div()
                         .px(px(14.))
                         .py(px(10.))
                         .text_size(px(12.))
                         .text_color(theme::muted())
-                        .child("No comments for your agent. Write one on a line with c and pick Your agent.")
+                        .child(if self.comments.is_empty() {
+                            "No comments for your agent. Write one on a line with c and pick Your agent."
+                        } else {
+                            "Nothing here."
+                        })
                 }))
                 .into_any_element(),
-            foot: send,
+            foot: Some(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .children(send)
+                    .child(div().flex_1())
+                    .children(self.comments.iter().any(|c| {
+                        !c.archived && c.state == State::Resolved
+                    }).then(|| {
+                        foot_button("archive-resolved", "Archive resolved".to_owned())
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.archive_resolved(cx)
+                            }))
+                    }))
+                    .children((archived > 0 || self.agents_archived).then(|| {
+                        foot_button(
+                            "show-archived",
+                            if self.agents_archived {
+                                "Back to the list".to_owned()
+                            } else {
+                                format!("Archived · {archived}")
+                            },
+                        )
+                        .text_color(theme::accent())
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.agents_archived = !this.agents_archived;
+                            this.agent_row = None;
+                            cx.notify();
+                        }))
+                    }))
+                    .into_any_element(),
+            ),
         }
+    }
+
+    /// A row of the Agents window: its kind as a chip, where it is, its text; picked, what can be
+    /// done with it (#76).
+    fn agent_row(
+        &self,
+        c: &crate::review::Comment,
+        kind: Kind,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let id = c.id;
+        let picked = self.agent_row == Some(id);
+        let place = format!(
+            "{}:{}",
+            c.path.rsplit('/').next().unwrap_or(&c.path),
+            c.line
+        );
+        let when = c.replies.last().map(|r| r.at).filter(|&at| at > 0);
+        let mut actions: Vec<gpui::AnyElement> = Vec::new();
+        let mut action =
+            |label: &'static str, primary: bool, run: fn(&mut Self, u64, &mut Context<Self>)| {
+                actions.push(
+                    row_button(
+                        ("agent-act", id as usize * 8 + actions.len()),
+                        label,
+                        primary,
+                    )
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        run(this, id, cx)
+                    }))
+                    .into_any_element(),
+                );
+            };
+        if c.archived {
+            action("Unarchive", false, |this, id, cx| {
+                this.set_archived(id, false, cx)
+            });
+        } else {
+            match kind {
+                Kind::Draft => {
+                    action("Send", true, |this, id, cx| this.send_agent(vec![id], cx));
+                    action("Edit", false, |this, id, cx| {
+                        this.start_edit(super::comments::Change::Agent(id), cx)
+                    });
+                    action("Delete", false, |this, id, cx| this.delete_draft(id, cx));
+                }
+                Kind::Asks => action("Answer…", true, |this, id, cx| this.jump_to(id, cx)),
+                Kind::Sent => action("Withdraw", false, |this, id, cx| this.withdraw(id, cx)),
+                Kind::Waiting => action("Back to drafts", false, |this, id, cx| {
+                    this.withdraw(id, cx)
+                }),
+                Kind::Addressed => {
+                    action("Resolve", true, |this, id, cx| {
+                        this.resolve_agent_comment(id, cx)
+                    });
+                    action("Archive", false, |this, id, cx| {
+                        this.set_archived(id, true, cx)
+                    });
+                }
+                Kind::Working | Kind::Resolved => action("Archive", false, |this, id, cx| {
+                    this.set_archived(id, true, cx)
+                }),
+            }
+        }
+        div()
+            .id(("agent-row", id as usize))
+            .px(px(12.))
+            .py(px(8.))
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .border_b_1()
+            .border_color(theme::island_border())
+            .cursor_pointer()
+            .when(picked, |s| s.bg(theme::hover()))
+            .when(!picked, |s| s.hover(|s| s.bg(theme::hover())))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .text_size(px(11.))
+                    .child(kind_chip(kind))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(theme::CODE_FONT)
+                            .text_color(theme::muted())
+                            .child(place),
+                    )
+                    .children(when.map(|at| {
+                        div()
+                            .flex_none()
+                            .text_color(theme::faint())
+                            .child(super::format::ago(at))
+                    }))
+                    // A draft goes with × too, no question asked.
+                    .children((kind == Kind::Draft && !c.archived).then(|| {
+                        div()
+                            .id(("agent-delete", id as usize))
+                            .flex_none()
+                            .size(px(18.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.))
+                            .hover(|s| s.bg(theme::selected()))
+                            .child(icons::icon("x").size(px(11.)).text_color(theme::faint()))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.delete_draft(id, cx)
+                            }))
+                    })),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .line_clamp(2)
+                    .child(self.one_line(&c.body)),
+            )
+            .children((picked && !actions.is_empty()).then(|| {
+                div()
+                    .pt(px(4.))
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(actions)
+            }))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.agent_row = Some(id);
+                this.jump_to(id, cx)
+            }))
+            .into_any_element()
+    }
+
+    /// The comments the Agents window lists, newest first: the filter's, or the archived ones.
+    fn listed_agent_ids(&self) -> Vec<u64> {
+        let alive = |session: &str| self.agent_chats.iter().any(|c| c.session == session);
+        let mut ids: Vec<u64> = self
+            .comments
+            .iter()
+            .filter(|c| c.archived == self.agents_archived)
+            .filter(|c| self.agents_archived || self.agents_filter.takes(kind_of(c, &alive)))
+            .map(|c| c.id)
+            .collect();
+        ids.sort_by_key(|&id| std::cmp::Reverse(id));
+        ids
+    }
+
+    /// ↑ ↓ in the Agents window: another row picked, shown on its line.
+    pub(super) fn step_agent_row(&mut self, down: bool, cx: &mut Context<Self>) {
+        let ids = self.listed_agent_ids();
+        let at = self
+            .agent_row
+            .and_then(|id| ids.iter().position(|&i| i == id));
+        let to = match (at, down) {
+            (Some(i), true) => (i + 1).min(ids.len().saturating_sub(1)),
+            (Some(i), false) => i.saturating_sub(1),
+            (None, _) => 0,
+        };
+        if let Some(&id) = ids.get(to) {
+            self.agent_row = Some(id);
+            self.jump_to(id, cx);
+        }
+        cx.notify();
+    }
+
+    /// ↵ in the Agents window: the picked row's first action — Send, Answer, Withdraw, Resolve,
+    /// Archive.
+    pub(super) fn agent_row_action(&mut self, cx: &mut Context<Self>) {
+        let alive = |session: &str| self.agent_chats.iter().any(|c| c.session == session);
+        let Some((id, kind, archived)) = self
+            .agent_row
+            .and_then(|id| self.comments.iter().find(|c| c.id == id))
+            .map(|c| (c.id, kind_of(c, &alive), c.archived))
+        else {
+            return;
+        };
+        match (archived, kind) {
+            (true, _) => self.set_archived(id, false, cx),
+            (false, Kind::Draft) => self.send_agent(vec![id], cx),
+            (false, Kind::Asks) => self.jump_to(id, cx),
+            (false, Kind::Sent | Kind::Waiting) => self.withdraw(id, cx),
+            (false, Kind::Addressed) => self.resolve_agent_comment(id, cx),
+            (false, Kind::Working | Kind::Resolved) => self.set_archived(id, true, cx),
+        }
+    }
+
+    /// A draft goes, no question asked; the toast's Undo brings it back (#76).
+    pub(super) fn delete_draft(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(comment) = self.comments.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        self.delete_comment(id, cx);
+        if self.agent_row == Some(id) {
+            self.agent_row = None;
+        }
+        self.toast_deleted(comment, cx);
+    }
+
+    /// A sent one its chat has not taken yet comes back to the drafts.
+    fn withdraw(&mut self, id: u64, cx: &mut Context<Self>) {
+        if let Some(c) = self.comments.iter_mut().find(|c| c.id == id) {
+            c.state = State::Draft;
+            c.sent = None;
+            self.save_comments();
+            self.refresh_rows();
+            cx.notify();
+        }
+    }
+
+    fn set_archived(&mut self, id: u64, on: bool, cx: &mut Context<Self>) {
+        if let Some(c) = self.comments.iter_mut().find(|c| c.id == id) {
+            c.archived = on;
+            self.save_comments();
+            self.refresh_rows();
+            cx.notify();
+        }
+    }
+
+    /// Archive resolved: every resolved one goes off the lists and its line.
+    fn archive_resolved(&mut self, cx: &mut Context<Self>) {
+        for c in self
+            .comments
+            .iter_mut()
+            .filter(|c| c.state == State::Resolved)
+        {
+            c.archived = true;
+        }
+        self.save_comments();
+        self.refresh_rows();
+        cx.notify();
     }
 
     /// The reviewer agrees the agent did it.
@@ -1264,5 +1522,176 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+}
+
+/// Where a comment is in its life with the agent, as the Agents window says it (#76).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// The agent asked something and waits for the answer.
+    Asks,
+    /// Not sent yet, or sent back.
+    Draft,
+    /// Sent, not taken by its chat yet.
+    Sent,
+    /// Sent to a chat that is gone, never taken.
+    Waiting,
+    /// Taken by its chat.
+    Working,
+    Addressed,
+    Resolved,
+}
+
+/// `c`'s kind; `alive` says whether a chat (by session) still listens.
+pub fn kind_of(c: &crate::review::Comment, alive: &dyn Fn(&str) -> bool) -> Kind {
+    match c.state {
+        State::Draft => Kind::Draft,
+        State::Sent if !c.replies.is_empty() && c.answer.is_none() => Kind::Asks,
+        State::Sent => match &c.sent {
+            Some(s) if s.delivered => Kind::Working,
+            Some(s) if !s.session.is_empty() && !alive(&s.session) => Kind::Waiting,
+            _ => Kind::Sent,
+        },
+        State::Addressed => Kind::Addressed,
+        State::Resolved => Kind::Resolved,
+    }
+}
+
+/// The Agents window's filters: what needs you (an answer, a send), what waits on the agent, what
+/// is done.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Filter {
+    #[default]
+    All,
+    NeedsYou,
+    Waiting,
+    Done,
+}
+
+impl Filter {
+    fn takes(self, kind: Kind) -> bool {
+        match self {
+            Filter::All => true,
+            Filter::NeedsYou => matches!(kind, Kind::Asks | Kind::Draft),
+            Filter::Waiting => matches!(kind, Kind::Sent | Kind::Waiting | Kind::Working),
+            Filter::Done => matches!(kind, Kind::Addressed | Kind::Resolved),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Filter::All => "All",
+            Filter::NeedsYou => "Needs you",
+            Filter::Waiting => "Waiting",
+            Filter::Done => "Done",
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Filter::All => "agents-all",
+            Filter::NeedsYou => "agents-needs-you",
+            Filter::Waiting => "agents-waiting",
+            Filter::Done => "agents-done",
+        }
+    }
+}
+
+/// A kind's chip: the agent's purple for what is the agent's, green for what is done.
+fn kind_chip(kind: Kind) -> gpui::Div {
+    let (word, color, filled) = match kind {
+        Kind::Asks => ("Asks you", theme::agent(), true),
+        Kind::Draft => ("Draft", theme::agent(), false),
+        Kind::Sent => ("Sent", theme::muted(), false),
+        Kind::Waiting => ("Waiting", theme::warning(), false),
+        Kind::Working => ("Working", theme::agent(), false),
+        Kind::Addressed => ("Addressed", theme::added(), false),
+        Kind::Resolved => ("Resolved", theme::added(), true),
+    };
+    div()
+        .flex_none()
+        .px(px(6.))
+        .rounded(px(4.))
+        .border_1()
+        .border_color(color)
+        .text_size(px(10.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .when(filled, |s| s.bg(color).text_color(theme::base()))
+        .when(!filled, |s| s.text_color(color))
+        .child(word)
+}
+
+/// A button of a picked row: Send filled, the rest plain.
+fn row_button(
+    id: impl Into<gpui::ElementId>,
+    label: &'static str,
+    primary: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .px_2()
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .rounded(px(ROW_RADIUS))
+        .text_size(px(12.))
+        .cursor_pointer()
+        .when(primary, |s| {
+            s.bg(theme::agent())
+                .text_color(theme::base())
+                .font_weight(FontWeight::SEMIBOLD)
+        })
+        .when(!primary, |s| {
+            s.border_1()
+                .border_color(theme::island_border())
+                .hover(|s| s.bg(theme::selected()))
+        })
+        .child(label)
+}
+
+fn foot_button(id: &'static str, label: String) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .px_2()
+        .h(px(24.))
+        .flex()
+        .items_center()
+        .rounded(px(ROW_RADIUS))
+        .text_size(px(12.))
+        .text_color(theme::muted())
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+        .child(label)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::review::{Comment, Reply, Sent};
+
+    #[test]
+    fn a_comment_is_of_the_kind_its_life_says() {
+        let alive = |s: &str| s == "chat-1";
+        let sent = |session: &str, delivered: bool| Comment {
+            state: State::Sent,
+            sent: Some(Sent {
+                session: session.to_owned(),
+                delivered,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(kind_of(&Comment::default(), &alive), Kind::Draft);
+        assert_eq!(kind_of(&sent("chat-1", false), &alive), Kind::Sent);
+        assert_eq!(kind_of(&sent("gone", false), &alive), Kind::Waiting);
+        assert_eq!(kind_of(&sent("chat-1", true), &alive), Kind::Working);
+        let asks = Comment {
+            replies: vec![Reply::default()],
+            ..sent("chat-1", true)
+        };
+        assert_eq!(kind_of(&asks, &alive), Kind::Asks);
+        assert!(Filter::NeedsYou.takes(Kind::Asks) && Filter::NeedsYou.takes(Kind::Draft));
+        assert!(Filter::Waiting.takes(Kind::Working) && !Filter::Waiting.takes(Kind::Resolved));
+        assert!(Filter::Done.takes(Kind::Addressed) && Filter::All.takes(Kind::Sent));
     }
 }
