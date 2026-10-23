@@ -3484,16 +3484,30 @@ impl Workspace {
                     .filter(|b| !b.is_empty());
                 let (full, short) = (commit.id.to_string(), format::short(commit.id));
                 header
-                    .child(
+                    // A long hover: the whole id, who and when in full, the message when it is
+                    // folded (the developer, 2026-10-23).
+                    .child({
+                        use hover::Hover;
+                        let mut tip = vec![
+                            commit.id.to_string(),
+                            format!("{} <{}>", commit.author, commit.email),
+                            hover::full_date(commit.time),
+                        ];
+                        if let Some(b) = body.as_ref().filter(|_| !self.body_expanded) {
+                            tip.push(String::new());
+                            tip.extend(b.lines().take(12).map(str::to_owned));
+                        }
                         div()
+                            .id("commit-summary")
                             .text_size(px(15.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(self.selectable(
                                 format!("commit-summary-{}", commit.id),
                                 &commit.summary,
                                 cx.entity().downgrade(),
-                            )),
-                    )
+                            ))
+                            .tip(tip.join("\n"))
+                    })
                     .children(body.clone().filter(|_| self.body_expanded).map(|b| {
                         div()
                             .id("commit-body")

@@ -644,8 +644,12 @@ impl Workspace {
                 let (open, close) = (path.clone(), path.clone());
                 let (drag, drop) = (path.clone(), path.clone());
                 let label = name.clone();
+                let whole = path.clone();
                 div()
                     .id(SharedString::from(format!("code-tab-{path}")))
+                    // Its whole path in a long hover.
+                    .tooltip_show_delay(super::hover::LONG)
+                    .tooltip(move |_, cx| cx.new(|_| super::TipOwned(whole.clone().into())).into())
                     // A kept tab dragged onto another takes its place.
                     .drag_over::<DragCodeTab>(|s, _, _, _| s.bg(theme::selected()))
                     .when(!preview, |s| {

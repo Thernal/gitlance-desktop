@@ -130,13 +130,17 @@ impl Workspace {
                     }))
                     .children(crumbs)
                     .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::text())
-                            .when(mono, |s| s.font_family(theme::CODE_FONT))
-                            .child(words::say(&id).into_owned()),
+                        self.title_hover(
+                            page.as_ref(),
+                            div()
+                                .id("bar-title")
+                                .min_w_0()
+                                .truncate()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme::text())
+                                .when(mono, |s| s.font_family(theme::CODE_FONT))
+                                .child(words::say(&id).into_owned()),
+                        ),
                     )
                     .children(count.map(|n| {
                         div()
@@ -178,6 +182,96 @@ impl Workspace {
                 )
             });
         Some(bar.into_any_element())
+    }
+
+    /// The page's title with what a long hover on it says (the developer, 2026-10-23: the header
+    /// names no author): a request's identity, a commit's or a branch's card, a file's or a
+    /// folder's whole path.
+    fn title_hover(&self, page: Option<&Page>, title: gpui::Stateful<gpui::Div>) -> AnyElement {
+        use super::hover::{CommitCard, Hover};
+        let commit = |id: &git2::Oid| {
+            self.commits
+                .iter()
+                .position(|c| c.id == *id)
+                .and_then(|ix| self.commit_card(ix))
+        };
+        match page {
+            Some(
+                Page::Request(iid) | Page::RequestCommits(iid, ..) | Page::RequestVersions(iid, ..),
+            ) => match self.request_tip(*iid) {
+                Some(tip) => title.tip(tip).into_any_element(),
+                None => title.into_any_element(),
+            },
+            Some(Page::RequestCommit(_, id) | Page::BranchCommit(_, id)) => match commit(id) {
+                Some(card) => title
+                    .card(move |_, cx| CommitCard::show(&card, cx))
+                    .into_any_element(),
+                None => title.into_any_element(),
+            },
+            Some(
+                Page::Branch(refname)
+                | Page::BranchCommits(refname, ..)
+                | Page::Versions(refname, ..),
+            ) => match self
+                .branches
+                .iter()
+                .position(|b| &b.refname == refname)
+                .and_then(|ix| self.branch_card(ix))
+            {
+                Some(build) => title.card(build).into_any_element(),
+                None => title.into_any_element(),
+            },
+            Some(Page::File(path)) => {
+                let at = self
+                    .file_view
+                    .as_ref()
+                    .filter(|v| &v.path == path)
+                    .map(|v| format!(" · as of {} · {} lines", v.at(), v.line_count()))
+                    .unwrap_or_default();
+                title.tip(format!("{path}{at}")).into_any_element()
+            }
+            Some(Page::Folder(path)) => title.tip(format!("{path}/")).into_any_element(),
+            _ => title.into_any_element(),
+        }
+    }
+
+    /// A request's identity in words, for a long hover: its number and title, whose it is and
+    /// where it merges, its state, when it was opened and updated, who reviews it.
+    pub(super) fn request_tip(&self, iid: u64) -> Option<String> {
+        let m = self.requests.list.iter().find(|m| m.iid == iid)?;
+        let mut lines = vec![
+            format!("{} {}", words::number(iid), m.title),
+            format!("{} wants to merge {} → {}", m.author, m.source, m.target),
+        ];
+        let mut facts = Vec::new();
+        if m.draft {
+            facts.push("Draft".to_owned());
+        }
+        if m.comments > 0 {
+            facts.push(super::plural(m.comments, "comment"));
+        }
+        facts.push(format!("updated {}", format::ago(m.updated)));
+        lines.push(facts.join(" · "));
+        if m.created > 0 {
+            lines.push(format!("opened {}", super::hover::full_date(m.created)));
+        }
+        if !m.reviewers.is_empty() {
+            // By name where it is known, you as you.
+            let me = self.requests.login.as_deref();
+            let names: Vec<String> = m
+                .reviewers
+                .iter()
+                .map(
+                    |login| match self.requests.members.iter().find(|(l, _)| l == login) {
+                        _ if Some(login.as_str()) == me => "you".to_owned(),
+                        Some((_, name)) if !name.is_empty() => name.clone(),
+                        _ => format!("@{login}"),
+                    },
+                )
+                .collect();
+            lines.push(format!("Reviewers: {}", names.join(", ")));
+        }
+        Some(lines.join("\n"))
     }
 
     /// The path above the page, and its own id.

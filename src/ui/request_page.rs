@@ -730,8 +730,12 @@ impl Workspace {
             .gap(px(10.))
             .h(px(40.))
             .px(px(14.))
-            .child(
-                div()
+            // Its whole identity in a long hover: the line names no author (the developer,
+            // 2026-10-23).
+            .child({
+                use super::hover::Hover;
+                let title = div()
+                    .id("request-line-title")
                     .min_w_0()
                     .truncate()
                     .font_weight(FontWeight::SEMIBOLD)
@@ -739,8 +743,12 @@ impl Workspace {
                         format!("line-title-{}", m.iid),
                         &m.title,
                         cx.entity().downgrade(),
-                    )),
-            )
+                    ));
+                match self.request_tip(m.iid) {
+                    Some(tip) => title.tip(tip),
+                    None => title,
+                }
+            })
             .child(state_chip(m))
             .child(div().flex_1())
             .children(self.render_pipeline_pill(cx))
