@@ -26,6 +26,8 @@ pub struct PickChat {
     title: String,
     agent: String,
     listening: bool,
+    /// A Codex session the app watches for (#18).
+    beta: bool,
 }
 
 /// The "send to which chat?" card; with `route`, which chat a branch's notes go to (#77).
@@ -75,6 +77,7 @@ impl Workspace {
             .into_iter()
             .map(|c| PickChat {
                 listening: c.listening(),
+                beta: c.beta(),
                 session: c.session,
                 title: c.title,
                 agent: c.agent,
@@ -88,6 +91,7 @@ impl Workspace {
                     title,
                     agent: "Claude Code".into(),
                     listening: false,
+                    beta: false,
                 });
             }
         }
@@ -96,6 +100,7 @@ impl Workspace {
             title: "New chat".into(),
             agent: "Claude Code".into(),
             listening: true,
+            beta: false,
         });
         self.agent_pick = Some(AgentPick {
             chats,
@@ -118,6 +123,7 @@ impl Workspace {
                 title: c.title.clone(),
                 agent: c.agent.clone(),
                 listening: true,
+                beta: c.beta(),
             })
             .collect();
         let selected = chats
@@ -1256,6 +1262,12 @@ impl Workspace {
                                     .text_size(px(11.))
                                     .text_color(theme::faint())
                                     .child(c.agent.clone())
+                                    .when(c.beta(), |s| {
+                                        s.child(beta(gpui::SharedString::from(format!(
+                                            "chat-beta-{}",
+                                            c.session
+                                        ))))
+                                    })
                                     .children((!c.branch.is_empty()).then(|| {
                                         div().font_family(theme::CODE_FONT).child(c.branch.clone())
                                     })),
@@ -1895,9 +1907,13 @@ impl Workspace {
                         ))
                         .child(
                             div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
                                 .text_size(px(12.))
                                 .text_color(theme::muted())
-                                .child(format!("{} · {state}", chat.agent)),
+                                .child(format!("{} · {state}", chat.agent))
+                                .when(chat.beta, |s| s.child(beta(("pick-chat-beta", ix)))),
                         ),
                 )
                 .children(on.then(|| keys::caps("↵", On::Plain)))
@@ -2060,9 +2076,15 @@ impl Workspace {
             .child(command("agents-cmd-claude", "Or by hand, in a terminal:", claude_cmd))
             .child(command(
                 "agents-cmd-codex",
-                "Codex (its tools; then a Codex session open in the project listens by itself):",
+                "Codex (its tools; then a Codex running in a terminal in the project listens by itself — beta):",
                 codex_cmd,
             ))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(theme::faint())
+                    .child(crate::codex::BETA),
+            )
     }
 
     fn connect_claude(&mut self, cx: &mut Context<Self>) {
@@ -2278,4 +2300,21 @@ mod tests {
         assert!(Filter::Waiting.takes(Kind::Working) && !Filter::Waiting.takes(Kind::Resolved));
         assert!(Filter::Done.takes(Kind::Addressed) && Filter::All.takes(Kind::Sent));
     }
+}
+
+/// "beta" beside a Codex chat (#18), what it cannot do yet in its tooltip.
+fn beta(id: impl Into<gpui::ElementId>) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .px(px(5.))
+        .rounded(px(4.))
+        .border_1()
+        .border_color(theme::island_border())
+        .font_family(theme::UI_FONT)
+        .text_size(px(10.))
+        .text_color(theme::faint())
+        .child("beta")
+        .tooltip_show_delay(super::hover::LONG)
+        .tooltip(|_, cx| cx.new(|_| super::Tip(crate::codex::BETA)).into())
 }

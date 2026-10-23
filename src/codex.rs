@@ -1,8 +1,9 @@
-//! Codex's chats (#18). Codex has no background command that wakes it when it ends, as Claude
-//! Code has, so the app is the watcher for it: on the app's beat, the session of the project that
-//! a Codex running in a terminal is on — the one `codex resume <id>` named, else the newest written
-//! in that terminal's folder — is written to the agents' bus as a listening chat, and taken off it
-//! when that Codex quits. Codex says nothing when it closes, and its app-server keeps a session
+//! Codex's chats (#18, beta). Codex has no background command that wakes it when it ends, as
+//! Claude Code has, so the app is the watcher for it: on the app's beat, the session of the project
+//! that a Codex running in a terminal is on — the one `codex resume <id>` named, else the newest
+//! written in that terminal's folder since that Codex started (one not written yet is not taken
+//! for an older one) — is written to the agents' bus as a listening chat, and taken off it when
+//! that Codex quits. Codex says nothing when it closes, and its app-server keeps a session
 //! loaded after the terminal is gone, so the process is the sign (the developer, 2026-10-23: two
 //! sessions quit with ⌃C still listened). The comments sent to one are handed over with
 //! `codex queue`, which starts a turn in that session: the brief Claude Code's watcher points to,
@@ -21,6 +22,10 @@ const RECENT: Duration = Duration::from_secs(7 * 24 * 3600);
 
 /// The agent's name on the bus.
 const AGENT: &str = "Codex";
+
+/// What a Codex chat cannot do yet, where it is picked (the developer, 2026-10-23: say its
+/// problems rather than hide it).
+pub const BETA: &str = "Codex is in beta. GitLance sees a Codex running in a terminal and the session it has written to since it started; sending starts a turn in that session (codex queue). Not seen: Codex in VS Code or the Codex app, nor a session before its first message. A turn sent as its terminal closes may run on unseen.";
 
 /// `codex`'s commands that are not a session in a terminal (`codex --help`); `resume` and `fork`
 /// are one, and so is a prompt.
@@ -171,22 +176,45 @@ fn session_of(command: &str) -> Option<Option<String>> {
     }
 }
 
-/// The Codex sessions running in terminals now: each one's folder, and the session it resumed
-/// when it named one. None where `ps` and `lsof` are missing (Windows).
-fn terminals() -> Vec<(PathBuf, Option<String>)> {
+/// `ps`'s elapsed time — `mm:ss`, `hh:mm:ss` or `dd-hh:mm:ss` — in seconds.
+fn elapsed(etime: &str) -> Option<u64> {
+    let (days, clock) = match etime.split_once('-') {
+        Some((d, rest)) => (d.parse::<u64>().ok()?, rest),
+        None => (0, etime),
+    };
+    let mut secs = 0;
+    for part in clock.split(':') {
+        secs = secs * 60 + part.parse::<u64>().ok()?;
+    }
+    Some(days * 86_400 + secs)
+}
+
+/// A Codex running in a terminal: its folder, the session it resumed when it named one, and when
+/// it started.
+struct Terminal {
+    folder: PathBuf,
+    thread: Option<String>,
+    started: SystemTime,
+}
+
+/// The Codex sessions running in terminals now. None where `ps` and `lsof` are missing (Windows).
+fn terminals() -> Vec<Terminal> {
     let Ok(out) = Command::new("/bin/ps")
-        .args(["-axo", "pid=,command="])
+        .args(["-axo", "pid=,etime=,command="])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
     else {
         return Vec::new();
     };
-    let running: Vec<(String, Option<String>)> = String::from_utf8_lossy(&out.stdout)
+    let now = SystemTime::now();
+    let running: Vec<(String, Option<String>, SystemTime)> = String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter_map(|l| {
-            let (pid, command) = l.trim_start().split_once(' ')?;
-            Some((pid.to_owned(), session_of(command.trim())?))
+            let (pid, rest) = l.trim_start().split_once(' ')?;
+            let (etime, command) = rest.trim_start().split_once(' ')?;
+            let started = now - Duration::from_secs(elapsed(etime)?);
+            Some((pid.to_owned(), session_of(command.trim())?, started))
         })
         .collect();
     if running.is_empty() {
@@ -198,7 +226,7 @@ fn terminals() -> Vec<(PathBuf, Option<String>)> {
         .map(Path::new)
         .find(|p| p.is_file())
         .unwrap_or(Path::new("lsof"));
-    let pids: Vec<&str> = running.iter().map(|(p, _)| p.as_str()).collect();
+    let pids: Vec<&str> = running.iter().map(|(p, ..)| p.as_str()).collect();
     let Ok(out) = Command::new(lsof)
         .args(["-a", "-d", "cwd", "-F", "pn", "-p", &pids.join(",")])
         .stdin(Stdio::null())
@@ -219,7 +247,13 @@ fn terminals() -> Vec<(PathBuf, Option<String>)> {
     }
     running
         .into_iter()
-        .filter_map(|(pid, thread)| Some((folders.get(&pid)?.clone(), thread)))
+        .filter_map(|(pid, thread, started)| {
+            Some(Terminal {
+                folder: folders.get(&pid)?.clone(),
+                thread,
+                started,
+            })
+        })
         .collect()
 }
 
@@ -251,14 +285,19 @@ pub fn chats(project: &Path) -> Vec<Chat> {
         .filter(|(_, _, cwd)| in_project(cwd))
         .collect();
     sessions.sort_by_key(|s| std::cmp::Reverse(s.0));
-    // One that resumed a session by name takes it first; the others the newest in their folder.
-    terminals.sort_by_key(|(_, thread)| thread.is_none());
+    // One that resumed a session by name takes it first; the others the newest in their folder
+    // written since they started — a Codex not written to yet is on a session not saved yet,
+    // and an older one is not it.
+    terminals.sort_by_key(|t| t.thread.is_none());
     let mut on: Vec<(String, PathBuf)> = Vec::new();
-    for (folder, thread) in &terminals {
+    for t in &terminals {
         let free = |id: &String| !on.iter().any(|(o, _)| o == id);
-        let pick = match thread {
+        let since = t.started - Duration::from_secs(2);
+        let pick = match &t.thread {
             Some(id) => sessions.iter().find(|(_, s, _)| s == id && free(s)),
-            None => sessions.iter().find(|(_, s, cwd)| cwd == folder && free(s)),
+            None => sessions
+                .iter()
+                .find(|(at, s, cwd)| *cwd == t.folder && *at >= since && free(s)),
         };
         if let Some((_, id, cwd)) = pick {
             on.push((id.clone(), cwd.clone()));
@@ -398,6 +437,17 @@ mod tests {
         assert_eq!(session_of("/x/codex-code-mode-host"), None);
         assert_eq!(session_of("/bin/zsh -c codex"), None);
         assert!(is_id(id) && !is_id("01a16951") && !is_id(&id.replace('-', "x")));
+    }
+
+    #[test]
+    fn a_codex_started_this_long_ago() {
+        assert_eq!(elapsed("05:07"), Some(307));
+        assert_eq!(elapsed("02:10:22"), Some(2 * 3600 + 10 * 60 + 22));
+        assert_eq!(
+            elapsed("86-23:45:45"),
+            Some(86 * 86_400 + 23 * 3600 + 45 * 60 + 45)
+        );
+        assert_eq!(elapsed("soon"), None);
     }
 
     #[test]
