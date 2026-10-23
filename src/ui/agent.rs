@@ -240,6 +240,8 @@ impl Workspace {
         }
         if !by_chat.is_empty() {
             self.save_comments();
+            // A Codex session is handed them now, not on the next beat (#18).
+            self.codex_beat(cx);
             self.refresh_rows();
             cx.notify();
         }
@@ -886,6 +888,7 @@ impl Workspace {
         };
         agents::send(&mut self.comments, &pick.ids, &chat.session, &title);
         self.save_comments();
+        self.codex_beat(cx);
         if chat.session.is_empty() {
             let prompt = "GitLance sent review comments to this chat. Call the gitlance list_comments tool, change the code for each comment and answer each with address_comment.";
             if let Err(e) = crate::platform::open_terminal(&root, "claude", prompt) {

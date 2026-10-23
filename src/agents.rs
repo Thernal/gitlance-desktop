@@ -18,6 +18,11 @@ use std::path::{Path, PathBuf};
 /// How long a watcher may go quiet and still count as listening.
 pub const FRESH: i64 = 12;
 
+/// The same for a Codex session the app watches for (`crate::codex`): the app writes it on its
+/// own beat, which slows to 8 s when nothing changes and more in the background, and takes it off
+/// when the session closes — at 12 s it came and went (the developer, 2026-10-23).
+const CODEX_FRESH: i64 = 90;
+
 /// A chat whose watcher runs (or ran).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Chat {
@@ -263,7 +268,12 @@ impl Drop for Claim {
 
 impl Chat {
     pub fn listening(&self) -> bool {
-        now() - self.beat <= FRESH
+        let fresh = if self.watcher == 0 && self.agent == "Codex" {
+            CODEX_FRESH
+        } else {
+            FRESH
+        };
+        now() - self.beat <= fresh
     }
 }
 
@@ -804,6 +814,17 @@ mod tests {
         let chats = bus.chats(&root);
         assert_eq!(chats.len(), 1);
         assert!(chats[0].listening());
+        // Half a minute quiet: a watcher has stopped, a Codex session the app writes has not.
+        let quiet = Chat {
+            beat: now() - 30,
+            ..chat.clone()
+        };
+        assert!(!quiet.listening());
+        let codex = Chat {
+            agent: "Codex".into(),
+            ..quiet
+        };
+        assert!(codex.listening());
         assert!(bus.chats(Path::new("/other")).is_empty());
         bus.stop("s1");
         assert!(bus.chats(&root).is_empty());

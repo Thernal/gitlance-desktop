@@ -748,6 +748,14 @@ impl Workspace {
         let shown = self.shown_tab();
         let rule = theme::island_border();
         let root = self.root.clone();
+        // GPUI clips to a rectangle, not to the island's round corners: the strip rounds its own
+        // top inside the island's border, the tabs start a corner's width in so the one on screen
+        // never fills a corner, and ▾ rounds the other (the developer, 2026-10-23).
+        let corner = if super::flat() {
+            0.
+        } else {
+            (super::ISLAND_RADIUS - 1.).max(0.)
+        };
         let strip = div()
             .id("code-tabs")
             .flex_1()
@@ -873,6 +881,7 @@ impl Workspace {
             .px(px(8.))
             .flex()
             .items_center()
+            .rounded_tr(px(corner))
             .border_b_1()
             .border_l_1()
             .border_color(rule)
@@ -914,7 +923,16 @@ impl Workspace {
                 .w_full()
                 .h(px(36.))
                 .flex()
+                .rounded_t(px(corner))
                 .bg(theme::panel())
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(corner))
+                        .h_full()
+                        .border_b_1()
+                        .border_color(rule),
+                )
                 .child(strip)
                 .child(all),
         )
