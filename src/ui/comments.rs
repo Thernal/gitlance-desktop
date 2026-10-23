@@ -2337,7 +2337,7 @@ impl Workspace {
                     narrow,
                 )
                 .h(px(28.))
-                .px(px(10.))
+                .px(px(if narrow { 6. } else { 10. }))
                 .on_click(move |_, _, cx| {
                     review
                         .update(cx, |this, cx| this.post_comment(iid, true, cx))
@@ -2358,7 +2358,7 @@ impl Workspace {
                     narrow,
                 )
                 .h(px(28.))
-                .px(px(10.))
+                .px(px(if narrow { 6. } else { 10. }))
                 .on_click(move |_, _, cx| {
                     send_all
                         .update(cx, |this, cx| this.add_and_send(false, cx))
@@ -3042,15 +3042,15 @@ pub(super) enum Room {
     L,
     /// The secondary buttons are their icons, who sees it its dot, the keys go.
     M,
-    /// Under 420 px: the helpers fold into T, Send and ▾ into the primary's own ▾; the hint is
-    /// short.
+    /// Under 440 px: the helpers fold into T, Send and ▾ into the primary's own ▾; the hint is
+    /// short. (Drawn at 420; a request's audience chip with its ▾ needs 423 for M's row.)
     S,
 }
 
 /// The room of a box `width` wide; 0 is not measured yet. A tight diff is never L.
 pub(super) fn room_for(width: f32, tight: bool) -> Room {
     match width {
-        w if w > 0. && w < 420. => Room::S,
+        w if w > 0. && w < 440. => Room::S,
         w if tight || (w > 0. && w < 720.) => Room::M,
         _ => Room::L,
     }
@@ -3065,8 +3065,8 @@ mod tests {
         assert_eq!(room_for(0., false), Room::L);
         assert_eq!(room_for(760., false), Room::L);
         assert_eq!(room_for(630., false), Room::M);
-        assert_eq!(room_for(420., false), Room::M);
-        assert_eq!(room_for(419., false), Room::S);
+        assert_eq!(room_for(440., false), Room::M);
+        assert_eq!(room_for(439., false), Room::S);
         assert_eq!(room_for(136., false), Room::S);
         assert_eq!(room_for(900., true), Room::M);
         assert_eq!(room_for(300., true), Room::S);

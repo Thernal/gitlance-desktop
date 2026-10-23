@@ -58,12 +58,13 @@ impl Widths {
     }
 
     /// Laid over list `list` (its parent `relative`): measures it as it is drawn; a new width
-    /// draws the window again, so its rows take it.
+    /// draws the window again, so its rows take it. Kept in `px` units, as the widths it is held
+    /// against are written: at 120 % interface size a 430 px box is 358 (#129).
     pub fn measure(&self, list: &'static str) -> impl IntoElement {
         let widths = self.0.clone();
         canvas(
             move |bounds, window, _| {
-                let width = f32::from(bounds.size.width);
+                let width = f32::from(bounds.size.width) / super::ui_zoom();
                 let old = widths.borrow_mut().insert(list, width);
                 if old.is_none_or(|old| (old - width).abs() > 0.5) {
                     window.request_animation_frame();
