@@ -143,7 +143,7 @@ impl Workspace {
     }
 
     /// Chat `session` is here and listening: a note sent to it and not taken is not waiting.
-    fn chat_listens(&self, session: &str) -> bool {
+    pub(super) fn chat_listens(&self, session: &str) -> bool {
         self.agent_chats
             .iter()
             .any(|c| c.session == session && c.listening())

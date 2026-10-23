@@ -690,7 +690,15 @@ impl Workspace {
     fn enter_root(&mut self, space: Space, cx: &mut Context<Self>) {
         match space {
             Space::Inbox => {
-                self.notices.at = self.inbox_rows().first().copied().unwrap_or(0);
+                // The newest row: a notice, or an agent's answer (#116).
+                match self.inbox_rows().first().copied() {
+                    Some(super::inbox::InboxRow::Agent(id)) => self.inbox_view.agent = Some(id),
+                    Some(super::inbox::InboxRow::Notice(ix)) => {
+                        self.inbox_view.agent = None;
+                        self.notices.at = ix;
+                    }
+                    None => self.notices.at = 0,
+                }
                 self.refresh_notices(cx);
             }
             Space::Code => self.read_code_files(false, cx),

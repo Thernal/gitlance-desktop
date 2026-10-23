@@ -112,6 +112,18 @@ impl Notices {
         self.cache.remove(&iid);
     }
 
+    /// Whether `key` (a notice's, or an agent's answer's in the Inbox) was looked at.
+    pub fn is_read(&self, key: &str) -> bool {
+        self.read.contains(key)
+    }
+
+    /// `key` looked at: no longer bold, not counted.
+    pub fn mark_read(&mut self, key: String) {
+        if self.read.insert(key) {
+            self.save_read();
+        }
+    }
+
     pub fn unread(&self) -> usize {
         self.list
             .iter()
@@ -492,7 +504,8 @@ impl Workspace {
 
     /// Everything listed counts as read.
     pub(super) fn read_all_notices(&mut self, cx: &mut Context<Self>) {
-        let keys: Vec<String> = self.notices.list.iter().map(|n| n.key.clone()).collect();
+        let mut keys: Vec<String> = self.notices.list.iter().map(|n| n.key.clone()).collect();
+        keys.extend(self.agent_notices().into_iter().map(|(_, _, key)| key));
         self.notices.read.extend(keys);
         self.notices.save_read();
         cx.notify();

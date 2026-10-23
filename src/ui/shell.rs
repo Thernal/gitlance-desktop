@@ -256,7 +256,7 @@ impl Render for Shell {
                     news: i != self.active && w.has_news(),
                     active: i == self.active,
                     root: w.root.clone(),
-                    unread: w.notices.unread(),
+                    unread: w.inbox_unread(),
                 }
             })
             .collect();

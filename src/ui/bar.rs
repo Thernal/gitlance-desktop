@@ -395,7 +395,7 @@ impl Workspace {
     /// The faint count after a root's name.
     fn count_of(&self, space: Space, page: Option<&Page>) -> Option<String> {
         match (space, page) {
-            (Space::Inbox, _) => Some(match self.notices.unread() {
+            (Space::Inbox, _) => Some(match self.inbox_unread() {
                 0 => "Nothing new".to_owned(),
                 n => format!("{n} new"),
             }),
@@ -458,7 +458,7 @@ impl Workspace {
                 out.push(self.bar_filter("Filter", cx))
             }
             (Space::Branches, None) => out.push(self.bar_filter("Filter branches", cx)),
-            (Space::Inbox, _) if self.notices.unread() > 0 => out.push(
+            (Space::Inbox, _) if self.inbox_unread() > 0 => out.push(
                 self.bar_action("bar-read-all", "check", "Mark all read", "")
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.read_all_notices(cx)))
                     .into_any_element(),

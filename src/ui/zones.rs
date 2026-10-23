@@ -169,7 +169,7 @@ impl Workspace {
     /// ↵: one step in.
     pub(super) fn activate(&mut self, cx: &mut Context<Self>) {
         if self.inbox && self.zone != Zone::Tool {
-            return self.open_notice(self.notices.at, cx);
+            return self.inbox_open(cx);
         }
         // A space's list: what is selected in it opens (#71).
         if self.at_root_list() && self.zone == Zone::Branches {

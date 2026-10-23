@@ -182,7 +182,7 @@ impl Workspace {
     /// What waits in a space: the Inbox's unread, the requests that ask for your review.
     fn waiting(&self, space: Space) -> usize {
         match space {
-            Space::Inbox => self.notices.unread(),
+            Space::Inbox => self.inbox_unread(),
             Space::Requests => self
                 .requests
                 .list

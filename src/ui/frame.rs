@@ -976,9 +976,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ReplyThread, _, cx| this.reply_focused(cx)))
             .on_action(cx.listener(|this, _: &ResolveThread, _, cx| this.resolve_focused(cx)))
             .on_action(cx.listener(|this, _: &EditComment, _, cx| {
-                // In the Inbox, e is done with the selected notice.
+                // In the Inbox, e is done with the selected notice (an agent's: later, or resolved).
                 if this.inbox && this.zone != zones::Zone::Tool {
-                    this.dismiss_notice(this.notices.at, cx)
+                    this.inbox_done(cx)
                 } else {
                     this.edit_focused(cx)
                 }

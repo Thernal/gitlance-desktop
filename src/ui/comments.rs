@@ -766,6 +766,10 @@ impl Workspace {
         self.save_comments();
         self.refresh_rows();
         cx.notify();
+        // Written in the Inbox: it goes to the chat now (#116).
+        if self.inbox && self.zone != super::zones::Zone::Tool {
+            self.inbox_answered(id, cx);
+        }
     }
 
     /// A purple note on a GitLab / GitHub discussion: a comment for the agent on its line, with
@@ -1958,11 +1962,22 @@ impl Workspace {
         let selecting = self.selecting(this.clone());
         let (fold, delete, raw) = (this.clone(), this.clone(), this.clone());
         let (resolve, reopen, editing, asking) = (this.clone(), this.clone(), this.clone(), this);
+        // A chat without a title is named by its agent.
+        let chat = |s: &crate::review::Sent| {
+            if s.title.is_empty() {
+                self.agent_chats
+                    .iter()
+                    .find(|c| c.session == s.session)
+                    .map_or_else(|| "its chat".to_owned(), |c| c.agent.clone())
+            } else {
+                format!("“{}”", s.title)
+            }
+        };
         let status = match (&comment.state, &comment.sent) {
             (State::Draft, _) => "draft · stays on this Mac until you send it".to_owned(),
             (State::Sent, Some(s)) if s.session.is_empty() => "sent to a new chat".to_owned(),
-            (State::Sent, Some(s)) if s.delivered => format!("with “{}”", s.title),
-            (State::Sent, Some(s)) => format!("sent to “{}” · waits for it to listen", s.title),
+            (State::Sent, Some(s)) if s.delivered => format!("with {}", chat(s)),
+            (State::Sent, Some(s)) => format!("sent to {} · waits for it to listen", chat(s)),
             (State::Sent, None) => "sent".to_owned(),
             (State::Addressed, _) => "the agent says it is done — check it".to_owned(),
             (State::Resolved, _) => "resolved".to_owned(),
@@ -2400,6 +2415,8 @@ impl Workspace {
                 "reply-send",
                 if compose.posting {
                     "Posting…"
+                } else if agent && self.inbox && matches!(compose.target, Target::Answer(_)) {
+                    "Send answer"
                 } else if agent {
                     "Add to drafts"
                 } else {
