@@ -302,29 +302,8 @@ impl Workspace {
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.read_all_notices(cx)))
                     .into_any_element(),
             ),
-            (Space::Code, Some(Page::File(path))) => {
-                if let Some(editor) = crate::editor::pick(self.settings.editor) {
-                    let path = path.clone();
-                    out.push(
-                        bar_button(
-                            "bar-open-in",
-                            &format!("Open in {}", editor.label()),
-                            "",
-                            false,
-                        )
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.run_act(
-                                super::menu::Act::OpenEditor {
-                                    path: path.clone(),
-                                    line: 1,
-                                },
-                                cx,
-                            )
-                        }))
-                        .into_any_element(),
-                    );
-                }
-            }
+            // The file or the project's folder in the app it belongs to, named (#78).
+            (Space::Code, _) => out.extend(self.open_in_button(cx)),
             (Space::Branches, Some(Page::Branch(refname))) => {
                 let ix = self.branches.iter().position(|b| &b.refname == refname);
                 match ix.and_then(|ix| self.request_of_branch(ix).map(|m| m.iid)) {
@@ -409,7 +388,7 @@ fn space_name(space: Space) -> &'static str {
 }
 
 /// A button of the bar: its label and its key as caps; the primary one filled.
-fn bar_button(
+pub(super) fn bar_button(
     id: &'static str,
     label: &str,
     key: &'static str,

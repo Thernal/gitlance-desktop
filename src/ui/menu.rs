@@ -45,6 +45,11 @@ pub enum Act {
     ThemeBase(String),
     /// Code reads at a branch or commit, by name; None the working tree (#75).
     CodeRevision(Option<(String, git2::Oid)>),
+    /// Open in's ▾ (#78): the page's file in this app, this once; its app kept for files with
+    /// this extension (or let go); Settings, where the editor is chosen.
+    OpenWith(super::open_in::App),
+    AlwaysOpen(String),
+    EditorSettings,
 }
 
 #[derive(Clone)]
@@ -159,6 +164,9 @@ impl Workspace {
             Act::AgentCopy => self.add_and_copy(cx),
             Act::ThemeBase(id) => self.set_theme_base(&id, cx),
             Act::CodeRevision(rev) => self.set_code_revision(rev, cx),
+            Act::OpenWith(app) => self.open_with_app(app),
+            Act::AlwaysOpen(ext) => self.always_open(ext),
+            Act::EditorSettings => self.open_settings(cx),
             // Need the window: `run_act_in` runs them.
             Act::MoveProject { .. } | Act::CloseProject(_) => {}
         }

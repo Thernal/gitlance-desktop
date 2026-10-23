@@ -3,7 +3,8 @@
 //! (Source shows its lines), an image shown. A click on a line number writes a note for the agent
 //! on that plain line: kept on the path, the line and its text, drawn under the line while the
 //! text is there (else it is outdated, in the Agents window). Opened from another space, it is
-//! read as that page shows the project. Open in editor; ⌘W closes its tab, esc goes up to Code.
+//! read as that page shows the project. A binary file says so, with Open in (#78); ⌘W closes its
+//! tab, esc goes up to Code.
 
 use super::spaces::Space;
 use super::{Header, Workspace, format, island, markdown, px, theme};
@@ -32,6 +33,8 @@ pub struct FileView {
     pub rendered: bool,
     /// An image file, decoded.
     image: Option<Arc<gpui::Image>>,
+    /// A binary file that is no image: its size, and nothing to show (#78).
+    binary: Option<u64>,
 }
 
 /// The file being read for the view.
@@ -141,21 +144,26 @@ impl Workspace {
                             None => std::fs::read(root.join(&file)).ok()?,
                         };
                         let image = gpui::Image::from_bytes(super::image_view::format(kind), bytes);
-                        return Some((Vec::new(), Vec::new(), at, Some(Arc::new(image))));
+                        return Some((Vec::new(), Vec::new(), at, Some(Arc::new(image)), None));
                     }
-                    let text = match rev {
-                        Some(rev) => Repo::open(&root).ok()?.file_at(rev, &file)?,
-                        None => std::fs::read_to_string(root.join(&file)).ok()?,
+                    let bytes = match rev {
+                        Some(rev) => Repo::open(&root).ok()?.bytes_at(rev, &file)?,
+                        None => std::fs::read(root.join(&file)).ok()?,
                     };
+                    if super::open_in::binary(&bytes) {
+                        let size = Some(bytes.len() as u64);
+                        return Some((Vec::new(), Vec::new(), at, None, size));
+                    }
+                    let text = String::from_utf8_lossy(&bytes);
                     let spans = highlight::highlight(&file, &text);
                     let lines: Vec<String> = text.lines().map(str::to_owned).collect();
-                    Some((lines, spans, at, None))
+                    Some((lines, spans, at, None, None))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.file_reading = None;
                 match read {
-                    Some((lines, spans, at, image)) => {
+                    Some((lines, spans, at, image, binary)) => {
                         let text = lines
                             .iter()
                             .enumerate()
@@ -170,11 +178,11 @@ impl Workspace {
                             list: ListState::new(0, ListAlignment::Top, px(400.)),
                             rendered: true,
                             image,
+                            binary,
                         });
                     }
                     None => {
-                        this.error =
-                            Some(format!("{path} is not text, or not in this version.").into());
+                        this.error = Some(format!("{path} is not in this version.").into());
                     }
                 }
                 cx.notify();
@@ -252,10 +260,29 @@ impl Workspace {
         out
     }
 
+    /// The line at the top of `path`'s view as it is scrolled: where Open in opens it (#78).
+    pub(super) fn file_top_line(&self, path: &str) -> u32 {
+        let Some(view) = self.file_view.as_ref().filter(|v| v.path == path) else {
+            return 1;
+        };
+        let top = view.list.logical_scroll_top().item_ix;
+        self.file_rows(view)
+            .iter()
+            .take(top + 1)
+            .rev()
+            .find_map(|row| match row {
+                Row::Line(n) => Some(*n as u32 + 1),
+                _ => None,
+            })
+            .unwrap_or(1)
+    }
+
     pub(super) fn render_file_view(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let view = self.file_view.as_ref()?;
         let head = self.render_file_head(view, cx);
-        let body = if let Some(image) = &view.image {
+        let body = if let Some(size) = view.binary {
+            self.render_binary(size, cx)
+        } else if let Some(image) = &view.image {
             div()
                 .flex_1()
                 .min_h_0()
@@ -302,6 +329,8 @@ impl Workspace {
         let markdown = view.markdown() && view.image.is_none();
         let facts = if view.image.is_some() {
             format!("image · {}", view.at)
+        } else if let Some(size) = view.binary {
+            format!("{} · {}", super::image_view::bytes(size as usize), view.at)
         } else {
             format!("{} lines · {}", view.lines.len(), view.at)
         };

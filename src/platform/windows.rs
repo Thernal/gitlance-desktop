@@ -63,3 +63,23 @@ pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io
         .spawn()
         .map(|_| ())
 }
+
+pub const NAMES_APPS: bool = false;
+
+/// Windows is not asked which apps open a file: the default only (#78).
+pub fn apps_for(_file: &std::path::Path) -> Vec<(String, PathBuf)> {
+    Vec::new()
+}
+
+/// `explorer` opens it with its default, or the app's program with the file.
+pub fn open_with(file: &std::path::Path, app: Option<&std::path::Path>) -> std::io::Result<()> {
+    let program = app.map_or(std::ffi::OsStr::new("explorer"), |a| a.as_os_str());
+    std::process::Command::new(program)
+        .arg(file)
+        .spawn()
+        .map(|_| ())
+}
+
+pub fn preview() -> Option<PathBuf> {
+    None
+}

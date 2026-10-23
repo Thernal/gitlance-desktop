@@ -62,3 +62,23 @@ pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io
     }
     Err(std::io::Error::other("no terminal found"))
 }
+
+pub const NAMES_APPS: bool = false;
+
+/// The desktop does not say which apps open a file here: the default only (#78).
+pub fn apps_for(_file: &std::path::Path) -> Vec<(String, PathBuf)> {
+    Vec::new()
+}
+
+/// `xdg-open`, or the app's program with the file.
+pub fn open_with(file: &std::path::Path, app: Option<&std::path::Path>) -> std::io::Result<()> {
+    let program = app.map_or(std::ffi::OsStr::new("xdg-open"), |a| a.as_os_str());
+    std::process::Command::new(program)
+        .arg(file)
+        .spawn()
+        .map(|_| ())
+}
+
+pub fn preview() -> Option<PathBuf> {
+    None
+}

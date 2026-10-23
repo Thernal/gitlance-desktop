@@ -84,3 +84,48 @@ pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io
         Err(std::io::Error::other("Terminal did not start it"))
     }
 }
+
+pub const NAMES_APPS: bool = true;
+
+/// The apps Launch Services says open `file`, the default first (#78).
+pub fn apps_for(file: &std::path::Path) -> Vec<(String, PathBuf)> {
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::{NSString, NSURL};
+    let workspace = NSWorkspace::sharedWorkspace();
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&file.display().to_string()));
+    let path = |u: &NSURL| u.path().map(|p| PathBuf::from(p.to_string()));
+    let mut apps: Vec<PathBuf> = workspace
+        .URLForApplicationToOpenURL(&url)
+        .and_then(|u| path(&u))
+        .into_iter()
+        .collect();
+    for u in workspace.URLsForApplicationsToOpenURL(&url).iter() {
+        if let Some(p) = path(&u)
+            && !apps.contains(&p)
+        {
+            apps.push(p);
+        }
+    }
+    apps.into_iter()
+        .filter_map(|p| Some((p.file_stem()?.to_string_lossy().into_owned(), p)))
+        .collect()
+}
+
+/// `open -a <app> <file>`, or `open <file>` for the default.
+pub fn open_with(file: &std::path::Path, app: Option<&std::path::Path>) -> std::io::Result<()> {
+    let mut open = std::process::Command::new("open");
+    if let Some(app) = app {
+        open.arg("-a").arg(app);
+    }
+    open.arg(file).spawn().map(|_| ())
+}
+
+pub fn preview() -> Option<PathBuf> {
+    [
+        "/System/Applications/Preview.app",
+        "/Applications/Preview.app",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|p| p.exists())
+}

@@ -1,6 +1,6 @@
 //! What differs between macOS, Windows and Linux, behind one API: the app's data folder, its icon,
-//! where an editor's launcher lives and how the window's title bar is drawn. Nothing outside this
-//! module asks which OS it runs on.
+//! where an editor's launcher lives, how the window's title bar is drawn, and which apps open a
+//! file (#78). Nothing outside this module asks which OS it runs on.
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -92,6 +92,26 @@ fn shell_quote(text: &str) -> String {
 /// with its first message).
 pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io::Result<()> {
     os::open_terminal(dir, program, arg)
+}
+
+/// Whether the system names the apps that open a file (macOS); elsewhere a file opens in "the
+/// default app", what `open_with` without one starts (#78).
+pub const NAMES_APPS: bool = os::NAMES_APPS;
+
+/// The apps that can open `file`, by name and where they are, the system's default first (#78);
+/// none where the system does not say.
+pub fn apps_for(file: &std::path::Path) -> Vec<(String, PathBuf)> {
+    os::apps_for(file)
+}
+
+/// Opens `file` (or a folder) in `app`, else in what the system opens it with.
+pub fn open_with(file: &std::path::Path, app: Option<&std::path::Path>) -> std::io::Result<()> {
+    os::open_with(file, app)
+}
+
+/// Where Preview is: images and PDFs open there (#78); None off macOS.
+pub fn preview() -> Option<PathBuf> {
+    os::preview()
 }
 
 /// The space the title bar leaves at its start for the window's own buttons.

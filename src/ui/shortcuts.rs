@@ -90,6 +90,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌘+  ⌘−  ⌘0", "interface bigger, smaller, actual size"),
             ("⌘T ⇧⌘W ⌘1…9", "tabs"),
             ("⌥⌘M", "new merge request"),
+            ("⌥⌘O ⌥⌘R", "the file or folder in its app · in Finder"),
             ("⌥⌘L", "leave the merge request, back to your branch"),
             ("?", "this card"),
         ],

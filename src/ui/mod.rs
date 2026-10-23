@@ -33,6 +33,7 @@ mod menu;
 mod motion;
 mod nav;
 mod notifications;
+mod open_in;
 mod opening;
 mod outdated;
 mod pages;
@@ -142,6 +143,8 @@ actions!(
         CreateRequest,
         QuickCreateRequest,
         SendToAgent,
+        OpenIn,
+        RevealInFinder,
         ShowShortcuts,
         ToggleThread,
         ToggleComments,
@@ -275,6 +278,13 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("cmd-alt-m"), CreateRequest, Some("Workspace && !Typing")),
         // ⇧⌘A the Agents window as Design gives it, ⌥⌘A sends to an agent (D12, X3).
         KeyBinding::new(&k("cmd-alt-a"), SendToAgent, Some("Workspace && !Typing")),
+        // Open in (#78): the page's file or folder in its app, or in Finder.
+        KeyBinding::new(&k("cmd-alt-o"), OpenIn, Some("Workspace && !Typing")),
+        KeyBinding::new(
+            &k("cmd-alt-r"),
+            RevealInFinder,
+            Some("Workspace && !Typing"),
+        ),
         KeyBinding::new(
             &k("cmd-shift-a"),
             ToggleAgents,
@@ -1073,6 +1083,14 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                 }
             }
         }
+        // Open in's ▾ under its button, on the page the keys reached (#78).
+        if std::env::var("GITLANCE_SNAPSHOT_MENU").as_deref() == Ok("open-in") {
+            ws.update(cx, |this, cx| {
+                let at = gpui::point(gpui::px(this.win_width), gpui::px(84.));
+                this.open_in_menu(at, cx)
+            });
+            wait(600).await;
+        }
         // The pointer resting at `x,y` (window points) long enough for a tooltip or a card (#53).
         if let Ok(at) = std::env::var("GITLANCE_SNAPSHOT_HOVER")
             && let Some((x, y)) = at.split_once(',')
@@ -1387,6 +1405,9 @@ pub struct Workspace {
     /// A file the diff does not change, shown in its place (D18), and its read.
     file_view: Option<file_view::FileView>,
     file_reading: file_view::Reading,
+    /// Open in's choices kept per extension, and the app its button names (#78).
+    open_with: std::collections::HashMap<String, open_in::App>,
+    open_cache: open_in::Cache,
     /// The search over all files of the diff, while it is open.
     ffind: Option<findfiles::FindFiles>,
     /// The marks of files read, and the scope and file fingerprints of the open diff.
@@ -1623,6 +1644,8 @@ impl Workspace {
             mention_hover: None,
             file_view: None,
             file_reading: None,
+            open_with: open_in::load(),
+            open_cache: Default::default(),
             motion: Default::default(),
             last_tool: None,
             menu_leaving: None,
@@ -2374,7 +2397,7 @@ impl Workspace {
     // ---- selecting and context menus ---------------------------------------------------
 
     /// The new-side line shown at `row`, to open the editor where the reader is.
-    fn new_line_of_row(&self, row: usize) -> Option<u32> {
+    pub(super) fn new_line_of_row(&self, row: usize) -> Option<u32> {
         match *self.rows.get(row)? {
             rows::Row::Split { right, .. } => right.map(|c| c.line),
             rows::Row::Unified { new_line, .. } => new_line,
@@ -3675,30 +3698,33 @@ impl Workspace {
                                     ))),
                             )
                     }))
-                    .children(crate::editor::pick(self.settings.editor).map(|editor| {
-                        let path = f.path().to_owned();
-                        let line = self
-                            .changes
-                            .get(self.change_at.unwrap_or(0))
-                            .and_then(|&row| self.new_line_of_row(row))
-                            .unwrap_or(1);
-                        chip(
-                            "open-editor",
-                            format!("Open in {} ↗", editor.label()),
-                            false,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| {
-                                this.run_act(
-                                    Act::OpenEditor {
-                                        path: path.clone(),
-                                        line,
-                                    },
-                                    cx,
-                                )
-                            },
-                        ))
-                    }))
+                    // The file in the app it belongs to, at the change (#78); ▾ the others.
+                    .children(
+                        self.open_target()
+                            .and_then(|(path, _)| self.open_app(&path))
+                            .map(|app| {
+                                div()
+                                    .flex()
+                                    .child(
+                                        chip(
+                                            "open-editor",
+                                            format!("Open in {} ↗", app.name()),
+                                            false,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                                                this.open_in(cx)
+                                            }),
+                                        ),
+                                    )
+                                    .child(chip("open-in-more", "▾", false).on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                                            this.open_in_menu(e.position, cx)
+                                        }),
+                                    ))
+                            }),
+                    )
                     .children(mode_note.clone().map(|n| {
                         let unavailable = n.starts_with("Structural diff");
                         div()

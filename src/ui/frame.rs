@@ -911,6 +911,8 @@ impl Render for Workspace {
                 }
                 this.send_agent(ids, cx)
             }))
+            .on_action(cx.listener(|this, _: &OpenIn, _, cx| this.open_in(cx)))
+            .on_action(cx.listener(|this, _: &RevealInFinder, _, cx| this.reveal_target(cx)))
             .on_action(cx.listener(|this, _: &ShowShortcuts, _, cx| this.toggle_shortcuts(cx)))
             .on_action(cx.listener(|this, _: &NextThread, _, cx| {
                 // ⇧N: a note on the agent's form in view, else the next discussion (#10 C).

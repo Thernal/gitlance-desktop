@@ -36,6 +36,12 @@ impl Editor {
         Self::ALL.into_iter().find(|e| e.key() == key)
     }
 
+    /// Its app's name as the system lists it ("Visual Studio Code"): the same app is not offered
+    /// twice in Open in's ▾ (#78).
+    pub fn bundle(self) -> &'static str {
+        self.launcher().bundle
+    }
+
     /// Where the editor's command-line launcher lives.
     fn launcher(self) -> Launcher {
         match self {
@@ -80,6 +86,14 @@ impl Editor {
         let Some(program) = self.program() else {
             return Err(format!("{} is not installed.", self.label()));
         };
+        // A folder opens as the editor's project (#78).
+        if file.is_dir() {
+            return Command::new(program)
+                .arg(file)
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| format!("Could not start {}: {e}", self.label()));
+        }
         if !file.exists() {
             return Err(format!(
                 "{} is not in the working tree, so there is nothing to open.",
