@@ -298,10 +298,9 @@ pub struct Palette {
     refs: Vec<NamedRef>,
 }
 
-/// The words of `query` all occur in `hay`, ignoring case.
+/// The words of `query` all occur in `hay`, ignoring case — or as the starts of its words.
 fn matches(words: &[String], hay: &str) -> bool {
-    let hay = hay.to_lowercase();
-    words.iter().all(|w| hay.contains(w.as_str()))
+    words.iter().all(|w| crate::rank::word_matches(w, hay))
 }
 
 impl Workspace {
@@ -323,7 +322,7 @@ impl Workspace {
                 self.requests.list.iter().filter(|m| {
                     let q = query.trim().trim_start_matches('!');
                     !q.is_empty()
-                        && (m.iid.to_string() == q || m.source.contains(q))
+                        && (m.iid.to_string() == q || crate::rank::word_matches(q, &m.source))
                         && crate::rank::score(query, &m.title).is_none()
                 }),
             )

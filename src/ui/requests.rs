@@ -1594,7 +1594,7 @@ impl Workspace {
                     m.source
                 )
                 .to_lowercase();
-                words.iter().all(|w| hay.contains(w))
+                words.iter().all(|w| crate::rank::word_matches(w, &hay))
             })
             .collect();
         // By what each needs from you, as the list groups them; the latest activity first.
