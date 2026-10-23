@@ -16,7 +16,7 @@ impl Workspace {
                 .flex_1()
                 .min_h_0()
                 .flex()
-                .child(self.render_inbox(cx))
+                .child(shrinks(self.render_inbox(cx)))
                 .children(self.render_tool(cx)),
             // The project's tree beside its folder page or a file's tabs (#75).
             (Space::Code, _) => self.render_code_space(cx),
@@ -25,14 +25,14 @@ impl Workspace {
                 .flex_1()
                 .min_h_0()
                 .flex()
-                .child(self.render_branches_root(cx))
+                .child(shrinks(self.render_branches_root(cx)))
                 .children(self.render_tool(cx)),
             (Space::Requests, None) => div()
                 .relative()
                 .flex_1()
                 .min_h_0()
                 .flex()
-                .child(self.render_requests_root(cx))
+                .child(shrinks(self.render_requests_root(cx)))
                 .children(self.render_tool(cx)),
             // A request's Overview and Commits, a branch's Commits, are pages of their own
             // (#73, #74).
@@ -212,4 +212,18 @@ impl Workspace {
                 })),
         )
     }
+}
+
+/// A root page beside the tool window: it gives way to it, never pushing it past the window's
+/// edge — its list keeps its width, its preview narrows (the developer, 2026-10-23: Agents ran off
+/// the Merge requests page).
+fn shrinks(page: impl IntoElement) -> gpui::Div {
+    // A column: the page is stretched across to its width, whatever its content's least width.
+    div()
+        .flex_1()
+        .min_w_0()
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .child(page)
 }
