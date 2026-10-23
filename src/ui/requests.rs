@@ -1512,6 +1512,12 @@ impl Workspace {
         );
         let first = &t.notes[0];
         let written = self.requests.histories.get(&t.id).map(|h| h.written);
+        // Says what it does: the line where it is now, or (gone) the versions compared.
+        let show = match (line_now, self.compare_label(ix)) {
+            (Some(_), _) => "Show line".to_owned(),
+            (None, Some(compare)) => compare,
+            (None, None) => "Show".to_owned(),
+        };
         div()
             .flex()
             .flex_col()
@@ -1527,17 +1533,19 @@ impl Workspace {
                     .pr(px(14.))
                     .pb(px(6.))
                     .flex()
+                    // A narrow window's buttons go under the words, not past its edge.
+                    .flex_wrap()
                     .items_center()
                     .gap_2()
                     .text_size(px(11.))
                     .child(
                         div().flex_1().text_color(theme::warning()).child(
                             self.since_comment(ix)
-                                .unwrap_or("Written on an earlier version"),
+                                .unwrap_or_else(|| "Written on an earlier version".to_owned()),
                         ),
                     )
                     .child(
-                        super::tools::tool_button(("old-show", ix), "Show").on_click(cx.listener(
+                        super::tools::tool_button(("old-show", ix), show).on_click(cx.listener(
                             move |this, _: &ClickEvent, _, cx| match line_now {
                                 Some(line) => this.jump_to_line(&path, line, false, cx),
                                 None if written.is_some() => this.compare_since(ix, cx),

@@ -2,8 +2,9 @@
 //! a thread keeps the commit it was written on, and the line it was written on is followed version
 //! by version to the latest (`git::Repo::follow_line`) — who changed it, in which commit, what it
 //! says now. The latest diff draws such a thread at its line now, saying Changed or Unchanged since
-//! your comment with the line's history, and Compare with the new version; a thread whose line is
-//! gone stays only in the Discussions window, grouped by the version it was written on.
+//! the comment — "your comment" only when it is yours, else its author is named — with the line's
+//! history, and Compare v1 → v3; a thread whose line is gone stays only in the Discussions window,
+//! grouped by the version it was written on.
 
 use super::{Selection, Workspace, format, px, theme};
 use crate::git::{Fate, Repo};
@@ -184,15 +185,35 @@ impl Workspace {
         groups
     }
 
-    /// "Changed since your comment", or not, for thread `ix`; None while it is not known.
-    pub(super) fn since_comment(&self, ix: usize) -> Option<&'static str> {
+    /// Whether thread `t` began with a comment of yours: only then is it "your comment".
+    fn yours(&self, t: &Thread) -> bool {
+        let me = self.requests.login.as_deref().unwrap_or_default();
+        !me.is_empty() && t.notes.first().is_some_and(|n| n.login == me)
+    }
+
+    /// "Changed since your comment" (or this comment, another's), or not, for thread `ix`; None
+    /// while it is not known.
+    pub(super) fn since_comment(&self, ix: usize) -> Option<String> {
         let t = self.requests.threads.get(ix)?;
         let h = self.requests.histories.get(&t.id)?;
+        let whose = if self.yours(t) {
+            "your comment"
+        } else {
+            "this comment"
+        };
         Some(match (h.changed(), h.line_now) {
-            (_, None) => "Line removed since your comment",
-            (true, _) => "Changed since your comment",
-            (false, _) => "Unchanged since your comment",
+            (_, None) => format!("Line removed since {whose}"),
+            (true, _) => format!("Changed since {whose}"),
+            (false, _) => format!("Unchanged since {whose}"),
         })
+    }
+
+    /// The button that compares thread `ix`'s version with the latest: "Compare v1 → v3".
+    pub(super) fn compare_label(&self, ix: usize) -> Option<String> {
+        let t = self.requests.threads.get(ix)?;
+        let written = self.requests.histories.get(&t.id)?.written;
+        let latest = self.versions.last()?.number;
+        Some(format!("Compare v{written} → v{latest}"))
     }
 
     /// Under an outdated discussion: the line's history and Compare with the new version.
@@ -240,10 +261,18 @@ impl Workspace {
                         })),
                 )
         };
+        // Who wrote the comment, named unless it is you.
+        let who = if self.yours(t) {
+            "you commented on".to_owned()
+        } else {
+            let author = t.notes.first().map_or("", |n| n.author.as_str());
+            format!("{author} commented on")
+        };
+        let compare = self.compare_label(ix).unwrap_or_default();
         let mut rows: Vec<AnyElement> = vec![
             row(
                 format!("v{}", h.written),
-                "you commented on".to_owned(),
+                who,
                 Some(h.then.clone().into_any_element()),
                 changed,
             )
@@ -321,7 +350,8 @@ impl Workspace {
                                 .border_color(theme::island_border())
                                 .cursor_pointer()
                                 .hover(|s| s.bg(theme::hover()))
-                                .child("Compare with the new version")
+                                .flex_none()
+                                .child(compare)
                                 .on_click(move |_, _, cx| {
                                     this.update(cx, |this, cx| this.compare_since(ix, cx)).ok();
                                 })
@@ -424,6 +454,17 @@ impl Workspace {
             return None;
         }
         let iid = since.iid;
+        let yours = self
+            .requests
+            .threads
+            .iter()
+            .find(|t| t.id == since.thread)
+            .is_some_and(|t| self.yours(t));
+        let (line, whose) = if yours {
+            ("Your comment's line", "your comment")
+        } else {
+            ("The commented line", "the comment")
+        };
         Some(
             div()
                 .flex_none()
@@ -435,15 +476,11 @@ impl Workspace {
                 .border_b_1()
                 .border_color(theme::island_border())
                 .text_size(px(12.))
-                .child(
-                    div()
-                        .text_color(theme::warning())
-                        .child("Your comment's line"),
-                )
+                .child(div().text_color(theme::warning()).child(line))
                 .child(
                     super::diff_view::group().children(pairs.into_iter().map(|(a, b)| {
                         let label = if (a, b) == (0, last) {
-                            format!("v{} → v{} · your comment", number(a), number(b))
+                            format!("v{} → v{} · {whose}", number(a), number(b))
                         } else {
                             format!("v{} → v{}", number(a), number(b))
                         };
