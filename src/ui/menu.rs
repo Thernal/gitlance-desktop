@@ -41,6 +41,12 @@ pub enum Act {
     AgentSendOnly,
     AgentChooseChat,
     AgentCopy,
+    /// A narrow composer's folded buttons (#129): Send all, Add to review, a markdown helper,
+    /// Preview.
+    AgentSendAll,
+    AddToReview(u64),
+    ComposeHelper(crate::markdown::Helper),
+    ComposePreview,
     /// The theme being edited is built on this one (its extends ▾).
     ThemeBase(String),
     /// Code reads at a branch or commit, by name; None the working tree (#75).
@@ -179,6 +185,10 @@ impl Workspace {
             Act::AgentSendOnly => self.add_and_send(true, cx),
             Act::AgentChooseChat => self.add_and_pick_chat(cx),
             Act::AgentCopy => self.add_and_copy(cx),
+            Act::AgentSendAll => self.add_and_send(false, cx),
+            Act::AddToReview(iid) => self.post_comment(iid, true, cx),
+            Act::ComposeHelper(helper) => self.apply_helper(helper, cx),
+            Act::ComposePreview => self.toggle_preview(cx),
             Act::ThemeBase(id) => self.set_theme_base(&id, cx),
             Act::CodeRevision(rev) => self.set_code_revision(rev, cx),
             Act::OpenWith(app) => self.open_with_app(app),

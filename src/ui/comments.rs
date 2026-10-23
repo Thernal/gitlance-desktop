@@ -511,13 +511,16 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Whether the field being written has under 560 px (Design, 2026-10-21, C · icons below a
-    /// width): its secondary buttons keep only their icon, named in the tooltip, the keycaps go,
-    /// the primary keeps its label. Its own width decides, wherever it is — the diff, a file in
-    /// Code, a folder's page —, or the narrow diff's.
+    /// How much of its foot the field being written has room for (`room_for`). Its own width
+    /// decides, wherever it is — the diff, a file in Code, a folder's page —, or the narrow diff's.
+    pub(super) fn compose_room(&self) -> Room {
+        room_for(self.widths.width("composer"), self.tight)
+    }
+
+    /// Under L: the secondary buttons keep only their icon, named in the tooltip, the keycaps go,
+    /// the primary keeps its label (Design, 2026-10-21, C · icons below a width).
     pub(super) fn compose_narrow(&self) -> bool {
-        let width = self.widths.width("composer");
-        self.tight || (width > 0. && width < 560.)
+        self.compose_room() != Room::L
     }
 
     /// A note for the agent on folder `path` of Code (#97): kept on the path with a slash and no
@@ -1870,7 +1873,7 @@ impl Workspace {
     }
 
     /// A markdown helper of the composer's toolbar, on the selection or at the caret.
-    fn apply_helper(&mut self, helper: Helper, cx: &mut Context<Self>) {
+    pub(super) fn apply_helper(&mut self, helper: Helper, cx: &mut Context<Self>) {
         let Some(compose) = self.compose.as_mut().filter(|c| !c.posting) else {
             return;
         };
@@ -1879,7 +1882,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn toggle_preview(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn toggle_preview(&mut self, cx: &mut Context<Self>) {
         if let Some(compose) = self.compose.as_mut() {
             compose.preview = !compose.preview;
             self.diff_list.remeasure();
@@ -2186,18 +2189,25 @@ impl Workspace {
         let Some(boxed) = self.compose_box(this) else {
             return div().into_any_element();
         };
+        // Under 520 px of row the avatar and the indent give way and the box takes the row
+        // (Design shell rounds 4 and 6, #129).
+        let row = self.widths.width("composer-row");
+        let roomy = row == 0. || row >= 520.;
         div()
+            .relative()
             .w_full()
-            .pl(px(indent))
-            .pr(px(12.))
+            .child(self.widths.measure("composer-row"))
+            .pl(px(if roomy { indent } else { 8. }))
+            .pr(px(if roomy { 12. } else { 8. }))
             .py(px(6.))
             .child(
                 div()
-                    .max_w(px(760.))
+                    // The box at most 760 px, as drawn, so a wide diff reaches L.
+                    .max_w(px(800.))
                     .flex()
                     .items_start()
                     .gap(px(12.))
-                    .child(discussion::avatar(&self.me, true, 28.).mt(px(3.)))
+                    .children(roomy.then(|| discussion::avatar(&self.me, true, 28.).mt(px(3.))))
                     .child(boxed),
             )
             .into_any_element()
@@ -2266,18 +2276,29 @@ impl Workspace {
                         switch.update(cx, |this, cx| this.toggle_target(cx)).ok();
                     })
             });
-        // Narrow, "Add to drafts" is "Add" (named in full in its tooltip): the bar ran out of the
-        // box (the developer, 2026-10-23).
+        // The foot by its room (Design shell round 6, #129): at S "Add to drafts" is "Add" (named in
+        // full in its tooltip), and the other ways to send fold into its own ▾.
+        let room = self.compose_room();
+        let folded = room == Room::S && !compose.posting;
         let primary = match (&compose.target, compose.posting) {
             (_, true) => "Posting…",
-            (Target::Agent, _) if narrow => "Add",
+            (Target::Agent, _) if room == Room::S => "Add",
             (Target::Agent, _) => "Add to drafts",
             (_, _) => "Comment",
         };
         // An agent comment's bar (#50 F): Send all beside Add to drafts, Send this only in ▾.
         let drafts = self.agent_drafts().len();
         let compose_agent = compose.target == Target::Agent;
-        let (send_all, send_one) = (this.clone(), this.clone());
+        let send_label = if drafts > 0 {
+            format!("Send all {}", drafts + 1)
+        } else {
+            "Send".to_owned()
+        };
+        let review_iid = match (compose.target, compose.posting) {
+            (Target::Request(iid), false) => Some(iid),
+            _ => None,
+        };
+        let (send_all, send_one, fold_menu) = (this.clone(), this.clone(), this.clone());
         let mut tail = vec![
             // Narrow, Cancel is its × icon, named in the tooltip.
             if narrow {
@@ -2302,7 +2323,9 @@ impl Workspace {
             })
             .into_any_element(),
         ];
-        if let (Target::Request(iid), false) = (compose.target, compose.posting) {
+        // The secondary buttons are one weight, bare as Cancel and ▾ are; only the primary is
+        // filled.
+        if let Some(iid) = review_iid.filter(|_| !folded) {
             tail.push(
                 discussion::icon_button(
                     "compose-review",
@@ -2310,7 +2333,7 @@ impl Workspace {
                     "Add to review",
                     Some("⇧⌘↵"),
                     Some("Pending until you submit the review"),
-                    Kind::Plain,
+                    Kind::Quiet,
                     narrow,
                 )
                 .h(px(28.))
@@ -2323,19 +2346,15 @@ impl Workspace {
                 .into_any_element(),
             );
         }
-        if compose.target == Target::Agent {
+        if compose_agent && !folded {
             tail.push(
                 discussion::icon_button(
                     "compose-send-all",
                     "send",
-                    if drafts > 0 {
-                        format!("Send all {}", drafts + 1)
-                    } else {
-                        "Send".to_owned()
-                    },
+                    send_label.clone(),
                     Some("⇧⌘↵"),
                     Some("Adds it and sends every draft to your agent's chat"),
-                    Kind::Plain,
+                    Kind::Quiet,
                     narrow,
                 )
                 .h(px(28.))
@@ -2382,35 +2401,87 @@ impl Workspace {
                 .into_any_element(),
             );
         }
-        tail.push(
-            discussion::button(
-                "compose-add",
-                primary,
-                (!compose.posting && !narrow).then_some("⌘↵"),
-                Kind::Primary(tone),
-            )
-            .h(px(28.))
-            .px(px(10.))
-            .when(narrow && !compose.posting, |s| {
-                s.tooltip_show_delay(crate::ui::hover::LONG)
-                    .tooltip(move |_, cx| {
-                        cx.new(|_| {
-                            super::Tip(if compose_agent {
-                                "Add to drafts  ⌘↵"
-                            } else {
-                                "Comment  ⌘↵"
-                            })
+        // At S, what folded: into the primary's own ▾.
+        let more = {
+            use super::menu::{Act, Entry};
+            match (folded, compose.target) {
+                (true, Target::Agent) => vec![
+                    vec![
+                        Entry::new(send_label, Act::AgentSendAll).key("⇧⌘↵"),
+                        Entry::new("Send this only", Act::AgentSendOnly).key("⌥⌘↵"),
+                        Entry::new("Choose the chat…", Act::AgentChooseChat),
+                    ],
+                    vec![Entry::new("Copy as markdown", Act::AgentCopy)],
+                ],
+                (true, Target::Request(iid)) => vec![vec![
+                    Entry::new("Add to review", Act::AddToReview(iid)).key("⇧⌘↵"),
+                ]],
+                _ => Vec::new(),
+            }
+        };
+        let add_button = discussion::button(
+            "compose-add",
+            primary,
+            (!compose.posting && !narrow).then_some("⌘↵"),
+            Kind::Primary(tone),
+        )
+        .h(px(28.))
+        .px(px(10.))
+        .when(narrow && !compose.posting, |s| {
+            s.tooltip_show_delay(crate::ui::hover::LONG)
+                .tooltip(move |_, cx| {
+                    cx.new(|_| {
+                        super::Tip(if compose_agent {
+                            "Add to drafts  ⌘↵"
+                        } else {
+                            "Comment  ⌘↵"
                         })
-                        .into()
                     })
-            })
-            .on_click(move |_, _, cx| {
-                add.update(cx, |this, cx| this.add_comment(cx)).ok();
-            })
-            .into_any_element(),
-        );
-        let placeholder = match compose.target {
-            Target::Agent => "A note for your agent — it stays on this Mac",
+                    .into()
+                })
+        })
+        .on_click(move |_, _, cx| {
+            add.update(cx, |this, cx| this.add_comment(cx)).ok();
+        });
+        tail.push(if more.is_empty() {
+            add_button.into_any_element()
+        } else {
+            div()
+                .flex()
+                .flex_none()
+                .gap(px(1.))
+                .child(add_button.rounded_r(px(0.)))
+                .child(
+                    discussion::icon_button(
+                        "compose-add-more",
+                        "chevron",
+                        if compose_agent {
+                            "Send all, send this only, choose the chat, copy"
+                        } else {
+                            "Add to review"
+                        },
+                        None,
+                        None,
+                        Kind::Primary(tone),
+                        true,
+                    )
+                    .h(px(28.))
+                    .px(px(6.))
+                    .rounded_l(px(0.))
+                    .on_click(move |event, _, cx| {
+                        let (at, more) = (event.position(), more.clone());
+                        fold_menu
+                            .update(cx, |this, cx| this.open_menu(at, more, cx))
+                            .ok();
+                    }),
+                )
+                .into_any_element()
+        });
+        // At S the hint is short; at every width it wraps rather than being cut.
+        let placeholder = match (compose.target, room) {
+            (Target::Agent, Room::S) => "Note for your agent",
+            (Target::Agent, _) => "A note for your agent — it stays on this Mac",
+            (_, Room::S) => "Comment for everyone on it",
             _ => "Comment on the merge request — everyone on it sees it",
         };
         let input = self.open_input(
@@ -2456,16 +2527,31 @@ impl Workspace {
             Source::GitLab.color()
         };
         let (cancel, send) = (this.clone(), this.clone());
+        // The same foot as a new comment's (#129): narrow, Cancel is its ×, who sees it its dot.
+        let room = self.compose_room();
+        let narrow = room != Room::L;
         let tail = vec![
-            discussion::button("reply-cancel", "Cancel", None, Kind::Quiet)
-                .h(px(28.))
-                .px(px(10.))
-                .tooltip_show_delay(crate::ui::hover::LONG)
-                .tooltip(|_, cx| cx.new(|_| super::Tip("Esc")).into())
-                .on_click(move |_, _, cx| {
-                    cancel.update(cx, |this, cx| this.cancel_comment(cx)).ok();
-                })
-                .into_any_element(),
+            if narrow {
+                discussion::icon_button(
+                    "reply-cancel",
+                    "x",
+                    "Cancel",
+                    Some("esc"),
+                    None,
+                    Kind::Quiet,
+                    true,
+                )
+            } else {
+                discussion::button("reply-cancel", "Cancel", None, Kind::Quiet)
+                    .tooltip_show_delay(crate::ui::hover::LONG)
+                    .tooltip(|_, cx| cx.new(|_| super::Tip("Esc")).into())
+            }
+            .h(px(28.))
+            .px(px(if narrow { 6. } else { 10. }))
+            .on_click(move |_, _, cx| {
+                cancel.update(cx, |this, cx| this.cancel_comment(cx)).ok();
+            })
+            .into_any_element(),
             discussion::button(
                 "reply-send",
                 if compose.posting {
@@ -2477,7 +2563,7 @@ impl Workspace {
                 } else {
                     "Reply"
                 },
-                (!compose.posting && !self.compose_narrow()).then_some("⌘↵"),
+                (!compose.posting && !narrow).then_some("⌘↵"),
                 Kind::Primary(tone),
             )
             .h(px(28.))
@@ -2489,10 +2575,17 @@ impl Workspace {
         ];
         // Which of the two the field writes, and ⇥ to switch, on a discussion (#50 G).
         let lead = matches!(compose.target, Target::Reply(_) | Target::ThreadNote(_)).then(|| {
+            let said = if agent {
+                "🔒 For your agent · only on this Mac"
+            } else {
+                "Reply on the merge request"
+            };
             div()
+                .id("reply-audience")
                 .h(px(26.))
                 .px(px(8.))
                 .flex()
+                .flex_none()
                 .items_center()
                 .gap(px(6.))
                 .rounded(px(6.))
@@ -2503,23 +2596,34 @@ impl Workspace {
                 })
                 .text_size(px(12.))
                 .text_color(tone)
-                .child(if agent {
-                    "🔒 For your agent · only on this Mac"
-                } else {
-                    "Reply on the merge request"
+                .whitespace_nowrap()
+                .map(|s| {
+                    if narrow {
+                        // Narrow, its colour's dot; the words and ⇥ in the tooltip.
+                        s.child(div().size(px(7.)).rounded_full().bg(tone))
+                            .tooltip_show_delay(crate::ui::hover::LONG)
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| super::TipOwned(format!("{said} — ⇥ switches").into()))
+                                    .into()
+                            })
+                    } else {
+                        s.child(said)
+                            .child(super::keys::caps("⇥", super::keys::On::Plain))
+                    }
                 })
-                .child(super::keys::caps("⇥", super::keys::On::Plain))
                 .into_any_element()
         });
         Some(self.open_input(
             compose,
             tone,
-            match compose.target {
-                Target::ThreadNote(_) => {
+            match (compose.target, room) {
+                (Target::ThreadNote(_), Room::S) => "Note for your agent",
+                (Target::ThreadNote(_), _) => {
                     "A note for your agent, with this discussion — never posted"
                 }
-                Target::Answer(_) => "A note for the agent with your answer",
-                Target::AnswerValue(_) => "Your own value",
+                (Target::Answer(_), Room::S) => "Note with your answer",
+                (Target::Answer(_), _) => "A note for the agent with your answer",
+                (Target::AnswerValue(_), _) => "Your own value",
                 _ => "Reply…",
             },
             lead,
@@ -2595,9 +2699,30 @@ impl Workspace {
         };
         let preview = compose.preview;
         let toggle = this.clone();
-        // Two groups, each kept whole: who sees it and the writing helpers on the left, the
-        // buttons on the right. Narrow, the buttons go under the helpers and stay on the right,
-        // where a box's buttons are (the developer, 2026-10-23: they wrapped to the left).
+        // One row at every width (Design shell round 6, #129): who sees it and the writing helpers
+        // on the left, the buttons on the right; at S the helpers fold into T, a menu of them.
+        let folded = self.compose_room() == Room::S;
+        let format = {
+            use super::menu::{Act, Entry};
+            let helpers: Vec<Entry> = tools
+                .iter()
+                .map(|&h| {
+                    let (_, tip) = markdown::helper_look(h);
+                    let (name, key) = tip.split_once("  ").unwrap_or((tip, ""));
+                    let name = name.split(" — ").next().unwrap_or(name);
+                    Entry::new(name, Act::ComposeHelper(h)).key(key)
+                })
+                .collect();
+            vec![
+                helpers,
+                vec![
+                    Entry::new("Preview", Act::ComposePreview)
+                        .key("⌘⇧P")
+                        .checked(preview),
+                ],
+            ]
+        };
+        let open_format = this.clone();
         let helpers = div()
             .flex()
             .flex_none()
@@ -2610,12 +2735,11 @@ impl Workspace {
                     .gap(px(6.))
                     .mr(px(4.))
                     .child(lead)
-                    .child(div().w(px(1.)).h(px(14.)).bg(theme::selected()))
+                    .children((!folded).then(|| div().w(px(1.)).h(px(14.)).bg(theme::selected())))
             }))
-            .children(tools.iter().map(|&h| tool(h, this.clone())))
-            .child(
+            .children(folded.then(|| {
                 div()
-                    .id("md-preview")
+                    .id("md-format")
                     .size(px(26.))
                     .flex()
                     .flex_none()
@@ -2626,33 +2750,68 @@ impl Workspace {
                     .when(preview, |s| s.bg(theme::selected()))
                     .hover(|s| s.bg(theme::hover()))
                     .child(
-                        super::icons::icon("eye")
+                        super::icons::icon("type")
                             .size(px(15.))
-                            .text_color(if preview {
-                                theme::text()
-                            } else {
-                                theme::muted()
-                            }),
+                            .text_color(theme::muted()),
                     )
                     .tooltip_show_delay(crate::ui::hover::LONG)
-                    .tooltip(|_, cx| cx.new(|_| super::Tip("Preview  ⌘⇧P")).into())
-                    .on_click(move |_, _, cx| {
-                        toggle.update(cx, |this, cx| this.toggle_preview(cx)).ok();
-                    }),
-            );
+                    .tooltip(|_, cx| {
+                        cx.new(|_| super::Tip("Format: bold, code, link, list, preview"))
+                            .into()
+                    })
+                    .on_click(move |event, _, cx| {
+                        let (at, format) = (event.position(), format.clone());
+                        open_format
+                            .update(cx, |this, cx| this.open_menu(at, format, cx))
+                            .ok();
+                    })
+            }))
+            .children(
+                tools
+                    .iter()
+                    .filter(|_| !folded)
+                    .map(|&h| tool(h, this.clone())),
+            )
+            .when(!folded, |s| {
+                s.child(
+                    div()
+                        .id("md-preview")
+                        .size(px(26.))
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .when(preview, |s| s.bg(theme::selected()))
+                        .hover(|s| s.bg(theme::hover()))
+                        .child(
+                            super::icons::icon("eye")
+                                .size(px(15.))
+                                .text_color(if preview {
+                                    theme::text()
+                                } else {
+                                    theme::muted()
+                                }),
+                        )
+                        .tooltip_show_delay(crate::ui::hover::LONG)
+                        .tooltip(|_, cx| cx.new(|_| super::Tip("Preview  ⌘⇧P")).into())
+                        .on_click(move |_, _, cx| {
+                            toggle.update(cx, |this, cx| this.toggle_preview(cx)).ok();
+                        }),
+                )
+            });
         let edge = div()
             .flex()
-            .flex_wrap()
             .items_center()
-            .gap_x(px(8.))
-            .gap_y(px(6.))
+            .gap(px(8.))
             .px(px(6.))
             .pt(px(4.))
             .pb(px(6.))
             .child(helpers)
+            .child(div().flex_1().min_w_0())
             .child(
                 div()
-                    .ml_auto()
                     .flex()
                     .flex_none()
                     .items_center()
@@ -2749,6 +2908,8 @@ impl Workspace {
                     .absolute()
                     .top(px(pad_y))
                     .left(px(pad_x + 2.))
+                    // Bounded on the right, so a long hint wraps rather than being cut (#129).
+                    .right(px(pad_x))
                     .text_color(theme::muted())
                     .child(placeholder)
             }))
@@ -2871,4 +3032,43 @@ fn place_in(comment: &Comment, path: &str, data: &FileData) -> Option<Place> {
     }
     let side = data.side(comment.old);
     Some(review::place(comment, side.count(), |n| side.line(n).0))
+}
+
+/// What a composer's foot shows, by its box's width (Design shell round 6, 2026-10-24, #129). The
+/// foot is one row at each: what does not fit folds, nothing wraps and nothing is cut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Room {
+    /// 720 px and up: who sees it in words, the helpers, every button with its label and keys.
+    L,
+    /// The secondary buttons are their icons, who sees it its dot, the keys go.
+    M,
+    /// Under 420 px: the helpers fold into T, Send and ▾ into the primary's own ▾; the hint is
+    /// short.
+    S,
+}
+
+/// The room of a box `width` wide; 0 is not measured yet. A tight diff is never L.
+pub(super) fn room_for(width: f32, tight: bool) -> Room {
+    match width {
+        w if w > 0. && w < 420. => Room::S,
+        w if tight || (w > 0. && w < 720.) => Room::M,
+        _ => Room::L,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_composer_folds_its_foot_by_its_own_width() {
+        assert_eq!(room_for(0., false), Room::L);
+        assert_eq!(room_for(760., false), Room::L);
+        assert_eq!(room_for(630., false), Room::M);
+        assert_eq!(room_for(420., false), Room::M);
+        assert_eq!(room_for(419., false), Room::S);
+        assert_eq!(room_for(136., false), Room::S);
+        assert_eq!(room_for(900., true), Room::M);
+        assert_eq!(room_for(300., true), Room::S);
+    }
 }

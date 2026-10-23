@@ -74,7 +74,15 @@ const ICONS: &[(&str, &str)] = &[
             r#"<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>"#
         ),
     ),
-    // The composer's markdown helpers.
+    // The composer's markdown helpers, and T that holds them when its box is narrow (#129).
+    (
+        "type",
+        lucide!(
+            r#"<polyline points="4 7 4 4 20 4 20 7"/>"#
+            r#"<line x1="9" x2="15" y1="20" y2="20"/>"#
+            r#"<line x1="12" x2="12" y1="4" y2="20"/>"#
+        ),
+    ),
     (
         "bold",
         lucide!(
