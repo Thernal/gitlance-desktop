@@ -1376,6 +1376,10 @@ pub struct Workspace {
     agents_filter: agent::Filter,
     agent_row: Option<u64>,
     agents_archived: bool,
+    /// The chat whose notes alone are listed (a click on it), and whether every chat shows rather
+    /// than the first few (#94).
+    agents_chat: Option<String>,
+    agents_all_chats: bool,
     /// One's own public note asked about before it is deleted (#76).
     confirm_note: Option<u64>,
     /// The chat picked with Change… for a branch's notes ("" for any branch), by session (#77).
@@ -1634,6 +1638,8 @@ impl Workspace {
             agents_filter: Default::default(),
             agent_row: None,
             agents_archived: false,
+            agents_chat: None,
+            agents_all_chats: false,
             confirm_note: None,
             chat_routes: Default::default(),
             chats_known: false,

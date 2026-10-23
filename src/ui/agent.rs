@@ -15,6 +15,9 @@ use gpui::{
     ClickEvent, ClipboardItem, Context, FontWeight, KeyDownEvent, MouseButton, div, prelude::*,
 };
 
+/// The chats the Agents window shows before "N more" (#94).
+const CHATS_SHOWN: usize = 3;
+
 /// A chat the card offers.
 #[derive(Clone)]
 pub struct PickChat {
@@ -1004,91 +1007,162 @@ impl Workspace {
                 .count()
         };
         // Each chat here, in any worktree: its mark, what it works on, its state and branch (#77).
-        let chats = self.agent_chats.iter().enumerate().map(|(ix, c)| {
-            let busy = if c.listening() {
+        // Many of them (#94): those listening, then those working, then the gone, the latest heard
+        // first in each; the first few show, the rest under "N more", the one picked always.
+        let busy_of = |c: &crate::agents::Chat| {
+            if c.listening() {
                 0
             } else {
                 working(&c.session)
-            };
-            let (letter, hue) = self.chat_mark(&c.session);
-            let state = if c.listening() {
-                "listening".to_owned()
-            } else if busy > 0 {
-                format!("working · {}", super::plural(busy, "comment"))
+            }
+        };
+        let mut ordered: Vec<&crate::agents::Chat> = self.agent_chats.iter().collect();
+        ordered.sort_by_key(|c| {
+            let rank = if c.listening() {
+                0
+            } else if busy_of(c) > 0 {
+                1
             } else {
-                "gone".to_owned()
+                2
             };
-            // A long hover: the whole title, where it works, when it was last heard (X59).
-            let said: gpui::SharedString = format!(
-                "{}\n{} in {} · last heard {}",
-                c.title,
-                c.agent,
-                super::format::home_relative(&c.repo),
-                super::hover::full_date(c.beat)
-            )
-            .into();
+            (rank, std::cmp::Reverse(c.beat))
+        });
+        let picked_chat = self.chat_filter();
+        let hidden = if self.agents_all_chats {
+            0
+        } else {
+            ordered.len().saturating_sub(CHATS_SHOWN)
+        };
+        let shown: Vec<&crate::agents::Chat> = ordered
+            .iter()
+            .enumerate()
+            .filter(|(i, c)| {
+                *i < CHATS_SHOWN || hidden == 0 || Some(c.session.as_str()) == picked_chat
+            })
+            .map(|(_, c)| *c)
+            .collect();
+        let more = (ordered.len() > CHATS_SHOWN).then(|| {
             div()
-                .id(("chat-row", ix))
+                .id("chats-more")
                 .mx(px(6.))
                 .px(px(8.))
-                .py(px(6.))
-                .flex()
-                .items_start()
-                .gap(px(8.))
-                .tooltip_show_delay(super::hover::LONG)
-                .tooltip(move |_, cx| cx.new(|_| super::TipOwned(said.clone())).into())
-                .child(chat_badge(letter, hue, !c.listening() && busy == 0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(if c.title.is_empty() {
-                                            c.agent.clone()
-                                        } else {
-                                            c.title.clone()
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .text_size(px(11.))
-                                        .text_color(if c.listening() {
-                                            theme::added()
-                                        } else if busy > 0 {
-                                            theme::agent()
-                                        } else {
-                                            theme::faint()
-                                        })
-                                        .child(state),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .gap_2()
-                                .text_size(px(11.))
-                                .text_color(theme::faint())
-                                .child(c.agent.clone())
-                                .children((!c.branch.is_empty()).then(|| {
-                                    div().font_family(theme::CODE_FONT).child(c.branch.clone())
-                                })),
-                        ),
-                )
+                .py(px(4.))
+                .rounded(px(ROW_RADIUS))
+                .text_size(px(12.))
+                .text_color(theme::accent())
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::hover()))
+                .child(if hidden > 0 {
+                    format!(
+                        "{hidden} more {} ▾",
+                        if hidden == 1 { "chat" } else { "chats" }
+                    )
+                } else {
+                    "Fewer ▴".to_owned()
+                })
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.agents_all_chats = !this.agents_all_chats;
+                    cx.notify();
+                }))
         });
+        let chats: Vec<_> = shown
+            .into_iter()
+            .enumerate()
+            .map(|(ix, c)| {
+                let busy = busy_of(c);
+                let on = picked_chat == Some(c.session.as_str());
+                let session = c.session.clone();
+                let (letter, hue) = self.chat_mark(&c.session);
+                let state = if c.listening() {
+                    "listening".to_owned()
+                } else if busy > 0 {
+                    format!("working · {}", super::plural(busy, "comment"))
+                } else {
+                    "gone".to_owned()
+                };
+                // A long hover: the whole title, where it works, when it was last heard (X59).
+                let said: gpui::SharedString = format!(
+                    "{}\n{} in {} · last heard {}",
+                    c.title,
+                    c.agent,
+                    super::format::home_relative(&c.repo),
+                    super::hover::full_date(c.beat)
+                )
+                .into();
+                div()
+                    .id(("chat-row", ix))
+                    .mx(px(6.))
+                    .px(px(8.))
+                    .py(px(6.))
+                    .flex()
+                    .items_start()
+                    .gap(px(8.))
+                    .rounded(px(ROW_RADIUS))
+                    .cursor_pointer()
+                    .when(on, |s| s.bg(theme::selected()))
+                    .when(!on, |s| s.hover(|s| s.bg(theme::hover())))
+                    // A click lists that chat's notes alone; again, every chat's.
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.agents_chat =
+                            (this.chat_filter() != Some(session.as_str())).then(|| session.clone());
+                        this.agent_row = None;
+                        cx.notify();
+                    }))
+                    .tooltip_show_delay(super::hover::LONG)
+                    .tooltip(move |_, cx| cx.new(|_| super::TipOwned(said.clone())).into())
+                    .child(chat_badge(letter, hue, !c.listening() && busy == 0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(if c.title.is_empty() {
+                                                c.agent.clone()
+                                            } else {
+                                                c.title.clone()
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .text_size(px(11.))
+                                            .text_color(if c.listening() {
+                                                theme::added()
+                                            } else if busy > 0 {
+                                                theme::agent()
+                                            } else {
+                                                theme::faint()
+                                            })
+                                            .child(state),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_2()
+                                    .text_size(px(11.))
+                                    .text_color(theme::faint())
+                                    .child(c.agent.clone())
+                                    .children((!c.branch.is_empty()).then(|| {
+                                        div().font_family(theme::CODE_FONT).child(c.branch.clone())
+                                    })),
+                            ),
+                    )
+            })
+            .collect();
         // Where a note written here goes, and the way to change it (#77).
         let branch = self.page_branch();
         // "Goes to" the chat; why, in its tooltip (#79).
@@ -1159,7 +1233,7 @@ impl Workspace {
         let counts = |f: Filter| {
             self.comments
                 .iter()
-                .filter(|c| !c.archived && f.takes(kind_of(c, &alive)))
+                .filter(|c| !c.archived && f.takes(kind_of(c, &alive)) && self.of_chat_picked(c))
                 .count()
         };
         // A narrow window's chips go to a second line rather than past its edge (#80).
@@ -1244,8 +1318,15 @@ impl Workspace {
                 .overflow_y_scroll()
                 .py(px(6.))
                 .child(self.widths.measure("agents"))
-                .child(group_heading("Chats here".to_owned(), None))
+                .child(group_heading(
+                    match self.agent_chats.len() {
+                        0 | 1 => "Chats here".to_owned(),
+                        n => format!("Chats here · {n}"),
+                    },
+                    None,
+                ))
                 .children(chats)
+                .children(more)
                 .children(route)
                 .children(self.agent_chats.is_empty().then(|| {
                     div()
@@ -1512,6 +1593,19 @@ impl Workspace {
     }
 
     /// The comments the Agents window lists, newest first: the filter's, or the archived ones.
+    /// The chat picked in the Agents window, while it is still one of this repository's.
+    fn chat_filter(&self) -> Option<&str> {
+        self.agents_chat
+            .as_deref()
+            .filter(|s| self.agent_chats.iter().any(|c| c.session == *s))
+    }
+
+    /// Whether comment `c` was sent to the chat picked; any is, with none picked.
+    fn of_chat_picked(&self, c: &crate::review::Comment) -> bool {
+        self.chat_filter()
+            .is_none_or(|s| c.sent.as_ref().is_some_and(|sent| sent.session == s))
+    }
+
     fn listed_agent_ids(&self) -> Vec<u64> {
         let alive = |session: &str| self.chat_listens(session);
         let mut ids: Vec<u64> = self
@@ -1519,6 +1613,7 @@ impl Workspace {
             .iter()
             .filter(|c| c.archived == self.agents_archived)
             .filter(|c| self.agents_archived || self.agents_filter.takes(kind_of(c, &alive)))
+            .filter(|c| self.of_chat_picked(c))
             .map(|c| c.id)
             .collect();
         ids.sort_by_key(|&id| std::cmp::Reverse(id));
