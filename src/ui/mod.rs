@@ -1426,6 +1426,8 @@ pub struct Workspace {
     agent_pick: Option<agent::AgentPick>,
     /// When the agents' answers were last read (`agent.rs`).
     answers_stamp: Option<std::time::SystemTime>,
+    /// Codex's sessions looked at and handed their comments, in the background (#18).
+    codex_beat: Option<Task<()>>,
     /// The chats of this repository, for the Agents window (read while it is open).
     agent_chats: Vec<crate::agents::Chat>,
     /// The Agents window (#76): its filter, the row picked, whether the archived ones show.
@@ -1705,6 +1707,7 @@ impl Workspace {
             open_ask: None,
             agent_pick: None,
             answers_stamp: None,
+            codex_beat: None,
             agent_chats: Vec::new(),
             agents_filter: Default::default(),
             agent_row: None,

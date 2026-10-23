@@ -7,6 +7,7 @@ mod agents;
 mod applog;
 mod avatars;
 mod codeowners;
+mod codex;
 mod editor;
 mod emoji;
 mod file_icons;

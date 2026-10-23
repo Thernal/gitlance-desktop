@@ -173,6 +173,26 @@ impl Bus {
         let _ = std::fs::remove_file(self.chat_file(session));
     }
 
+    /// `name` held while the claim lives, so two windows of a project do not both do one thing
+    /// (Codex's hand-over, #18); one left over a minute by a crash is taken over.
+    pub fn claim(&self, name: &str) -> Option<Claim> {
+        let dir = self.dir.join("claims");
+        std::fs::create_dir_all(&dir).ok()?;
+        let file = dir.join(safe(name));
+        let stale = std::fs::metadata(&file)
+            .and_then(|m| m.modified())
+            .is_ok_and(|at| at.elapsed().unwrap_or_default().as_secs() > 60);
+        if stale {
+            let _ = std::fs::remove_file(&file);
+        }
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&file)
+            .ok()?;
+        Some(Claim(file))
+    }
+
     /// The chats that listened in project `root` (its main working tree), in any of its
     /// worktrees, newest first; a chat whose watcher stopped saying so is still there until the
     /// watcher removes it, and `listening` tells them apart.
@@ -229,6 +249,15 @@ impl Bus {
             .unwrap_or_default();
         apply(&mut comments, &self.answers(root));
         comments
+    }
+}
+
+/// Held by `Bus::claim` until dropped.
+pub struct Claim(PathBuf);
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 

@@ -967,6 +967,27 @@ impl Workspace {
         }));
     }
 
+    /// Codex has no watcher of its own: its open sessions here listen through the app, and what
+    /// was sent to one is handed over (`crate::codex`, #18) — off the window's thread, one beat
+    /// at a time; a snapshot leaves Codex alone.
+    fn codex_beat(&mut self, cx: &mut Context<Self>) {
+        let snapshot =
+            cfg!(feature = "snapshot") && std::env::var_os("GITLANCE_SNAPSHOT").is_some();
+        if snapshot || self.codex_beat.is_some() {
+            return;
+        }
+        let (Some(project), Some(bus)) = (self.project.clone().or(self.root.clone()), Self::bus())
+        else {
+            return;
+        };
+        self.codex_beat = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .spawn(async move { crate::codex::beat(&bus, &project) })
+                .await;
+            this.update(cx, |this, _| this.codex_beat = None).ok();
+        }));
+    }
+
     /// Takes in what the agents answered since the last look (from the 2-second poll).
     pub(super) fn poll_agents(&mut self, cx: &mut Context<Self>) {
         // The chats are read on every beat: the stripe shows who listens, a toast who comes and
@@ -980,6 +1001,7 @@ impl Workspace {
             cx.notify();
         }
         self.chats_known = true;
+        self.codex_beat(cx);
         self.read_chat_edits(cx);
         // An agent's draft of a report opens to be checked (#118).
         self.take_report_drafts(cx);
@@ -1410,7 +1432,7 @@ impl Workspace {
                         .py(px(4.))
                         .text_size(px(12.))
                         .text_color(theme::muted())
-                        .child("No chat listens in this repository. An agent starts listening with GitLance agent-watch (Settings → Agents).")
+                        .child("No chat listens in this repository. Claude Code starts listening with GitLance agent-watch (Settings → Agents); a Codex session open here listens by itself.")
                 }))
                 .child(div().px(px(10.)).pt(px(8.)).pb(px(6.)).child(filters))
                 .children(rows)
@@ -1928,7 +1950,7 @@ impl Workspace {
                                 .text_size(px(12.))
                                 .text_color(theme::faint())
                                 .child(keys::text(
-                                    "A chat listens once its agent runs GitLance's watcher — Settings → Agents connects Claude Code. ↑↓ choose, esc cancels.",
+                                    "A Claude Code chat listens once it runs GitLance's watcher (Settings → Agents); a Codex session open here listens by itself. ↑↓ choose, esc cancels.",
                                 ).into_owned()),
                         ),
                 ),
@@ -2035,7 +2057,7 @@ impl Workspace {
             .child(command("agents-cmd-claude", "Or by hand, in a terminal:", claude_cmd))
             .child(command(
                 "agents-cmd-codex",
-                "Codex (its tools; chats are not listed in Send to agent yet):",
+                "Codex (its tools; then a Codex session open in the project listens by itself):",
                 codex_cmd,
             ))
     }
