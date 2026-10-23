@@ -10,8 +10,8 @@ use super::lists::Field;
 use super::nav::BranchRow;
 use super::reviewed::Seen;
 use super::{Workspace, discussion, format, icons, island, keys, plural, px, theme, words};
-use crate::git::{ChangeKind, RefKind, Repo};
-use crate::mr::{Approvals, Mr, Pipeline, Thread};
+use crate::git::{BranchRef, ChangeKind, RefKind, Repo};
+use crate::mr::{Approvals, Mr, MrState, Pipeline, Thread};
 use gpui::{
     AnyElement, ClickEvent, Context, Div, FontWeight, Rgba, SharedString, Task, div, prelude::*,
 };
@@ -359,7 +359,7 @@ impl Workspace {
         let Some(m) = self
             .nav
             .pick_request
-            .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))
+            .and_then(|iid| self.requests.find(iid))
         else {
             return;
         };
@@ -420,12 +420,20 @@ impl Workspace {
         waiting(me, self.notices.threads_of(iid).unwrap_or_default())
     }
 
+    /// The branches a search lists, by index: a request's fetched head is none of them (#114).
+    pub(super) fn listed_branches(&self) -> impl Iterator<Item = (usize, &BranchRef)> {
+        self.branches
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.kind != RefKind::Request)
+    }
+
     /// Branches' rows in the order the list shows them: the working tree, local branches, then
     /// the branches of each open remote; a filter lists the matching branches only.
     pub(super) fn branch_rows(&self) -> Vec<BranchRow> {
         let filter = self.bfilter.to_lowercase();
         if !filter.trim().is_empty() {
-            return crate::rank::rank(self.branches.iter().enumerate(), &filter, |(_, b)| &b.name)
+            return crate::rank::rank(self.listed_branches(), &filter, |(_, b)| &b.name)
                 .into_iter()
                 .map(|(ix, _)| BranchRow::Branch(ix))
                 .collect();
@@ -520,9 +528,12 @@ impl Workspace {
     /// The requests the list has a row for, in its order: those of folded groups left out, but
     /// the picked one, which stays under its band.
     pub(super) fn listed_requests(&self) -> Vec<&Mr> {
+        let past = self.requests.view != MrState::Opened;
         self.shown_requests()
             .into_iter()
-            .filter(|m| self.nav.pick_request == Some(m.iid) || !self.folds(self.group_of(m)))
+            .filter(|m| {
+                past || self.nav.pick_request == Some(m.iid) || !self.folds(self.group_of(m))
+            })
             .collect()
     }
 
@@ -530,9 +541,7 @@ impl Workspace {
     pub(super) fn opened_before(&self, iid: u64) -> bool {
         let head = self
             .requests
-            .list
-            .iter()
-            .find(|m| m.iid == iid)
+            .find(iid)
             .and_then(|m| git2::Oid::from_str(&m.head).ok());
         self.roots.opened.contains(&iid) || !matches!(self.request_seen(iid, head), Seen::Never)
     }
@@ -564,7 +573,12 @@ impl Workspace {
                 .into_any_element();
         }
         let shown = self.shown_requests();
-        let loading = self.requests.loading && self.requests.list.is_empty();
+        // The merged or the closed (#114): a flat list, newest first, read as it is scrolled.
+        let past = (self.requests.view != MrState::Opened).then_some(&self.requests.past);
+        let loading = match past {
+            Some(p) => p.loading && p.list.is_empty(),
+            None => self.requests.loading && self.requests.list.is_empty(),
+        };
         let body = if loading {
             div()
                 .flex_1()
@@ -587,14 +601,17 @@ impl Workspace {
                         .child(skeleton(3)),
                 )
                 .into_any_element()
-        } else if shown.is_empty() {
+        } else if shown.is_empty() && past.is_none_or(|p| !p.more) {
             island()
                 .flex_1()
                 .bg(theme::editor())
                 .child(self.requests_empty(cx))
                 .into_any_element()
         } else {
-            let groups: Vec<Group> = shown.iter().map(|m| self.group_of(m)).collect();
+            let groups: Vec<Group> = match past {
+                Some(_) => vec![Group::New; shown.len()],
+                None => shown.iter().map(|m| self.group_of(m)).collect(),
+            };
             let picked = self
                 .nav
                 .pick_request
@@ -603,7 +620,7 @@ impl Workspace {
                     shown
                         .iter()
                         .zip(&groups)
-                        .find(|(_, g)| !self.folds(**g))
+                        .find(|(_, g)| past.is_some() || !self.folds(**g))
                         .map(|(m, _)| m)
                 })
                 .copied();
@@ -612,6 +629,13 @@ impl Workspace {
             let mut bands: Vec<(usize, Group, usize)> = Vec::new();
             let mut picked_row = None;
             for (n, (m, &g)) in shown.iter().zip(&groups).enumerate() {
+                if past.is_some() {
+                    if picked.is_some_and(|p| p.iid == m.iid) {
+                        picked_row = Some(rows.len());
+                    }
+                    rows.push(self.request_row(m, g, cx).into_any_element());
+                    continue;
+                }
                 if n == 0 || groups[n - 1] != g {
                     let count = groups.iter().filter(|&&o| o == g).count();
                     bands.push((rows.len(), g, count));
@@ -634,10 +658,59 @@ impl Workspace {
                 }
                 rows.push(row);
             }
+            // More of them while there may be: a shimmer row at the end, read when it comes into
+            // sight (#114).
+            if let Some(error) = past.and_then(|p| p.error.as_ref()) {
+                rows.push(
+                    div()
+                        .px(px(16.))
+                        .py(px(12.))
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child(div().flex_1().min_w_0().truncate().child(error.clone()))
+                        .child(div().id("past-retry").child(bar_button("Retry")).on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.retry_past_page(cx)),
+                        ))
+                        .into_any_element(),
+                );
+            } else if past.is_some_and(|p| p.more || p.loading) {
+                rows.push(
+                    div()
+                        .id("past-more")
+                        .px(px(16.))
+                        .py(px(12.))
+                        .child(super::motion::shimmer("past-more-bars", 2))
+                        .into_any_element(),
+                );
+            }
             // The rows as the last frame laid them out, when they are these rows: where the list's
             // top is, so the band above it is held there.
             let scroll = &self.roots.scroll;
             let laid = scroll.children_count() == rows.len();
+            if past.is_some_and(|p| p.more && !p.loading) {
+                // Not laid out yet: looked at again once it is. A row's bounds are where it is
+                // in the unscrolled list.
+                let near = laid
+                    && scroll.bounds_for_item(rows.len() - 1).is_some_and(|b| {
+                        b.top() + scroll.offset().y < scroll.bounds().bottom() + px(BAND * 4.)
+                    });
+                if near || !laid {
+                    let this = cx.entity().downgrade();
+                    cx.defer(move |cx| {
+                        this.update(cx, |this, cx| {
+                            if near {
+                                this.load_past_page(cx);
+                            } else {
+                                cx.notify();
+                            }
+                        })
+                        .ok();
+                    });
+                }
+            }
             let top = f32::from(scroll.bounds().top() - scroll.offset().y);
             let top_of = |ix: usize| scroll.bounds_for_item(ix).map(|b| f32::from(b.top()));
             if self.roots.reveal.take()
@@ -719,6 +792,7 @@ impl Workspace {
         use super::requests::Scope;
         let all = self.requests.list.len();
         let filter = self.bfilter.trim().to_owned();
+        let view = self.requests.view;
         let show_all = |label: &'static str| {
             div()
                 .id("empty-show-all")
@@ -739,6 +813,57 @@ impl Workspace {
                     .into_owned(),
                 Some(show_all("Clear the filter")),
             );
+        }
+        // The merged or the closed (#114): none read, or none of this filter's.
+        if view != MrState::Opened {
+            let word = view.word().to_lowercase();
+            let past = &self.requests.past;
+            if let Some(error) = &past.error {
+                return empty_state(
+                    "pull-request",
+                    words::say(&format!("The {word} merge requests could not be read"))
+                        .into_owned(),
+                    error.clone(),
+                    Some(
+                        div()
+                            .id("past-retry")
+                            .child(bar_button("Retry"))
+                            .on_click(
+                                cx.listener(|this, _: &ClickEvent, _, cx| this.retry_past_page(cx)),
+                            )
+                            .into_any_element(),
+                    ),
+                );
+            }
+            let read = !past.list.is_empty();
+            return match self.requests.scope {
+                Scope::All => empty_state(
+                    "pull-request",
+                    words::say(&format!("No {word} merge requests")).into_owned(),
+                    words::say(&format!("Merge requests {word} in this project land here."))
+                        .into_owned(),
+                    None,
+                ),
+                Scope::ReviewMe => empty_state(
+                    "pull-request",
+                    format!("None {word} asked for your review"),
+                    words::say(&format!(
+                        "{} merge requests you were asked to review land here.",
+                        view.word()
+                    ))
+                    .into_owned(),
+                    read.then(|| show_all("Show all")),
+                ),
+                Scope::Mine => empty_state(
+                    "pull-request",
+                    format!("None of yours is {word}"),
+                    words::say(&format!(
+                        "The merge requests you opened land here once {word}."
+                    ))
+                    .into_owned(),
+                    read.then(|| show_all("Show all")),
+                ),
+            };
         }
         if self.requests.error.is_some() && all == 0 {
             return empty_state(
@@ -871,10 +996,11 @@ impl Workspace {
         let threads = self.notices.threads_of(iid).map(<[Thread]>::len);
         // A dot: a row of yours a thread waits on, another you have never opened; how far your
         // review is, its group says (#81).
-        let unread = match waiting {
-            Some(n) => n > 0,
-            None => !self.opened_before(iid),
-        };
+        let unread = m.state == MrState::Opened
+            && match waiting {
+                Some(n) => n > 0,
+                None => !self.opened_before(iid),
+            };
         // Its anatomy (#79): the number, the title and the pipeline's verdict always; who (or
         // what waits for you) and when while the list has 260 px; the threads and how far your
         // review is under 360 px leave first. The tooltip holds it all.
@@ -1114,7 +1240,11 @@ impl Workspace {
         if m.draft {
             facts.push("Draft".to_owned());
         }
-        facts.push(format!("updated {}", format::ago(m.updated)));
+        // A merged or closed one: when it was (its last update, as the list gives it, #114).
+        facts.push(match m.state {
+            MrState::Opened => format!("updated {}", format::ago(m.updated)),
+            s => format!("{} {}", s.word().to_lowercase(), format::ago(m.updated)),
+        });
         let waiting = if mine {
             self.waiting_threads(iid)
         } else {
@@ -1269,9 +1399,8 @@ impl Workspace {
         let me = self.requests.login.clone().unwrap_or_default();
         let mine = self
             .requests
-            .list
-            .iter()
-            .any(|m| m.iid == iid && !me.is_empty() && m.author_login == me);
+            .find(iid)
+            .is_some_and(|m| !me.is_empty() && m.author_login == me);
         let note = mine
             .then(|| {
                 self.waiting_threads(iid)
@@ -1834,6 +1963,7 @@ impl Workspace {
                 RefKind::Local if b.is_head => "Local branch · checked out".to_owned(),
                 RefKind::Local => "Local branch".to_owned(),
                 RefKind::Remote => "Remote branch".to_owned(),
+                RefKind::Request => "A merge request's head".to_owned(),
             })
             .child(div().flex_1())
             .children(fact.map(|f| {

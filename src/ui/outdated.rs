@@ -75,7 +75,7 @@ impl Workspace {
     fn latest_head(&self) -> Option<String> {
         self.requests
             .current
-            .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))
+            .and_then(|iid| self.requests.find(iid))
             .map(|m| m.head.clone())
             .filter(|h| !h.is_empty())
     }

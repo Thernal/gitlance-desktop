@@ -986,27 +986,22 @@ impl Workspace {
         }
     }
 
-    /// The request list came in: requests closed or merged since leave the menu, and a page
-    /// waiting for the list is shown.
+    /// The request list came in: requests open in the menu that are not in it any more (merged,
+    /// closed) stay there, what became of them read once (#114: no pin needed); a page waiting
+    /// for the list is shown.
     pub(super) fn requests_listed(&mut self, cx: &mut Context<Self>) {
-        let listed: Vec<u64> = self.requests.list.iter().map(|m| m.iid).collect();
         if self.requests.error.is_none() {
-            let before = self.nav.open.len();
-            self.nav.open.retain(|o| match o.item {
-                Item::Request(iid) => listed.contains(&iid),
-                Item::Branch(_) => true,
-            });
-            if before != self.nav.open.len() {
-                if let Some(Item::Request(iid)) = self.page_of(Space::Requests).and_then(Page::item)
-                    && !listed.contains(&iid)
-                {
-                    self.nav.pages[Space::Requests.ix()] = None;
-                    if self.nav.space == Space::Requests {
-                        self.show(Space::Requests, None, cx);
-                    }
-                }
-                self.save_nav();
-            }
+            let gone: Vec<u64> = self
+                .nav
+                .open
+                .iter()
+                .filter_map(|o| match o.item {
+                    Item::Request(iid) => Some(iid),
+                    Item::Branch(_) => None,
+                })
+                .filter(|iid| self.requests.find(*iid).is_none())
+                .collect();
+            self.read_left(gone, cx);
         }
         if let Some((space, page)) = self.nav.pending_show.take() {
             self.show(space, page, cx);

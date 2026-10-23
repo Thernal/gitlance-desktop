@@ -553,7 +553,7 @@ impl Workspace {
         let m = self
             .requests
             .current
-            .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid));
+            .and_then(|iid| self.requests.find(iid));
         let approved = self
             .requests
             .approvals

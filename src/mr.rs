@@ -10,7 +10,42 @@ use serde_json::Value;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Where a merge request is in its life (#114): open, merged, or closed without merging.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum MrState {
+    #[default]
+    Opened,
+    Merged,
+    Closed,
+}
+
+impl MrState {
+    /// GitLab's word for it in a list's `state=`.
+    fn query(self) -> &'static str {
+        match self {
+            MrState::Opened => "opened",
+            MrState::Merged => "merged",
+            MrState::Closed => "closed",
+        }
+    }
+
+    pub fn word(self) -> &'static str {
+        match self {
+            MrState::Opened => "Open",
+            MrState::Merged => "Merged",
+            MrState::Closed => "Closed",
+        }
+    }
+}
+
+/// Merged and closed requests come a page of this many at a time, as the list is scrolled.
+pub const PAST_PAGE: usize = 30;
+/// Open requests, a request's discussions, are read a page of this many at a time, every page.
+const OPEN_PAGE: usize = 100;
+/// No more than this many pages of one listing.
+const OPEN_PAGES: u32 = 10;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Mr {
     pub iid: u64,
     pub title: String,
@@ -30,6 +65,10 @@ pub struct Mr {
     pub reviewers: Vec<String>,
     /// What the author wrote about it, as the list gives it: the root page's preview (#72).
     pub description: String,
+    pub state: MrState,
+    /// What it was merged as (the merge or squash commit): its first parent is the target as it
+    /// was, so the diff is the request's, not what the target became since.
+    pub merged_with: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -253,26 +292,103 @@ fn fixture() -> Option<std::path::PathBuf> {
     std::env::var_os("GITLANCE_MR_FIXTURE").map(Into::into)
 }
 
+/// Every open request: page after page, until one comes short (#114).
 pub fn list(remote: &WebRemote) -> Result<Vec<Mr>> {
     if remote.github {
         return github::list(remote);
     }
-    let value = match fixture() {
+    if let Some(dir) = fixture() {
         // `list-error.txt` stands for a host that answers with that error (#72's states).
-        Some(dir) if dir.join("list-error.txt").exists() => {
+        if dir.join("list-error.txt").exists() {
             bail!(
                 "{}",
                 std::fs::read_to_string(dir.join("list-error.txt"))?.trim()
             )
         }
-        Some(dir) => serde_json::from_str(&std::fs::read_to_string(dir.join("mrs.json"))?)?,
+        let value = serde_json::from_str(&std::fs::read_to_string(dir.join("mrs.json"))?)?;
+        crate::avatars::harvest(&value);
+        return Ok(parse_mrs(&value));
+    }
+    let value = get_all(remote, "merge_requests?state=opened&order_by=updated_at")?;
+    crate::avatars::harvest(&value);
+    Ok(parse_mrs(&value))
+}
+
+/// Every item of a listing `endpoint`: page after page of `OPEN_PAGE`, until one comes short or
+/// `OPEN_PAGES` were read (#114).
+fn get_all(remote: &WebRemote, endpoint: &str) -> Result<Value> {
+    let join = if endpoint.contains('?') { '&' } else { '?' };
+    let mut all = Vec::new();
+    for page in 1..=OPEN_PAGES {
+        let value = get(
+            remote,
+            &format!("{endpoint}{join}per_page={OPEN_PAGE}&page={page}"),
+        )?;
+        let items = match value {
+            Value::Array(items) => items,
+            other => return Ok(other),
+        };
+        let last = items.len() < OPEN_PAGE;
+        all.extend(items);
+        if last {
+            break;
+        }
+    }
+    Ok(Value::Array(all))
+}
+
+/// Page `page` (from 1) of the merged or the closed requests, newest first, and whether another
+/// may follow (#114).
+pub fn list_past(remote: &WebRemote, state: MrState, page: u32) -> Result<(Vec<Mr>, bool)> {
+    if remote.github {
+        return github::list_past(remote, state, page);
+    }
+    let value = match fixture() {
+        // `mrs-merged.json`, `mrs-closed.json`: every one, cut into pages here.
+        Some(dir) => {
+            let file = dir.join(format!("mrs-{}.json", state.query()));
+            let all: Vec<Value> = std::fs::read_to_string(file)
+                .ok()
+                .and_then(|t| serde_json::from_str(&t).ok())
+                .unwrap_or_default();
+            let from = (page as usize - 1) * PAST_PAGE;
+            Value::Array(all.into_iter().skip(from).take(PAST_PAGE).collect())
+        }
         None => get(
             remote,
-            "merge_requests?state=opened&order_by=updated_at&per_page=100",
+            &format!(
+                "merge_requests?state={}&order_by=updated_at&per_page={PAST_PAGE}&page={page}",
+                state.query()
+            ),
         )?,
     };
     crate::avatars::harvest(&value);
-    Ok(parse_mrs(&value))
+    let mrs = parse_mrs(&value);
+    let more = mrs.len() == PAST_PAGE;
+    Ok((mrs, more))
+}
+
+/// One request, whatever its state: one that left the open list, to say what became of it.
+pub fn one(remote: &WebRemote, iid: u64) -> Result<Mr> {
+    if remote.github {
+        return github::one(remote, iid);
+    }
+    let value = match fixture() {
+        // The merged and the closed of the fixture.
+        Some(dir) => [MrState::Merged, MrState::Closed]
+            .iter()
+            .filter_map(|s| {
+                std::fs::read_to_string(dir.join(format!("mrs-{}.json", s.query()))).ok()
+            })
+            .filter_map(|t| serde_json::from_str::<Vec<Value>>(&t).ok())
+            .flatten()
+            .find(|m| m["iid"].as_u64() == Some(iid))
+            .ok_or_else(|| anyhow!("no request {iid} in the fixture"))?,
+        None => get(remote, &format!("merge_requests/{iid}"))?,
+    };
+    parse_mrs(&Value::Array(vec![value]))
+        .pop()
+        .ok_or_else(|| anyhow!("no request {iid}"))
 }
 
 pub fn threads(remote: &WebRemote, iid: u64) -> Result<Vec<Thread>> {
@@ -287,10 +403,7 @@ pub fn threads(remote: &WebRemote, iid: u64) -> Result<Vec<Thread>> {
                 Err(_) => Value::Array(Vec::new()),
             }
         }
-        None => get(
-            remote,
-            &format!("merge_requests/{iid}/discussions?per_page=100"),
-        )?,
+        None => get_all(remote, &format!("merge_requests/{iid}/discussions"))?,
     };
     Ok(parse_threads(&value))
 }
@@ -454,17 +567,15 @@ pub fn details(remote: &WebRemote, iid: u64) -> Result<Details> {
     let value = match fixture() {
         Some(dir) => match std::fs::read_to_string(dir.join(format!("mr-{iid}.json"))) {
             Ok(text) => serde_json::from_str(&text)?,
-            // Without its own file, the request's row in the list.
-            Err(_) => {
-                let list: Value =
-                    serde_json::from_str(&std::fs::read_to_string(dir.join("mrs.json"))?)?;
-                list.as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|m| m.get("iid").and_then(Value::as_u64) == Some(iid))
-                    .cloned()
-                    .unwrap_or(Value::Null)
-            }
+            // Without its own file, the request's row in the list, the open or the merged and
+            // closed.
+            Err(_) => ["mrs.json", "mrs-merged.json", "mrs-closed.json"]
+                .iter()
+                .filter_map(|f| std::fs::read_to_string(dir.join(f)).ok())
+                .filter_map(|t| serde_json::from_str::<Vec<Value>>(&t).ok())
+                .flatten()
+                .find(|m| m.get("iid").and_then(Value::as_u64) == Some(iid))
+                .unwrap_or(Value::Null),
         },
         None => get(remote, &format!("merge_requests/{iid}"))?,
     };
@@ -1084,6 +1195,7 @@ pub fn create(
             author_login: String::new(),
             reviewers: Vec::new(),
             description: String::new(),
+            ..Default::default()
         });
     }
     let value = request(
@@ -1571,6 +1683,16 @@ pub fn parse_mrs(value: &Value) -> Vec<Mr> {
                     .filter(|u| !u.is_empty())
                     .collect(),
                 description: text(m, "description"),
+                state: match m.get("state").and_then(Value::as_str) {
+                    Some("merged") => MrState::Merged,
+                    Some("closed" | "locked") => MrState::Closed,
+                    _ => MrState::Opened,
+                },
+                merged_with: ["merge_commit_sha", "squash_commit_sha"]
+                    .iter()
+                    .find_map(|k| m.get(*k).and_then(Value::as_str))
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned),
             })
         })
         .collect()
@@ -1719,6 +1841,31 @@ mod tests {
         ]);
         assert_eq!(changes_requested(&states), ["Ember Lind", "kestrel"]);
         assert!(changes_requested(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn a_request_says_its_state_and_what_it_was_merged_as() {
+        let mrs = parse_mrs(&json!([
+            { "iid": 1, "state": "opened", "merge_commit_sha": null },
+            { "iid": 2, "state": "merged", "merge_commit_sha": "abc", "squash_commit_sha": "def" },
+            { "iid": 3, "state": "merged", "merge_commit_sha": null, "squash_commit_sha": "def" },
+            { "iid": 4, "state": "closed" },
+            { "iid": 5, "state": "locked" }
+        ]));
+        let got: Vec<_> = mrs
+            .iter()
+            .map(|m| (m.iid, m.state, m.merged_with.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (1, MrState::Opened, None),
+                (2, MrState::Merged, Some("abc")),
+                (3, MrState::Merged, Some("def")),
+                (4, MrState::Closed, None),
+                (5, MrState::Closed, None),
+            ]
+        );
     }
 
     #[test]

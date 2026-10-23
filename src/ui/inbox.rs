@@ -134,7 +134,7 @@ impl Workspace {
         let (Some(root), Some(path)) = (self.root.clone(), t.path.clone()) else {
             return;
         };
-        let Some(m) = self.requests.list.iter().find(|m| m.iid == n.iid) else {
+        let Some(m) = self.requests.find(n.iid) else {
             return;
         };
         let heads: Vec<String> = t.commit.iter().cloned().chain([m.head.clone()]).collect();
@@ -491,7 +491,7 @@ impl Workspace {
     /// The selected notice: its request, the code, the discussion, the reply.
     fn render_inbox_preview(&self, n: &Notice, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let ix = self.notices.at;
-        let mr = self.requests.list.iter().find(|m| m.iid == n.iid);
+        let mr = self.requests.find(n.iid);
         let thread = self.inbox_thread(n);
         let me = self.requests.login.as_deref().unwrap_or_default();
         let props = div()

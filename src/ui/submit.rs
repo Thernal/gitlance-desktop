@@ -138,9 +138,7 @@ impl Workspace {
         };
         let head = self
             .requests
-            .list
-            .iter()
-            .find(|m| m.iid == iid)
+            .find(iid)
             .map(|m| m.head.clone())
             .unwrap_or_default();
         let drafts = !self.requests.drafts.is_empty();
@@ -203,9 +201,7 @@ impl Workspace {
         let iid = self.requests.current?;
         let title = self
             .requests
-            .list
-            .iter()
-            .find(|m| m.iid == iid)
+            .find(iid)
             .map(|m| m.title.clone())
             .unwrap_or_default();
         // What Approve does to the approvals: "1 / 2 → 2 / 2" where rules count them.

@@ -248,7 +248,7 @@ impl Workspace {
     /// branch, a branch's own, else the one checked out (#77).
     pub(super) fn page_branch(&self) -> Option<String> {
         if let Some(iid) = self.requests.current
-            && let Some(m) = self.requests.list.iter().find(|m| m.iid == iid)
+            && let Some(m) = self.requests.find(iid)
             && self.nav.space == super::spaces::Space::Requests
         {
             return Some(m.source.clone());

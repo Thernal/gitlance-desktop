@@ -69,7 +69,7 @@ impl Workspace {
         if let Some(m) = self
             .requests
             .current
-            .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))
+            .and_then(|iid| self.requests.find(iid))
         {
             add(&m.author_login, &m.author);
             for r in &m.reviewers {

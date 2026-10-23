@@ -977,6 +977,19 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.go_space(spaces::Space::Requests, cx);
                             continue;
                         }
+                        // The merged or the closed listed (#114).
+                        "merged-requests" | "closed-requests" => {
+                            this.set_request_view(
+                                if name.trim().starts_with("merged") {
+                                    crate::mr::MrState::Merged
+                                } else {
+                                    crate::mr::MrState::Closed
+                                },
+                                cx,
+                            );
+                            this.go_space(spaces::Space::Requests, cx);
+                            continue;
+                        }
                         "fold-changes" => {
                             this.layout.show_files = false;
                             continue;
@@ -3231,7 +3244,7 @@ impl Workspace {
             .requests
             .current
             .filter(|_| self.showing_request())
-            .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))
+            .and_then(|iid| self.requests.find(iid))
         {
             return format!("{} {}", words::number(m.iid), m.title);
         }

@@ -153,6 +153,25 @@ fn get(remote: &WebRemote, endpoint: &str) -> Result<Value> {
     rest(remote, "GET", endpoint, None)
 }
 
+/// Every item of a listing `endpoint`, page after page of 100, until one comes short (at most 10
+/// pages, #114).
+fn get_all(remote: &WebRemote, endpoint: &str) -> Result<Value> {
+    let join = if endpoint.contains('?') { '&' } else { '?' };
+    let mut all = Vec::new();
+    for page in 1..=10 {
+        let items = match get(remote, &format!("{endpoint}{join}per_page=100&page={page}"))? {
+            Value::Array(items) => items,
+            other => return Ok(other),
+        };
+        let last = items.len() < 100;
+        all.extend(items);
+        if last {
+            break;
+        }
+    }
+    Ok(Value::Array(all))
+}
+
 /// A GraphQL query or mutation on the repository (`$owner`, `$name` and `$number` are filled in);
 /// its `errors` come back as an error.
 fn graphql(remote: &WebRemote, query: &str, mut variables: Value) -> Result<Value> {
@@ -282,12 +301,43 @@ pub fn username(remote: &WebRemote) -> Result<String> {
 pub fn list(remote: &WebRemote) -> Result<Vec<Mr>> {
     let value = match read_fixture("pulls.json") {
         Some(v) => v?,
-        None => get(
-            remote,
-            "pulls?state=open&sort=updated&direction=desc&per_page=100",
-        )?,
+        None => get_all(remote, "pulls?state=open&sort=updated&direction=desc")?,
     };
     Ok(parse_pulls(&value))
+}
+
+/// Page `page` of the merged or the closed pull requests (GitHub lists both as closed, newest
+/// first), and whether another may follow.
+pub fn list_past(
+    remote: &WebRemote,
+    state: crate::mr::MrState,
+    page: u32,
+) -> Result<(Vec<Mr>, bool)> {
+    let per = crate::mr::PAST_PAGE;
+    let value = match read_fixture("pulls-closed.json") {
+        Some(v) => {
+            let all: Vec<Value> = v?.as_array().cloned().unwrap_or_default();
+            Value::Array(
+                all.into_iter()
+                    .skip((page as usize - 1) * per)
+                    .take(per)
+                    .collect(),
+            )
+        }
+        None => get(
+            remote,
+            &format!("pulls?state=closed&sort=updated&direction=desc&per_page={per}&page={page}"),
+        )?,
+    };
+    let all = parse_pulls(&value);
+    let more = all.len() == per;
+    Ok((all.into_iter().filter(|m| m.state == state).collect(), more))
+}
+
+/// One pull request, whatever its state.
+pub fn one(remote: &WebRemote, number: u64) -> Result<Mr> {
+    let value = get(remote, &format!("pulls/{number}"))?;
+    parse_pull(&value).ok_or_else(|| anyhow!("no pull request {number}"))
 }
 
 /// The reactions on comments (review comments, or the conversation's when `issue`), by id, under
@@ -450,6 +500,16 @@ fn parse_pull(p: &Value) -> Option<Mr> {
             .filter(|l| !l.is_empty())
             .collect(),
         description: s(&p["body"]),
+        // GitHub's closed covers merged: `merged_at` tells them apart.
+        state: match (s(&p["state"]).as_str(), p["merged_at"].is_string()) {
+            (_, true) => crate::mr::MrState::Merged,
+            ("closed", false) => crate::mr::MrState::Closed,
+            _ => crate::mr::MrState::Opened,
+        },
+        merged_with: p["merge_commit_sha"]
+            .as_str()
+            .filter(|s| !s.is_empty() && p["merged_at"].is_string())
+            .map(str::to_owned),
     })
 }
 
@@ -496,7 +556,7 @@ pub fn threads(remote: &WebRemote, number: u64) -> Result<Vec<Thread>> {
     let data = review_threads(remote, number)?;
     let issue = match read_fixture(&format!("comments-{number}.json")) {
         Some(v) => v?,
-        None => get(remote, &format!("issues/{number}/comments?per_page=100"))?,
+        None => get_all(remote, &format!("issues/{number}/comments"))?,
     };
     Ok(parse_threads(&data, &issue))
 }
@@ -1035,6 +1095,7 @@ pub fn create(
             author_login: String::new(),
             reviewers: Vec::new(),
             description: String::new(),
+            ..Default::default()
         });
     }
     let value = rest(

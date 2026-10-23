@@ -373,6 +373,33 @@ fn decorations_label_branches_remote_branches_and_tags() {
 }
 
 #[test]
+fn a_fetched_request_head_is_a_branch_of_its_own_kind() {
+    let mut fx = Fixture::new();
+    let a = fx.commit("refs/heads/main", &[], &[("a.txt", "1\n")], "a");
+    fx.repo
+        .reference("refs/remotes/origin/main", a, true, "fetch")
+        .unwrap();
+    fx.repo
+        .reference(&request_ref(401), a, true, "fetch")
+        .unwrap();
+    let kinds: Vec<_> = fx
+        .open()
+        .branches()
+        .unwrap()
+        .into_iter()
+        .map(|b| (b.name, b.kind))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("main".to_owned(), RefKind::Local),
+            ("origin/main".to_owned(), RefKind::Remote),
+            ("requests/401".to_owned(), RefKind::Request),
+        ]
+    );
+}
+
+#[test]
 fn range_pairs_tell_unchanged_modified_new_and_dropped_commits() {
     use super::PairKind::*;
     let mut fx = Fixture::new();

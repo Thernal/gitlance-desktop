@@ -59,17 +59,17 @@ impl Workspace {
     pub(super) fn go_to(&mut self, target: Target, cx: &mut Context<Self>) {
         match target {
             Target::Request { iid, note, line } => {
-                if !self.requests.list.iter().any(|m| m.iid == iid) {
-                    // The list is still loading: come back when it is in.
-                    if self.requests.loading {
+                if self.requests.find(iid).is_none() {
+                    // The list is still loading, or it is not an open one (merged, closed: read
+                    // on its own, #114): come back when it is in.
+                    if self.requests.loading || !self.requests.tried.contains(&iid) {
                         self.pending_link = Some(Target::Request { iid, note, line });
+                        if !self.requests.loading {
+                            self.read_left(vec![iid], cx);
+                        }
                     } else {
                         self.error = Some(
-                            format!(
-                                "{} is not an open merge request.",
-                                super::words::number(iid)
-                            )
-                            .into(),
+                            format!("{} could not be read.", super::words::number(iid)).into(),
                         );
                     }
                     return cx.notify();

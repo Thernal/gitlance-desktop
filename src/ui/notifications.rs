@@ -546,6 +546,7 @@ mod tests {
             author_login: author.into(),
             reviewers: vec!["you".into()],
             description: String::new(),
+            ..Default::default()
         }
     }
 

@@ -608,19 +608,17 @@ impl Workspace {
                     pick: Pick::Command(cmd),
                 })
                 .collect(),
-            Scope::Branches => {
-                crate::rank::rank(self.branches.iter().enumerate(), query, |(_, b)| &b.name)
-                    .into_iter()
-                    .take(60)
-                    .map(|(ix, b)| Item {
-                        group: "Branches",
-                        label: b.name.clone(),
-                        detail: format::short(b.tip),
-                        key: "",
-                        pick: Pick::Branch(ix),
-                    })
-                    .collect()
-            }
+            Scope::Branches => crate::rank::rank(self.listed_branches(), query, |(_, b)| &b.name)
+                .into_iter()
+                .take(60)
+                .map(|(ix, b)| Item {
+                    group: "Branches",
+                    label: b.name.clone(),
+                    detail: format::short(b.tip),
+                    key: "",
+                    pick: Pick::Branch(ix),
+                })
+                .collect(),
             Scope::Commits => self
                 .commits
                 .iter()
@@ -916,7 +914,7 @@ impl Workspace {
         }
         if scope.is_none_or(|s| s == '#') && !words.is_empty() | scope.is_some() {
             items.extend(
-                crate::rank::rank(self.branches.iter().enumerate(), rest, |(_, b)| &b.name)
+                crate::rank::rank(self.listed_branches(), rest, |(_, b)| &b.name)
                     .into_iter()
                     .take(cap(3))
                     .map(|(ix, b)| Item {

@@ -52,6 +52,8 @@ pub enum Act {
     OpenPathWith(std::path::PathBuf, super::open_in::App),
     /// A note for the agent on a folder of Code's tree (its right click, #97).
     FolderNote(String),
+    /// The requests list shows the open, the merged or the closed (#114).
+    RequestView(crate::mr::MrState),
     AlwaysOpen(String),
     EditorSettings,
 }
@@ -170,6 +172,7 @@ impl Workspace {
             Act::CodeRevision(rev) => self.set_code_revision(rev, cx),
             Act::OpenWith(app) => self.open_with_app(app),
             Act::OpenPathWith(path, app) => self.open_path_with(&path, app),
+            Act::RequestView(state) => self.set_request_view(state, cx),
             Act::FolderNote(path) => {
                 self.open_folder_page(path.clone(), cx);
                 self.start_folder_comment(&path, cx);

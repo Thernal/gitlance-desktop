@@ -22,6 +22,20 @@ pub enum Scope {
     Mine,
 }
 
+/// The merged or the closed requests (#114), read a page at a time as the list is scrolled.
+#[derive(Default)]
+pub struct Past {
+    /// Which they are; Opened shows the open list.
+    pub of: mr::MrState,
+    pub list: Vec<Mr>,
+    /// The pages read, and whether another may follow.
+    pub pages: u32,
+    pub more: bool,
+    pub loading: bool,
+    pub error: Option<String>,
+    task: Option<Task<()>>,
+}
+
 #[derive(Default)]
 pub struct Requests {
     pub scope: Scope,
@@ -33,6 +47,16 @@ pub struct Requests {
     /// A GitLab project without a token: the rail offers to connect instead of listing.
     pub connectable: bool,
     pub list: Vec<Mr>,
+    /// The state the list shows (Open ▾, #114), and the merged or closed read so far.
+    pub view: mr::MrState,
+    pub past: Past,
+    /// Requests open in the menu that left the open list: what became of them (merged, closed),
+    /// kept until closed there.
+    pub left: Vec<Mr>,
+    /// Requests whose head was fetched, its branch not being here: one try each.
+    pub heads_fetched: std::collections::HashSet<u64>,
+    /// Requests read one by one (gone from the open list, or a link's): one try each.
+    pub tried: std::collections::HashSet<u64>,
     pub loading: bool,
     pub error: Option<String>,
     /// When the list last came in: an error or being offline says how old the list is (#72).
@@ -66,7 +90,119 @@ pub struct Requests {
     thread_task: Option<Task<()>>,
 }
 
+impl Requests {
+    /// Request `iid` wherever it was read: the open list, the merged or closed, or the ones that
+    /// left the open list while open in the menu.
+    pub fn find(&self, iid: u64) -> Option<&Mr> {
+        self.list
+            .iter()
+            .chain(&self.past.list)
+            .chain(&self.left)
+            .find(|m| m.iid == iid)
+    }
+}
+
 impl Workspace {
+    /// The list shows the merged or the closed requests, or the open ones again (#114).
+    pub(super) fn set_request_view(&mut self, state: mr::MrState, cx: &mut Context<Self>) {
+        self.requests.view = state;
+        self.nav.pick_request = None;
+        if state != mr::MrState::Opened && self.requests.past.of != state {
+            self.requests.past = Past {
+                of: state,
+                more: true,
+                ..Past::default()
+            };
+            self.load_past_page(cx);
+        }
+        cx.notify();
+    }
+
+    /// The next page of the merged or closed requests, unless one is on its way or none follows.
+    pub(super) fn load_past_page(&mut self, cx: &mut Context<Self>) {
+        let past = &mut self.requests.past;
+        let (Some(remote), state) = (self.web.clone(), past.of) else {
+            return;
+        };
+        if past.loading || !past.more || state == mr::MrState::Opened {
+            return;
+        }
+        past.loading = true;
+        let page = past.pages + 1;
+        past.task = Some(cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async move { mr::list_past(&remote, state, page) })
+                .await;
+            this.update(cx, |this, cx| {
+                let past = &mut this.requests.past;
+                if past.of != state {
+                    return;
+                }
+                past.loading = false;
+                match read {
+                    Ok((list, more)) => {
+                        past.pages = page;
+                        past.more = more;
+                        past.error = None;
+                        let known: std::collections::HashSet<u64> =
+                            past.list.iter().map(|m| m.iid).collect();
+                        past.list
+                            .extend(list.into_iter().filter(|m| !known.contains(&m.iid)));
+                    }
+                    Err(e) => {
+                        past.more = false;
+                        past.error = Some(format!("{e:#}"));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// The page that could not be read, again.
+    pub(super) fn retry_past_page(&mut self, cx: &mut Context<Self>) {
+        let past = &mut self.requests.past;
+        past.error = None;
+        past.more = true;
+        self.load_past_page(cx);
+        cx.notify();
+    }
+
+    /// What became of requests `iids`, open in the menu but gone from the open list, or a link's
+    /// that is not open: each read once, kept in `left`; a link waiting for one goes on.
+    pub(super) fn read_left(&mut self, iids: Vec<u64>, cx: &mut Context<Self>) {
+        let iids: Vec<u64> = iids
+            .into_iter()
+            .filter(|iid| self.requests.tried.insert(*iid))
+            .collect();
+        let Some(remote) = self.web.clone().filter(|_| !iids.is_empty()) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    iids.into_iter()
+                        .filter_map(|iid| mr::one(&remote, iid).ok())
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                for m in read {
+                    if this.requests.find(m.iid).is_none() {
+                        this.requests.left.push(m);
+                    }
+                }
+                this.follow_pending_link(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Reads the open merge requests of the repository's project, when a token is configured.
     pub(super) fn load_requests(&mut self, cx: &mut Context<Self>) {
         let Some(remote) = self.web.clone() else {
@@ -127,12 +263,17 @@ impl Workspace {
         }));
     }
 
-    /// The request whose source branch is branch `ix` (`feat/x` and `origin/feat/x` alike).
+    /// The request whose source branch is branch `ix` (`feat/x` and `origin/feat/x` alike), or
+    /// whose head it is.
     pub(super) fn request_of_branch(&self, ix: usize) -> Option<&Mr> {
         let b = self.branches.get(ix)?;
         let name = match b.kind {
             RefKind::Remote => b.name.split_once('/').map_or(b.name.as_str(), |(_, n)| n),
             RefKind::Local => b.name.as_str(),
+            RefKind::Request => {
+                let iid = b.name.rsplit('/').next()?.parse().ok()?;
+                return self.requests.find(iid);
+            }
         };
         self.requests.list.iter().find(|m| m.source == name)
     }
@@ -154,7 +295,17 @@ impl Workspace {
             .as_ref()
             .or(self.open_request.as_ref())
             .map(|r| r.2)
-            .filter(|iid| self.request_of_branch(ix).is_some_and(|m| m.iid == *iid));
+            .filter(|iid| {
+                // Its source branch, or a branch at its head (a merged one's, #114).
+                self.request_of_branch(ix).is_some_and(|m| m.iid == *iid)
+                    || self
+                        .requests
+                        .find(*iid)
+                        .zip(self.branches.get(ix))
+                        .is_some_and(|(m, b)| {
+                            m.state != mr::MrState::Opened && b.tip.to_string() == m.head
+                        })
+            });
         if iid == self.requests.current && iid.is_none() {
             return;
         }
@@ -227,17 +378,12 @@ impl Workspace {
     /// Opens merge request `iid`: its branch in the lists and, as the diff, what the branch adds to
     /// its target — the diff the discussions and new comments belong to.
     pub(super) fn select_request(&mut self, iid: u64, cx: &mut Context<Self>) {
-        let Some((source, target)) = self
-            .requests
-            .list
-            .iter()
-            .find(|m| m.iid == iid)
-            .map(|m| (m.source.clone(), m.target.clone()))
-        else {
+        let Some(m) = self.requests.find(iid).cloned() else {
             return;
         };
+        let (source, target) = (m.source.clone(), m.target.clone());
         self.load_request_versions(iid, cx);
-        if let Some(m) = self.requests.list.iter().find(|m| m.iid == iid) {
+        if let Some(m) = self.requests.find(iid) {
             let (label, detail) = (m.title.clone(), super::words::number(iid));
             self.remember_place(super::recents::Key::Request(iid), label, detail);
         }
@@ -255,8 +401,19 @@ impl Workspace {
         // A GitHub pull request from a fork has no branch here; `pr/<n>` is where the hint below
         // fetches its head.
         let github = self.web.as_ref().is_some_and(|w| w.github);
-        let found = pick(&source).or_else(|| github.then(|| pick(&format!("pr/{iid}"))).flatten());
+        let head = crate::git::request_ref(iid);
+        let found = pick(&source)
+            // A merged or closed one's branch may have moved on since.
+            .filter(|&ix| {
+                m.state == mr::MrState::Opened || self.branches[ix].tip.to_string() == m.head
+            })
+            .or_else(|| github.then(|| pick(&format!("pr/{iid}"))).flatten())
+            .or_else(|| self.branches.iter().position(|b| b.refname == head));
         let Some(src) = found else {
+            // Not here: its head is fetched from the host, once, and then it opens (#114).
+            if self.requests.heads_fetched.insert(iid) {
+                return self.fetch_request_head(iid, github, cx);
+            }
             self.error = Some(
                 if github {
                     format!(
@@ -278,9 +435,63 @@ impl Workspace {
         self.arrive(super::nav::Page::Request(iid));
         if let Some(tgt) = tgt {
             let side = |ix: usize| (self.branches[ix].name.clone(), self.branches[ix].tip);
-            self.pending_compare = Some((side(tgt), side(src), iid));
+            let mut base = side(tgt);
+            // Merged: the target as it was, the merge commit's first parent, so the diff is what
+            // the request brought, not empty.
+            if let Some(parent) = m
+                .merged_with
+                .as_deref()
+                .and_then(|sha| git2::Oid::from_str(sha).ok())
+                .zip(self.root.as_deref())
+                .and_then(|(id, root)| Repo::open(root).ok()?.parent_of(id).ok())
+            {
+                base.1 = parent;
+            }
+            self.pending_compare = Some((base, side(src), iid));
         }
         self.select_branch(src, None, cx);
+    }
+
+    /// Fetches request `iid`'s head (its branch is gone, or a fork's), reads the branches again
+    /// and opens it; says why when the fetch fails.
+    fn fetch_request_head(&mut self, iid: u64, github: bool, cx: &mut Context<Self>) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let news = format!("Fetching {}…", super::words::number(iid));
+        self.toast_info(news.clone().into(), cx);
+        cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    super::fetch::fetch_request(&root, iid, github)?;
+                    Repo::open(&root)
+                        .and_then(|r| r.branches())
+                        .map_err(|e| format!("{e:#}"))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.toast_over(&news, cx);
+                match read {
+                    Ok(branches) => {
+                        this.branches = branches;
+                        this.select_request(iid, cx);
+                    }
+                    Err(e) => {
+                        this.error = Some(
+                            format!(
+                                "{}: its head could not be fetched — {e}",
+                                super::words::number(iid)
+                            )
+                            .into(),
+                        );
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// ⌥⌘L: closes the request on screen, back to the list (as ⌘W on it does).
@@ -641,7 +852,7 @@ impl Workspace {
         let author = self
             .requests
             .current
-            .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))
+            .and_then(|iid| self.requests.find(iid))
             .map(|m| m.author.clone());
         let rich = t
             .notes
@@ -1181,9 +1392,7 @@ impl Workspace {
         } else if a.can {
             let head = self
                 .requests
-                .list
-                .iter()
-                .find(|m| m.iid == iid)
+                .find(iid)
                 .map(|m| m.head.clone())
                 .unwrap_or_default();
             self.request_action(move |remote| mr::approve(&remote, iid, &head), cx);
@@ -1565,9 +1774,14 @@ impl Workspace {
     pub(super) fn shown_requests(&self) -> Vec<&Mr> {
         let filter = self.bfilter.to_lowercase();
         let words: Vec<&str> = filter.split_whitespace().collect();
-        let mut shown: Vec<&Mr> = self
-            .requests
-            .list
+        // The merged or the closed as read, newest first; the open by what they need (#114).
+        let past = self.requests.view != mr::MrState::Opened;
+        let list = if past {
+            &self.requests.past.list
+        } else {
+            &self.requests.list
+        };
+        let mut shown: Vec<&Mr> = list
             .iter()
             .filter(|m| self.in_scope(m, self.requests.scope))
             .filter(|m| {
@@ -1583,7 +1797,9 @@ impl Workspace {
             })
             .collect();
         // By what each needs from you, as the list groups them; the latest activity first.
-        shown.sort_by_key(|m| (self.group_of(m), std::cmp::Reverse(m.updated)));
+        if !past {
+            shown.sort_by_key(|m| (self.group_of(m), std::cmp::Reverse(m.updated)));
+        }
         shown
     }
 
@@ -1607,17 +1823,18 @@ impl Workspace {
         if self.requests.login.is_none() || loading {
             return None;
         }
-        let count = |scope: Scope| {
-            self.requests
-                .list
-                .iter()
-                .filter(|m| self.in_scope(m, scope))
-                .count()
+        // The merged or the closed: counted as far as they are read (#114).
+        let past = self.requests.view != mr::MrState::Opened;
+        let (list, more) = if past {
+            (&self.requests.past.list, self.requests.past.more)
+        } else {
+            (&self.requests.list, false)
         };
+        let count = |scope: Scope| list.iter().filter(|m| self.in_scope(m, scope)).count();
         let filter = |scope: Scope, id: &'static str, name: &'static str| {
             super::diff_view::chip(
                 id,
-                format!("{name} {}", count(scope)),
+                format!("{name} {}{}", count(scope), if more { "+" } else { "" }),
                 self.requests.scope == scope,
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -1625,11 +1842,32 @@ impl Workspace {
                 cx.notify();
             }))
         };
+        let view = self.requests.view;
+        let state = super::diff_view::chip("request-state", format!("{} ▾", view.word()), past)
+            .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                use super::menu::{Act, Entry};
+                let entries = [
+                    mr::MrState::Opened,
+                    mr::MrState::Merged,
+                    mr::MrState::Closed,
+                ]
+                .into_iter()
+                .map(|s| Entry::new(s.word(), Act::RequestView(s)).checked(s == view))
+                .collect();
+                this.open_menu(e.position(), vec![entries], cx);
+            }));
         Some(
-            super::diff_view::group()
-                .child(filter(Scope::All, "scope-all", "All"))
-                .child(filter(Scope::ReviewMe, "scope-review", "To review"))
-                .child(filter(Scope::Mine, "scope-mine", "Mine")),
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    super::diff_view::group()
+                        .child(filter(Scope::All, "scope-all", "All"))
+                        .child(filter(Scope::ReviewMe, "scope-review", "To review"))
+                        .child(filter(Scope::Mine, "scope-mine", "Mine")),
+                )
+                .child(state),
         )
     }
 

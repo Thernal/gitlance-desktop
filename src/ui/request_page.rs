@@ -7,7 +7,7 @@
 
 use super::nav::{Item, Page, Section};
 use super::{Workspace, format, icons, island, markdown, plural, px, theme, words};
-use crate::mr::{Details, Mr};
+use crate::mr::{Details, Mr, MrState};
 use gpui::{AnyElement, ClickEvent, Context, Div, FontWeight, Rgba, SharedString, div, prelude::*};
 
 /// Overview's column beside the description, and the least height it keeps when the
@@ -22,9 +22,7 @@ impl Workspace {
             return None;
         };
         self.requests
-            .list
-            .iter()
-            .find(|m| m.iid == iid)
+            .find(iid)
             .filter(|_| self.requests.current == Some(iid))
     }
 
@@ -238,10 +236,11 @@ impl Workspace {
                     } else {
                         m.author.clone()
                     }))
-                    .child(if mine {
-                        "want to merge"
-                    } else {
-                        "wants to merge"
+                    .child(match (m.state, mine) {
+                        (MrState::Merged, _) => "merged",
+                        (MrState::Closed, _) => "wanted to merge",
+                        (MrState::Opened, true) => "want to merge",
+                        (MrState::Opened, false) => "wants to merge",
                     })
                     .child(
                         div()
@@ -718,7 +717,7 @@ impl Workspace {
             .requests
             .current
             .filter(|_| self.showing_request())
-            .and_then(|iid| self.requests.list.iter().find(|m| m.iid == iid))?;
+            .and_then(|iid| self.requests.find(iid))?;
         Some(self.request_line(m, cx).into_any_element())
     }
 
@@ -772,12 +771,13 @@ fn commit_versions(commits: &[git2::Oid], tips: &[(usize, git2::Oid)]) -> Vec<Op
         .collect()
 }
 
-/// The request's state as a chip: open, or a draft.
+/// The request's state as a chip: open, a draft, merged or closed (#114).
 fn state_chip(m: &Mr) -> Div {
-    let (word, color) = if m.draft {
-        ("Draft", theme::warning())
-    } else {
-        ("Open", theme::added())
+    let (word, color) = match m.state {
+        MrState::Merged => ("Merged", theme::accent()),
+        MrState::Closed => ("Closed", theme::removed()),
+        MrState::Opened if m.draft => ("Draft", theme::warning()),
+        MrState::Opened => ("Open", theme::added()),
     };
     div()
         .flex_none()

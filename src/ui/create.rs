@@ -165,7 +165,7 @@ impl Workspace {
                 .name
                 .split_once('/')
                 .map_or(branch.name.clone(), |(_, n)| n.to_owned()),
-            RefKind::Local => branch.name.clone(),
+            RefKind::Local | RefKind::Request => branch.name.clone(),
         };
         let tip = branch.tip;
         let on_origin = self.branches.iter().any(|b| {

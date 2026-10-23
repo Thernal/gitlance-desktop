@@ -235,14 +235,15 @@ impl Workspace {
                     .any(|c| c.state == crate::review::State::Draft && paths.contains(&c.path));
                 match &open.item {
                     Item::Request(iid) => {
-                        let title = self
-                            .requests
-                            .list
-                            .iter()
-                            .find(|m| m.iid == *iid)
-                            .map(|m| m.title.clone())
+                        let m = self.requests.find(*iid);
+                        let title = m.map(|m| m.title.clone()).unwrap_or_default();
+                        // One merged or closed since stays here, saying so, until closed (#114).
+                        let state = m
+                            .map(|m| m.state)
+                            .filter(|s| *s != crate::mr::MrState::Opened)
+                            .map(|s| format!(" · {}", s.word().to_lowercase()))
                             .unwrap_or_default();
-                        let label = format!("{} {title}", super::words::number(*iid));
+                        let label = format!("{} {title}{state}", super::words::number(*iid));
                         OpenRow {
                             item: Some(open.item.clone()),
                             icon: "pull-request",

@@ -239,7 +239,7 @@ impl Workspace {
     /// A request's identity in words, for a long hover: its number and title, whose it is and
     /// where it merges, its state, when it was opened and updated, who reviews it.
     pub(super) fn request_tip(&self, iid: u64) -> Option<String> {
-        let m = self.requests.list.iter().find(|m| m.iid == iid)?;
+        let m = self.requests.find(iid)?;
         let mut lines = vec![
             format!("{} {}", words::number(iid), m.title),
             format!("{} wants to merge {} → {}", m.author, m.source, m.target),
@@ -532,10 +532,40 @@ impl Workspace {
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_submit(cx)))
                         .into_any_element(),
                 );
-                out.extend(
-                    self.render_approval_chip(cx)
-                        .map(IntoElement::into_any_element),
-                );
+                // A merged or closed one says so where its approval would be (#114).
+                let state = self
+                    .requests
+                    .current
+                    .and_then(|iid| self.requests.find(iid))
+                    .map(|m| m.state)
+                    .unwrap_or_default();
+                if state == crate::mr::MrState::Opened {
+                    out.extend(
+                        self.render_approval_chip(cx)
+                            .map(IntoElement::into_any_element),
+                    );
+                } else {
+                    let color = if state == crate::mr::MrState::Merged {
+                        theme::accent()
+                    } else {
+                        theme::removed()
+                    };
+                    out.push(
+                        div()
+                            .flex_none()
+                            .px(px(8.))
+                            .h(px(22.))
+                            .flex()
+                            .items_center()
+                            .rounded_full()
+                            .border_1()
+                            .border_color(color)
+                            .text_size(px(12.))
+                            .text_color(color)
+                            .child(state.word())
+                            .into_any_element(),
+                    );
+                }
             }
             _ => {}
         }

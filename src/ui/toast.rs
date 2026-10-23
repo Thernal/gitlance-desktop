@@ -48,6 +48,20 @@ impl Workspace {
         self.toast_with(text, None, true, cx);
     }
 
+    /// The news of `text` is over: its toast goes now.
+    pub(super) fn toast_over(&mut self, text: &str, cx: &mut Context<Self>) {
+        let ids: Vec<u64> = self
+            .toasts
+            .list
+            .iter()
+            .filter(|t| t.text.as_ref() == text)
+            .map(|t| t.id)
+            .collect();
+        for id in ids {
+            self.dismiss(id, cx);
+        }
+    }
+
     /// "Draft deleted · Money.kt:23" with Undo, which puts `comment` back.
     pub(super) fn toast_deleted(
         &mut self,

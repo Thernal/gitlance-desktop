@@ -106,10 +106,18 @@ pub enum DecoKind {
     Tag,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RefKind {
     Local,
     Remote,
+    /// A merge request's head fetched for one whose branch is not here (#114): `request_ref`,
+    /// never listed with the branches.
+    Request,
+}
+
+/// Where request `iid`'s head is fetched to: under no remote, so no `fetch --prune` drops it.
+pub fn request_ref(iid: u64) -> String {
+    format!("refs/gitlance/requests/{iid}")
 }
 
 #[derive(Clone, Debug)]
@@ -366,15 +374,20 @@ impl Repo {
 
     /// The web address of the repository's remote (`origin`, else the first one), when it has one.
     pub fn web_remote(&self) -> Option<WebRemote> {
+        let remote = self.inner.find_remote(&self.web_remote_name()?).ok()?;
+        WebRemote::parse(remote.url().ok()?)
+    }
+
+    /// The name of the remote `web_remote` reads: `origin`, else the first one.
+    pub fn web_remote_name(&self) -> Option<String> {
         let remotes = self.inner.remotes().ok()?;
         let names: Vec<&str> = remotes.iter().flatten().flatten().collect();
-        let name = names
+        names
             .iter()
             .copied()
             .find(|n| *n == "origin")
-            .or_else(|| names.first().copied())?;
-        let remote = self.inner.find_remote(name).ok()?;
-        WebRemote::parse(remote.url().ok()?)
+            .or_else(|| names.first().copied())
+            .map(str::to_owned)
     }
 
     /// The branches, remote branches and tags that point at each commit.
@@ -441,13 +454,20 @@ impl Repo {
                 is_head: branch.is_head(),
             });
         }
-        out.sort_by(|a, b| {
-            (a.kind == RefKind::Remote, !a.is_head, &a.name).cmp(&(
-                b.kind == RefKind::Remote,
-                !b.is_head,
-                &b.name,
-            ))
-        });
+        for reference in self.inner.references_glob("refs/gitlance/requests/*")? {
+            let reference = reference?;
+            let (Ok(refname), Some(tip)) = (reference.name(), reference.target()) else {
+                continue;
+            };
+            out.push(BranchRef {
+                name: refname.trim_start_matches("refs/gitlance/").to_owned(),
+                refname: refname.to_owned(),
+                kind: RefKind::Request,
+                tip,
+                is_head: false,
+            });
+        }
+        out.sort_by(|a, b| (a.kind, !a.is_head, &a.name).cmp(&(b.kind, !b.is_head, &b.name)));
         Ok(out)
     }
 

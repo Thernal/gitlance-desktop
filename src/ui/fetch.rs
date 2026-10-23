@@ -1,7 +1,8 @@
 //! Background fetch: opt-in per repository. It runs the `git` CLI (so the user's SSH agent,
 //! credential helpers and VPN routes work unchanged), when the window gains focus and every few
 //! minutes. It is the one place GitLance writes to a repository: remote-tracking refs and objects,
-//! nothing else. The auto-refresh then sees the moved refs and marks new versions.
+//! and a merge request's head fetched to `refs/gitlance/requests/<n>` when its branch is not here
+//! (#114); nothing else. The auto-refresh then sees the moved refs and marks new versions.
 
 use super::px;
 use super::{Workspace, format, theme};
@@ -34,10 +35,32 @@ fn now() -> i64 {
 
 /// `git fetch --all --prune` in `root`; the error is a sentence a person can act on.
 fn run(root: &Path) -> Result<(), String> {
+    git_fetch(root, &["--all", "--prune"])
+}
+
+/// Request `iid`'s head, from where the host keeps it, to `git::request_ref` (#114): a merged or
+/// closed request whose branch is gone, or a fork's. Blocks; run it off the main thread.
+pub(super) fn fetch_request(root: &Path, iid: u64, github: bool) -> Result<(), String> {
+    let remote = crate::git::Repo::open(root)
+        .ok()
+        .and_then(|r| r.web_remote_name())
+        .ok_or_else(|| "The repository has no remote".to_owned())?;
+    let from = if github {
+        format!("refs/pull/{iid}/head")
+    } else {
+        format!("refs/merge-requests/{iid}/head")
+    };
+    let spec = format!("+{from}:{}", crate::git::request_ref(iid));
+    git_fetch(root, &[&remote, &spec])
+}
+
+/// `git fetch --quiet` with `args` in `root`, given up after `TIMEOUT`.
+fn git_fetch(root: &Path, args: &[&str]) -> Result<(), String> {
     let mut child = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["fetch", "--all", "--prune", "--quiet"])
+        .args(["fetch", "--quiet"])
+        .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
