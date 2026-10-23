@@ -362,7 +362,7 @@ impl Workspace {
                 ))
                 .child(item(
                     "Fetch in the background",
-                    "Runs git fetch --all --prune for this repository every 5 minutes and when the window comes back to the front, so other people’s force pushes show up as versions. It writes remote-tracking refs and objects — the one exception to the read-only rule — and uses your own git, SSH agent and VPN. Off until you turn it on, per repository.",
+                    "Runs git fetch --all --prune for this repository every 5 minutes and when the window comes back to the front, so other people’s force pushes show up as versions. It writes remote-tracking refs and objects — the one exception to the read-only rule — and uses your own git, SSH agent and VPN. On for every repository; turn it off here for this one.",
                     fetch,
                 ))
                 .into_any_element(),

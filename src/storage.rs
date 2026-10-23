@@ -71,23 +71,28 @@ pub fn remember(path: &Path) -> Vec<PathBuf> {
     list
 }
 
-/// Whether background fetch is on for this repository (opt-in, per repository).
+/// Whether background fetch is on for this repository: on unless turned off for it
+/// (`fetch-off.txt`). Until 1.0.1 it was off until turned on (`fetch.txt`, no longer read).
 pub fn fetch_enabled(root: &Path) -> bool {
     let want = root.display().to_string();
-    read("fetch.txt").lines().any(|l| l == want)
+    !read("fetch-off.txt").lines().any(|l| l == want)
 }
 
 pub fn set_fetch_enabled(root: &Path, on: bool) {
-    let want = root.display().to_string();
-    let mut lines: Vec<String> = read("fetch.txt")
+    let body = turned_off(&read("fetch-off.txt"), &root.display().to_string(), !on);
+    save("fetch-off.txt", body);
+}
+
+/// The repositories fetch is off for, `want` listed or not.
+fn turned_off(list: &str, want: &str, off: bool) -> String {
+    let mut lines: Vec<&str> = list
         .lines()
         .filter(|l| !l.is_empty() && *l != want)
-        .map(str::to_owned)
         .collect();
-    if on {
+    if off {
         lines.push(want);
     }
-    save("fetch.txt", lines.join("\n") + "\n");
+    lines.join("\n") + "\n"
 }
 
 /// Pane sizes in logical pixels.
@@ -535,6 +540,15 @@ fn pairs(text: &str) -> impl Iterator<Item = (&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fetch_is_on_until_turned_off_for_a_repository() {
+        let off = turned_off("", "/p/app", true);
+        assert_eq!(off, "/p/app\n");
+        assert_eq!(turned_off(&off, "/p/web", true), "/p/app\n/p/web\n");
+        assert_eq!(turned_off(&off, "/p/app", false), "\n");
+        assert_eq!(turned_off(&off, "/p/app", true), "/p/app\n");
+    }
 
     #[test]
     fn settings_round_trip_and_default_to_the_designed_choices() {

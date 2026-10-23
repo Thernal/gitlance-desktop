@@ -1,4 +1,4 @@
-//! Background fetch: opt-in per repository. It runs the `git` CLI (so the user's SSH agent,
+//! Background fetch: on for every repository until turned off for it. It runs the `git` CLI (so the user's SSH agent,
 //! credential helpers and VPN routes work unchanged), when the window gains focus and every few
 //! minutes. It is the one place GitLance writes to a repository: remote-tracking refs and objects,
 //! and a merge request's head fetched to `refs/gitlance/requests/<n>` when its branch is not here
@@ -122,9 +122,17 @@ fn explain(stderr: &str) -> String {
 }
 
 impl Workspace {
-    /// Called when a repository opens: reads the opt-in and starts the timer.
+    /// Called when a repository opens: reads whether it is turned off and starts the timer.
     pub(super) fn start_fetching(&mut self, cx: &mut Context<Self>) {
-        let enabled = self.root.as_deref().is_some_and(storage::fetch_enabled);
+        // A plain folder, or a repository with no remote, has nothing to fetch.
+        let enabled = !self.plain
+            && self.root.as_deref().is_some_and(|root| {
+                storage::fetch_enabled(root)
+                    && crate::git::Repo::open(root)
+                        .ok()
+                        .and_then(|r| r.web_remote_name())
+                        .is_some()
+            });
         self.fetch = Fetch {
             enabled,
             ..Fetch::default()
