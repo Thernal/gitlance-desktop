@@ -361,24 +361,3 @@ impl Workspace {
             .then(|| div().flex_none().w(px(super::gap())))
     }
 }
-
-/// A small button in a tool window's header or foot.
-pub fn tool_button(
-    id: impl Into<gpui::ElementId>,
-    label: impl Into<SharedString>,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .px_2()
-        .h(px(24.))
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap_2()
-        .rounded(px(ROW_RADIUS))
-        .text_size(px(12.))
-        .text_color(theme::muted())
-        .cursor_pointer()
-        .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
-        .child(label.into())
-}

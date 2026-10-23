@@ -1495,8 +1495,11 @@ impl Workspace {
     }
 
     /// An outdated discussion in the Discussions window: where, its first words, whether its line
-    /// changed, Show and Resolve (decided 2026-10-16: resolve from the list).
+    /// changed. A click shows it — its line where it is now, else the versions compared since —,
+    /// and it is resolved or reopened there, where it is read (the developer, 2026-10-23: no Show
+    /// or Reopen on the row).
     fn outdated_item(&self, ix: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
+        use super::hover::Hover;
         let t = &self.requests.threads[ix];
         let line_now = self.requests.histories.get(&t.id).and_then(|h| h.line_now);
         let path = t.path.clone().unwrap_or_default();
@@ -1507,15 +1510,17 @@ impl Workspace {
         );
         let first = &t.notes[0];
         let written = self.requests.histories.get(&t.id).map(|h| h.written);
-        // Says what it does: the line where it is now, or (gone) the versions compared.
-        let show = match (line_now, self.compare_label(ix)) {
-            (Some(_), _) => "Show line".to_owned(),
+        // What a click does: the line where it is now, or (gone) the versions compared.
+        let shows = match (line_now, self.compare_label(ix)) {
+            (Some(_), _) => "Show its line now".to_owned(),
             (None, Some(compare)) => compare,
-            (None, None) => "Show".to_owned(),
+            (None, None) => String::new(),
         };
         div()
+            .id(("comment-old-item", ix))
             .flex()
             .flex_col()
+            .cursor_pointer()
             .child(comment_item(
                 ("comment-old", ix),
                 theme::faint(),
@@ -1527,36 +1532,20 @@ impl Workspace {
                     .pl(px(28.))
                     .pr(px(14.))
                     .pb(px(6.))
-                    .flex()
-                    // A narrow window's buttons go under the words, not past its edge.
-                    .flex_wrap()
-                    .items_center()
-                    .gap_2()
                     .text_size(px(11.))
+                    .text_color(theme::warning())
                     .child(
-                        div().flex_1().text_color(theme::warning()).child(
-                            self.since_comment(ix)
-                                .unwrap_or_else(|| "Written on an earlier version".to_owned()),
-                        ),
-                    )
-                    .child(
-                        super::tools::tool_button(("old-show", ix), show).on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| match line_now {
-                                Some(line) => this.jump_to_line(&path, line, false, cx),
-                                None if written.is_some() => this.compare_since(ix, cx),
-                                None => {}
-                            },
-                        )),
-                    )
-                    .children(t.resolvable.then(|| {
-                        super::tools::tool_button(
-                            ("old-resolve", ix),
-                            if t.resolved { "Reopen" } else { "Resolve" },
-                        )
-                        .on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| this.toggle_resolved(ix, cx),
-                        ))
-                    })),
+                        self.since_comment(ix)
+                            .unwrap_or_else(|| "Written on an earlier version".to_owned()),
+                    ),
+            )
+            .when(!shows.is_empty(), |s| s.tip(shows))
+            .on_click(
+                cx.listener(move |this, _: &ClickEvent, _, cx| match line_now {
+                    Some(line) => this.jump_to_line(&path, line, false, cx),
+                    None if written.is_some() => this.compare_since(ix, cx),
+                    None => {}
+                }),
             )
             .into_any_element()
     }
