@@ -413,21 +413,11 @@ impl Workspace {
         )
     }
 
-    /// The discussions of request `iid` waiting for its author: open, and the last word not
-    /// theirs. Read with the notifications (`notices`), so only for requests read there.
+    /// The discussions of request `iid` waiting for its author (`waiting`). Read with the
+    /// notifications (`notices`), so only for requests read there.
     fn waiting_threads(&self, iid: u64) -> Vec<&Thread> {
         let me = self.requests.login.as_deref().unwrap_or_default();
-        self.notices
-            .threads_of(iid)
-            .unwrap_or_default()
-            .iter()
-            .filter(|t| {
-                t.resolvable
-                    && !t.resolved
-                    && !me.is_empty()
-                    && t.notes.last().is_some_and(|n| n.login != me)
-            })
-            .collect()
+        waiting(me, self.notices.threads_of(iid).unwrap_or_default())
     }
 
     /// Branches' rows in the order the list shows them: the working tree, local branches, then
@@ -2188,6 +2178,35 @@ fn change_letter(change: ChangeKind) -> (&'static str, Rgba) {
     }
 }
 
+/// Of a request's `threads`, those waiting for `me`, its author: the last word not mine, and —
+/// a discussion — still open, or — a plain comment, which cannot be resolved (X21, the developer,
+/// 2026-10-23) — written after anything I wrote on the request.
+fn waiting<'a>(me: &str, threads: &'a [Thread]) -> Vec<&'a Thread> {
+    if me.is_empty() {
+        return Vec::new();
+    }
+    let my_last = threads
+        .iter()
+        .flat_map(|t| &t.notes)
+        .filter(|n| n.login == me)
+        .map(|n| n.created)
+        .max()
+        .unwrap_or(0);
+    threads
+        .iter()
+        .filter(|t| match t.notes.last() {
+            Some(last) if last.login != me => {
+                if t.resolvable {
+                    !t.resolved
+                } else {
+                    last.created > my_last
+                }
+            }
+            _ => false,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2231,6 +2250,49 @@ mod tests {
             kept_list("a\treviewed\t398\n", "a"),
             Some((HashSet::new(), HashSet::from([398]), false))
         );
+    }
+
+    #[test]
+    fn a_plain_comment_waits_for_the_author_until_they_write_again() {
+        use crate::mr::{Note, Thread};
+        let note = |login: &str, created: i64| Note {
+            id: created as u64,
+            author: login.into(),
+            login: login.into(),
+            body: String::new(),
+            created,
+        };
+        let thread = |notes: Vec<Note>, resolvable: bool, resolved: bool| Thread {
+            id: String::new(),
+            notes,
+            path: None,
+            new_line: None,
+            old_line: None,
+            resolved,
+            resolvable,
+            resolved_by: None,
+            resolved_at: 0,
+            commit: None,
+            outdated: false,
+        };
+        let threads = [
+            // An open discussion, its last word theirs: waits.
+            thread(vec![note("me", 1), note("ember", 2)], true, false),
+            // Resolved: does not.
+            thread(vec![note("ember", 3)], true, true),
+            // A plain comment after my last word: waits.
+            thread(vec![note("kestrel", 9)], false, false),
+            // A plain comment before it: I have written since.
+            thread(vec![note("kestrel", 4)], false, false),
+            // My own last word.
+            thread(vec![note("ember", 5), note("me", 8)], true, false),
+        ];
+        let waits: Vec<i64> = waiting("me", &threads)
+            .iter()
+            .map(|t| t.notes.last().unwrap().created)
+            .collect();
+        assert_eq!(waits, [2, 9]);
+        assert!(waiting("", &threads).is_empty());
     }
 
     #[test]
