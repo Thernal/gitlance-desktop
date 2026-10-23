@@ -24,11 +24,20 @@ impl Crumb {
         }
     }
 
-    fn plain(label: impl Into<String>) -> Self {
+    /// A folder above a file or folder in Code: a way to its page (A, 2026-10-23).
+    fn folder(label: &str, path: String) -> Self {
         Self {
-            label: label.into(),
+            label: label.to_owned(),
             mono: false,
-            to: None,
+            to: Some(Some(Page::Folder(path))),
+        }
+    }
+
+    /// The folder of Code this part goes up to, for its right click and its note's dot.
+    fn code_folder(&self) -> Option<&str> {
+        match &self.to {
+            Some(Some(Page::Folder(path))) => Some(path),
+            _ => None,
         }
     }
 }
@@ -55,6 +64,10 @@ impl Workspace {
         let from = self.nav.from.filter(|_| page.is_some() && !self.compact());
         let crumbs = path.into_iter().enumerate().map(|(n, crumb)| {
             let link = crumb.to.clone();
+            // A folder of Code: its right click writes a note for your agent on it, and a note
+            // waiting there is its dot, as in the tree (A, 2026-10-23).
+            let folder = crumb.code_folder().map(str::to_owned);
+            let noted = folder.as_deref().is_some_and(|f| self.folder_note_waits(f));
             div()
                 .flex()
                 .items_center()
@@ -62,8 +75,14 @@ impl Workspace {
                 .child(
                     div()
                         .id(SharedString::from(format!("crumb-{n}")))
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
                         .when(crumb.mono, |s| s.font_family(theme::CODE_FONT))
                         .child(words::say(&crumb.label).into_owned())
+                        .when(noted, |s| {
+                            s.child(div().size(px(6.)).rounded_full().bg(theme::agent()))
+                        })
                         .when_some(link, |s, to| {
                             s.cursor_pointer()
                                 .hover(|s| s.text_color(theme::accent()))
@@ -71,6 +90,14 @@ impl Workspace {
                                     this.nav.from = None;
                                     this.show(space, to.clone(), cx)
                                 }))
+                        })
+                        .when_some(folder, |s, folder| {
+                            s.on_mouse_down(
+                                gpui::MouseButton::Right,
+                                cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                                    this.crumb_menu(folder.clone(), e.position, cx)
+                                }),
+                            )
                         }),
                 )
                 .child(div().text_color(theme::faint()).child("›"))
@@ -183,6 +210,34 @@ impl Workspace {
                 )
             });
         Some(bar.into_any_element())
+    }
+
+    /// A folder of the path's right click: a note for your agent on it, its path, Finder.
+    fn crumb_menu(
+        &mut self,
+        folder: String,
+        at: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        use super::menu::{Act, Entry};
+        let mut place = vec![Entry::new("Copy path", Act::Copy(folder.clone()))];
+        if let Some(root) = &self.root {
+            place.push(Entry::new(
+                super::open_in::REVEAL,
+                Act::Reveal(root.join(&folder)),
+            ));
+        }
+        self.open_menu(
+            at,
+            vec![
+                vec![Entry::new(
+                    "A note for your agent on this folder",
+                    Act::FolderNote(folder),
+                )],
+                place,
+            ],
+            cx,
+        )
     }
 
     /// The page's title with what a long hover on it says (the developer, 2026-10-23: the header
@@ -300,7 +355,14 @@ impl Workspace {
                 let mut parts: Vec<&str> = path.split('/').collect();
                 let name = parts.pop().unwrap_or_default().to_owned();
                 let mut crumbs = vec![Crumb::up("Code", None), Crumb::up(project, None)];
-                crumbs.extend(parts.into_iter().map(Crumb::plain));
+                let mut above = String::new();
+                for part in parts {
+                    if !above.is_empty() {
+                        above.push('/');
+                    }
+                    above.push_str(part);
+                    crumbs.push(Crumb::folder(part, above.clone()));
+                }
                 (crumbs, name, false)
             }
             Some(Page::Branch(refname)) => {

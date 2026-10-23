@@ -52,6 +52,12 @@ pub enum Act {
     OpenPathWith(std::path::PathBuf, super::open_in::App),
     /// A note for the agent on a folder of Code's tree (its right click, #97).
     FolderNote(String),
+    /// Code's tabs (A, 2026-10-23), by key — a folder's ends with a slash: one shown, a preview
+    /// kept, one closed, every one but one (or all) closed.
+    CodeTab(String),
+    KeepCodeTab(String),
+    CloseCodeTab(String),
+    CloseCodeTabs(Option<String>),
     /// The requests list shows the open, the merged or the closed (#114).
     RequestView(crate::mr::MrState),
     AlwaysOpen(String),
@@ -177,6 +183,10 @@ impl Workspace {
                 self.open_folder_page(path.clone(), cx);
                 self.start_folder_comment(&path, cx);
             }
+            Act::CodeTab(key) => self.open_code_tab(&key, cx),
+            Act::KeepCodeTab(key) => self.keep_code_tab(&key, cx),
+            Act::CloseCodeTab(key) => self.close_code_tab(&key, cx),
+            Act::CloseCodeTabs(keep) => self.close_code_tabs(keep, cx),
             Act::AlwaysOpen(ext) => self.always_open(ext),
             Act::EditorSettings => self.open_settings(cx),
             // Need the window: `run_act_in` runs them.

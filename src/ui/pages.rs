@@ -5,7 +5,7 @@
 
 use super::nav::Section;
 use super::spaces::Space;
-use super::{Split, Workspace, gap, island, keys, motion, px, theme};
+use super::{Split, Workspace, gap, keys, motion, px, theme};
 use gpui::{AnyElement, ClickEvent, Context, div, prelude::*};
 
 impl Workspace {
@@ -169,58 +169,62 @@ impl Workspace {
             })
             .take(8)
             .collect();
-        island().flex_1().items_center().bg(theme::editor()).child(
-            div()
-                .w(px(440.))
-                .mt(px(72.))
-                .flex()
-                .flex_col()
-                .gap_3()
-                .child(
-                    div()
-                        .id("code-go-to-file")
-                        .h(px(30.))
-                        .px(px(10.))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .rounded(px(super::ROW_RADIUS))
-                        .border_1()
-                        .border_color(theme::island_border())
-                        .bg(theme::panel())
-                        .text_color(theme::faint())
-                        .cursor_pointer()
-                        .hover(|s| s.border_color(theme::border()))
-                        .child(
-                            super::icons::icon("search")
-                                .size(px(14.))
-                                .text_color(theme::faint()),
-                        )
-                        .child(div().flex_1().child("Go to a file"))
-                        .child(keys::caps("⌘P", keys::On::Plain))
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.search(super::palette::Scope::Files, cx)
-                        })),
-                )
-                .children((!recent.is_empty()).then(|| {
-                    div()
-                        .mt_2()
-                        .text_size(px(11.))
-                        .text_color(theme::faint())
-                        .child("Opened lately")
-                }))
-                .children(recent.into_iter().enumerate().map(|(ix, path)| {
-                    let open = path.clone();
-                    super::row(("code-recent", ix), false)
-                        .h(px(28.))
-                        .gap_2()
-                        .child(super::icons::file_icon(&path, 16.))
-                        .child(div().flex_1().min_w_0().truncate().child(path))
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.open_file_view(open.clone(), cx)
-                        }))
-                })),
-        )
+        self.code_island(cx)
+            .flex_1()
+            .items_center()
+            .bg(theme::editor())
+            .child(
+                div()
+                    .w(px(440.))
+                    .mt(px(72.))
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .id("code-go-to-file")
+                            .h(px(30.))
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .rounded(px(super::ROW_RADIUS))
+                            .border_1()
+                            .border_color(theme::island_border())
+                            .bg(theme::panel())
+                            .text_color(theme::faint())
+                            .cursor_pointer()
+                            .hover(|s| s.border_color(theme::border()))
+                            .child(
+                                super::icons::icon("search")
+                                    .size(px(14.))
+                                    .text_color(theme::faint()),
+                            )
+                            .child(div().flex_1().child("Go to a file"))
+                            .child(keys::caps("⌘P", keys::On::Plain))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.search(super::palette::Scope::Files, cx)
+                            })),
+                    )
+                    .children((!recent.is_empty()).then(|| {
+                        div()
+                            .mt_2()
+                            .text_size(px(11.))
+                            .text_color(theme::faint())
+                            .child("Opened lately")
+                    }))
+                    .children(recent.into_iter().enumerate().map(|(ix, path)| {
+                        let open = path.clone();
+                        super::row(("code-recent", ix), false)
+                            .h(px(28.))
+                            .gap_2()
+                            .child(super::icons::file_icon(&path, 16.))
+                            .child(div().flex_1().min_w_0().truncate().child(path))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.open_file_view(open.clone(), cx)
+                            }))
+                    })),
+            )
     }
 }
 

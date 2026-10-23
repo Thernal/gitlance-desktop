@@ -71,12 +71,12 @@ impl Page {
             Page::RequestCommit(iid, _)
             | Page::RequestCommits(iid, ..)
             | Page::RequestVersions(iid, ..) => Some(Page::Request(*iid)),
-            Page::File(_)
-            | Page::Folder(_)
-            | Page::Branch(_)
-            | Page::WorkingTree
-            | Page::Compare(..)
-            | Page::Request(_) => None,
+            // A file's or a folder's is the folder it is in, as the path says (A, 2026-10-23);
+            // at the top, the project's page.
+            Page::File(path) | Page::Folder(path) => path
+                .rsplit_once('/')
+                .map(|(dir, _)| Page::Folder(dir.to_owned())),
+            Page::Branch(_) | Page::WorkingTree | Page::Compare(..) | Page::Request(_) => None,
         }
     }
 
@@ -730,7 +730,11 @@ impl Workspace {
                 Page::File(path) if self.file_view.as_ref().map(|v| &v.path) != Some(&path) => {
                     self.open_file_view(path, cx)
                 }
-                Page::Folder(path) => self.read_folder_readme(&path, cx),
+                // A folder reached by the path, back or forward, is in the preview tab too.
+                Page::Folder(path) => {
+                    self.code.preview_folder(&path);
+                    self.read_folder_readme(&path, cx)
+                }
                 _ => {}
             }
             return;
@@ -979,13 +983,14 @@ impl Workspace {
     }
 
     /// ⌘W: closes the open items picked in the menu, else what is open on screen — a request, a
-    /// branch, a file in Code.
+    /// branch, a file's or a folder's tab in Code.
     pub(super) fn close_shown(&mut self, cx: &mut Context<Self>) {
         if self.close_picked(cx) {
             return;
         }
         match self.nav_page().cloned() {
             Some(Page::File(path)) => self.close_code_tab(&path, cx),
+            Some(Page::Folder(path)) => self.close_code_tab(&super::code::folder_tab(&path), cx),
             Some(page) => match page.item() {
                 Some(item) => self.close_open(&item, cx),
                 None => self.go_up(cx),
@@ -1242,6 +1247,16 @@ mod tests {
             Some(Page::Branch("refs/heads/x".into()))
         );
         assert_eq!(Page::File("a/b.kt".into()).space(), Space::Code);
+        // A file or a folder goes up to its folder, the top ones to the project.
+        assert_eq!(
+            Page::File("a/b/c.kt".into()).parent(),
+            Some(Page::Folder("a/b".into()))
+        );
+        assert_eq!(
+            Page::Folder("a/b".into()).parent(),
+            Some(Page::Folder("a".into()))
+        );
+        assert_eq!(Page::File("README.md".into()).parent(), None);
         assert_eq!(Page::WorkingTree.item(), None);
         assert_eq!(
             Page::RequestVersions(7, 0, 1).item(),

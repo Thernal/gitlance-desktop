@@ -7,7 +7,7 @@
 //! tab, esc goes up to Code.
 
 use super::spaces::Space;
-use super::{Header, Workspace, format, island, markdown, px, theme};
+use super::{Header, Workspace, format, markdown, px, theme};
 use crate::git::ImageKind;
 use crate::git::Repo;
 use crate::highlight::{self, Span};
@@ -124,6 +124,7 @@ impl Workspace {
         }
         self.code.reveal(&path);
         self.arrive(super::nav::Page::File(path.clone()));
+        self.scroll_to_code_tab();
         self.read_code_files(false, cx);
         self.remember_place(
             super::recents::Key::File(path.clone()),
@@ -325,7 +326,7 @@ impl Workspace {
             self.render_file_lines(view, cx)
         };
         Some(
-            island()
+            self.code_island(cx)
                 .flex_1()
                 .min_w_0()
                 .bg(theme::editor())
@@ -356,12 +357,7 @@ impl Workspace {
             .border_b_1()
             .border_color(theme::island_border())
             .text_size(px(12.))
-            .child(
-                div()
-                    .font_family(theme::CODE_FONT)
-                    .text_color(theme::muted())
-                    .child(view.path.clone()),
-            )
+            // Its path is the bar's, its name the tab's (A, 2026-10-23).
             .child(div().text_color(theme::faint()).child(facts))
             .child(div().flex_1())
             // `c` asks which line the note goes on.

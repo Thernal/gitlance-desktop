@@ -33,9 +33,13 @@ pub struct Code {
     /// The folder a click on its row just unfolded: the same double click's second click leaves
     /// it open rather than folding it again.
     unfolded_now: Option<String>,
-    /// The files kept open as tabs, in order; `preview` is the one the next click replaces.
+    /// The files and folders kept open as tabs, in order — a folder's with a slash after it
+    /// (`relay/`, the developer, 2026-10-23: a folder page no longer hides the files' tabs);
+    /// `preview` is the one the next click replaces.
     pub tabs: Vec<String>,
     pub preview: Option<String>,
+    /// The tabs' strip, scrolled to the one on screen.
+    tab_scroll: gpui::ScrollHandle,
     /// The root's README at the revision: its path and text.
     readme: Option<(String, String)>,
     /// The folder page's README (#97): the folder, then its README's path and text, read at
@@ -64,6 +68,14 @@ impl Code {
         self.rev.as_ref().map(|(_, id)| *id)
     }
 
+    /// Folder `path` in the preview tab, unless it is kept as one.
+    pub fn preview_folder(&mut self, path: &str) {
+        let key = folder_tab(path);
+        if !self.tabs.contains(&key) {
+            self.preview = Some(key);
+        }
+    }
+
     /// The tabs in their order, the preview one where it was opened.
     fn shown_tabs(&self) -> Vec<(String, bool)> {
         let mut out: Vec<(String, bool)> = self.tabs.iter().map(|t| (t.clone(), false)).collect();
@@ -77,6 +89,19 @@ impl Code {
 /// One of Code's tabs being dragged: its path.
 #[derive(Clone)]
 pub struct DragCodeTab(pub String);
+
+/// The tab of folder `path`: its path and a slash.
+pub fn folder_tab(path: &str) -> String {
+    format!("{path}/")
+}
+
+/// The page tab `key` opens: a folder's ends with a slash.
+pub fn tab_page(key: &str) -> Page {
+    match key.strip_suffix('/') {
+        Some(folder) => Page::Folder(folder.to_owned()),
+        None => Page::File(key.to_owned()),
+    }
+}
 
 impl Workspace {
     /// Reads the project's files at Code's revision, once per revision (and again with `force`).
@@ -135,9 +160,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Folder `path` opens as Code's page (#97), unfolded in the tree.
+    /// Folder `path` opens as Code's page (#97), unfolded in the tree, in the preview tab.
     pub(super) fn open_folder_page(&mut self, path: String, cx: &mut Context<Self>) {
         self.code.reveal(&path);
+        self.code.preview_folder(&path);
         if self.code.open.insert(path.clone()) {
             self.tree_opening(&path, cx);
         }
@@ -220,22 +246,79 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ⌘W in Code: the file on screen closes, its neighbour shows, else the folder page.
-    pub(super) fn close_code_tab(&mut self, path: &str, cx: &mut Context<Self>) {
+    /// The tab of the page on screen in Code: a file's path, a folder's with its slash.
+    fn shown_tab(&self) -> Option<String> {
+        match self.nav_page() {
+            Some(Page::File(path)) => Some(path.clone()),
+            Some(Page::Folder(path)) => Some(folder_tab(path)),
+            _ => None,
+        }
+    }
+
+    /// Tab `key` on screen: its file or its folder's page.
+    pub(super) fn open_code_tab(&mut self, key: &str, cx: &mut Context<Self>) {
+        match tab_page(key) {
+            Page::Folder(path) => self.open_folder_page(path, cx),
+            Page::File(path) => self.open_file_view(path, cx),
+            _ => {}
+        }
+        self.scroll_to_code_tab();
+    }
+
+    /// The strip scrolled to the tab on screen.
+    pub(super) fn scroll_to_code_tab(&self) {
+        let shown = self.shown_tab();
+        if let Some(ix) = self
+            .code
+            .shown_tabs()
+            .iter()
+            .position(|(key, _)| Some(key) == shown.as_ref())
+        {
+            self.code.tab_scroll.scroll_to_item(ix);
+        }
+    }
+
+    /// The preview tab `key` kept: a double click on it, as on a file in the tree.
+    pub(super) fn keep_code_tab(&mut self, key: &str, cx: &mut Context<Self>) {
+        if self.code.preview.as_deref() == Some(key) {
+            self.code.preview = None;
+            self.code.tabs.push(key.to_owned());
+            cx.notify();
+        }
+    }
+
+    /// ⌘W in Code: the tab on screen closes, its neighbour shows, else the project's page.
+    pub(super) fn close_code_tab(&mut self, key: &str, cx: &mut Context<Self>) {
         let shown = self.code.shown_tabs();
-        let at = shown.iter().position(|(p, _)| p == path);
-        self.code.tabs.retain(|t| t != path);
-        if self.code.preview.as_deref() == Some(path) {
+        let at = shown.iter().position(|(p, _)| p == key);
+        self.code.tabs.retain(|t| t != key);
+        if self.code.preview.as_deref() == Some(key) {
             self.code.preview = None;
         }
-        let on_screen = matches!(self.nav_page(), Some(Page::File(p)) if p == path);
-        if !on_screen {
+        if self.shown_tab().as_deref() != Some(key) {
             return cx.notify();
         }
         let rest = self.code.shown_tabs();
         let next = at.and_then(|at| rest.get(at.min(rest.len().saturating_sub(1))).cloned());
         match next {
-            Some((next, _)) => self.open_file_view(next, cx),
+            Some((next, _)) => self.open_code_tab(&next, cx),
+            None => {
+                self.file_view = None;
+                self.show(Space::Code, None, cx);
+            }
+        }
+    }
+
+    /// Every tab closes but `keep`'s (Close others), or every one (Close all).
+    pub(super) fn close_code_tabs(&mut self, keep: Option<String>, cx: &mut Context<Self>) {
+        let keep = keep.filter(|k| self.code.shown_tabs().iter().any(|(t, _)| t == k));
+        self.code.tabs.retain(|t| Some(t) == keep.as_ref());
+        if self.code.preview != keep {
+            self.code.preview = None;
+        }
+        match keep {
+            Some(key) if self.shown_tab().as_ref() != Some(&key) => self.open_code_tab(&key, cx),
+            Some(_) => cx.notify(),
             None => {
                 self.file_view = None;
                 self.show(Space::Code, None, cx);
@@ -250,35 +333,29 @@ impl Workspace {
             return;
         }
         let n = shown.len();
-        let at = match self.nav_page() {
-            Some(Page::File(path)) => shown.iter().position(|(p, _)| p == path),
-            _ => None,
-        };
+        let on = self.shown_tab();
+        let at = shown.iter().position(|(p, _)| Some(p) == on.as_ref());
         let to = match at {
             Some(at) => (at + if forward { 1 } else { n - 1 }) % n,
             None => 0,
         };
-        let path = shown[to].0.clone();
-        self.open_file_view(path, cx);
+        let key = shown[to].0.clone();
+        self.open_code_tab(&key, cx);
     }
 
     /// Code: the tree beside the folder page or the file's tabs, the tool window after them.
     pub(super) fn render_code_space(&self, cx: &mut Context<Self>) -> Div {
-        let page =
-            match self.nav_page() {
-                Some(Page::File(_)) => div()
+        let page = match self.nav_page() {
+            Some(Page::File(_)) => self.render_file_view(cx).unwrap_or_else(|| {
+                self.code_island(cx)
                     .flex_1()
                     .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(self.render_code_tabs(cx))
-                    .child(self.render_file_view(cx).unwrap_or_else(|| {
-                        island().flex_1().bg(theme::editor()).into_any_element()
-                    }))
-                    .into_any_element(),
-                Some(Page::Folder(path)) => self.render_dir_page(path, cx),
-                _ => self.render_folder_page(cx),
-            };
+                    .bg(theme::editor())
+                    .into_any_element()
+            }),
+            Some(Page::Folder(path)) => self.render_dir_page(path, cx),
+            _ => self.render_folder_page(cx),
+        };
         div()
             .relative()
             .flex_1()
@@ -653,27 +730,62 @@ impl Workspace {
         self.read_code_at(rev, cx);
     }
 
-    /// The tabs over a file: the files kept open, the preview one in italics; × or ⌘W closes.
-    fn render_code_tabs(&self, cx: &mut Context<Self>) -> Div {
-        let shown = match self.nav_page() {
-            Some(Page::File(path)) => Some(path.clone()),
-            _ => None,
-        };
-        div()
-            .flex_none()
-            .h(px(34.))
+    /// The island every Code page is drawn in, its tabs on top (the developer, 2026-10-23, A):
+    /// the one on screen open into the page under it, so a folder's page, a file and the project's
+    /// own page share one shape, and a folder no longer hides the files' tabs.
+    pub(super) fn code_island(&self, cx: &mut Context<Self>) -> Div {
+        island().children(self.render_code_tabs(cx))
+    }
+
+    /// The tabs: files and folders kept or previewed, scrolled sideways to the one on screen; ▾ at
+    /// the end lists them all. A click shows one, a double click keeps a preview, its right click
+    /// closes it or the others.
+    fn render_code_tabs(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let tabs = self.code.shown_tabs();
+        if tabs.is_empty() {
+            return None;
+        }
+        let shown = self.shown_tab();
+        let rule = theme::island_border();
+        let root = self.root.clone();
+        let strip = div()
+            .id("code-tabs")
+            .flex_1()
+            .min_w_0()
+            .h_full()
             .flex()
-            .items_end()
-            .gap(px(2.))
-            .children(self.code.shown_tabs().into_iter().map(|(path, preview)| {
-                let on = shown.as_ref() == Some(&path);
+            .overflow_x_scroll()
+            .track_scroll(&self.code.tab_scroll)
+            .children(tabs.iter().cloned().map(|(key, preview)| {
+                let on = shown.as_ref() == Some(&key);
+                let path = key.trim_end_matches('/').to_owned();
+                let folder = key.ends_with('/');
                 let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
-                let (open, close) = (path.clone(), path.clone());
-                let (drag, drop) = (path.clone(), path.clone());
+                let (open, close, menu) = (key.clone(), key.clone(), key.clone());
+                let (drag, drop) = (key.clone(), key.clone());
+                let full = root.as_ref().map(|r| r.join(&path));
                 let label = name.clone();
-                let whole = path.clone();
+                let whole = key.clone();
                 div()
-                    .id(SharedString::from(format!("code-tab-{path}")))
+                    .id(SharedString::from(format!("code-tab-{key}")))
+                    .flex_none()
+                    .h_full()
+                    .pl(px(12.))
+                    .pr(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .border_r_1()
+                    .border_color(rule)
+                    .text_size(px(12.))
+                    .cursor_pointer()
+                    // The one on screen opens into the page; the others sit on the strip's line.
+                    .when(on, |s| s.bg(theme::editor()).text_color(theme::text()))
+                    .when(!on, |s| {
+                        s.border_b_1()
+                            .text_color(theme::muted())
+                            .hover(|s| s.text_color(theme::text()))
+                    })
                     // Its whole path in a long hover.
                     .tooltip_show_delay(super::hover::LONG)
                     .tooltip(move |_, cx| cx.new(|_| super::TipOwned(whole.clone().into())).into())
@@ -687,40 +799,125 @@ impl Workspace {
                     .on_drop(cx.listener(move |this, dragged: &DragCodeTab, _, cx| {
                         this.move_code_tab(&dragged.0, &drop, cx)
                     }))
-                    .h(px(30.))
-                    .px(px(10.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .rounded_t(px(6.))
-                    .text_size(px(12.))
-                    .cursor_pointer()
-                    .when(on, |s| s.bg(theme::editor()).text_color(theme::text()))
-                    .when(!on, |s| {
-                        s.text_color(theme::muted())
-                            .hover(|s| s.text_color(theme::text()))
+                    .child(if folder {
+                        icons::folder_icon(&path, 14.)
+                    } else {
+                        icons::file_icon(&path, 14.)
                     })
-                    .child(icons::file_icon(&path, 14.))
                     .child(div().when(preview, |s| s.italic()).child(name))
                     .child(
                         div()
-                            .id(SharedString::from(format!("code-tab-x-{path}")))
-                            .size(px(16.))
+                            .id(SharedString::from(format!("code-tab-x-{key}")))
+                            .size(px(18.))
                             .flex()
                             .items_center()
                             .justify_center()
                             .rounded(px(4.))
                             .hover(|s| s.bg(theme::hover()))
-                            .child(icons::icon("x").size(px(11.)).text_color(theme::faint()))
+                            .child(icons::icon("x").size(px(12.)).text_color(theme::faint()))
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
                                 this.close_code_tab(&close, cx)
                             })),
                     )
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.open_file_view(open.clone(), cx)
+                    .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                        if e.click_count() > 1 {
+                            this.keep_code_tab(&open, cx)
+                        } else {
+                            this.open_code_tab(&open, cx)
+                        }
                     }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                            let mut groups = Vec::new();
+                            if preview {
+                                groups.push(vec![Entry::new(
+                                    "Keep it open",
+                                    Act::KeepCodeTab(menu.clone()),
+                                )]);
+                            }
+                            groups.push(vec![
+                                Entry::new("Close", Act::CloseCodeTab(menu.clone())).key("⌘W"),
+                                Entry::new("Close others", Act::CloseCodeTabs(Some(menu.clone()))),
+                                Entry::new("Close all", Act::CloseCodeTabs(None)),
+                            ]);
+                            let mut place = vec![Entry::new(
+                                "Copy path",
+                                Act::Copy(menu.trim_end_matches('/').to_owned()),
+                            )];
+                            if let Some(full) = &full {
+                                place.push(Entry::new(
+                                    super::open_in::REVEAL,
+                                    Act::Reveal(full.clone()),
+                                ));
+                            }
+                            groups.push(place);
+                            this.open_menu(e.position, groups, cx)
+                        }),
+                    )
             }))
+            // The rest of the strip, on its line.
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(12.))
+                    .h_full()
+                    .border_b_1()
+                    .border_color(rule),
+            );
+        let all = div()
+            .id("code-tabs-all")
+            .flex_none()
+            .h_full()
+            .px(px(8.))
+            .flex()
+            .items_center()
+            .border_b_1()
+            .border_l_1()
+            .border_color(rule)
+            .cursor_pointer()
+            .hover(|s| s.bg(theme::hover()))
+            .child(
+                icons::icon("chevron")
+                    .size(px(14.))
+                    .text_color(theme::muted()),
+            )
+            .tooltip_show_delay(super::hover::LONG)
+            .tooltip(|_, cx| cx.new(|_| super::Tip("Every open tab")).into())
+            .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                let on = this.shown_tab();
+                let listed = this
+                    .code
+                    .shown_tabs()
+                    .into_iter()
+                    .map(|(key, _)| {
+                        Entry::new(key.clone(), Act::CodeTab(key.clone()))
+                            .checked(on.as_ref() == Some(&key))
+                    })
+                    .collect();
+                this.open_menu(
+                    e.position(),
+                    vec![
+                        listed,
+                        vec![
+                            Entry::new("Close others", Act::CloseCodeTabs(on)),
+                            Entry::new("Close all", Act::CloseCodeTabs(None)),
+                        ],
+                    ],
+                    cx,
+                )
+            }));
+        Some(
+            div()
+                .flex_none()
+                .w_full()
+                .h(px(36.))
+                .flex()
+                .bg(theme::panel())
+                .child(strip)
+                .child(all),
+        )
     }
 
     /// A folder's page (#97, Design: notes on folders, B): its notes for your agent and the
@@ -730,14 +927,12 @@ impl Workspace {
         let prefix = format!("{path}/");
         let mut folders = std::collections::BTreeSet::new();
         let mut here = Vec::new();
-        let mut count = 0;
         for f in self
             .code
             .files
             .iter()
             .filter_map(|f| f.strip_prefix(&prefix))
         {
-            count += 1;
             match f.split_once('/') {
                 Some((dir, _)) => {
                     folders.insert(dir.to_owned());
@@ -819,7 +1014,7 @@ impl Workspace {
                         selecting,
                     ))
             });
-        island()
+        self.code_island(cx)
             .flex_1()
             .min_w_0()
             .bg(theme::editor())
@@ -834,17 +1029,12 @@ impl Workspace {
                     .border_b_1()
                     .border_color(theme::island_border())
                     .text_size(px(12.))
-                    .child(icons::folder_icon(path, 14.))
-                    .child(
-                        div()
-                            .font_family(theme::CODE_FONT)
-                            .text_color(theme::muted())
-                            .child(prefix.clone()),
-                    )
+                    // Its path and count are the bar's, its name the tab's (A, 2026-10-23):
+                    // what it is read at, as a file's line says.
                     .child(
                         div()
                             .text_color(theme::faint())
-                            .child(super::plural(count, "file")),
+                            .child(format!("as of {}", self.code_revision_label())),
                     )
                     .child(div().flex_1())
                     .child(
@@ -933,7 +1123,7 @@ impl Workspace {
                 ))
                 .into_any_element()
         };
-        island()
+        self.code_island(cx)
             .flex_1()
             .min_w_0()
             .bg(theme::editor())
@@ -970,5 +1160,32 @@ impl Workspace {
                     .child(body),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_is_a_tab_beside_the_files() {
+        assert_eq!(tab_page(&folder_tab("relay")), Page::Folder("relay".into()));
+        assert_eq!(
+            tab_page("relay/wrangler.toml"),
+            Page::File("relay/wrangler.toml".into())
+        );
+        let mut code = Code::default();
+        code.tabs.push("a.rs".into());
+        // A folder opened takes the preview tab, the files stay.
+        code.preview_folder("relay");
+        assert_eq!(
+            code.shown_tabs(),
+            [("a.rs".into(), false), ("relay/".into(), true)]
+        );
+        // One kept is not previewed again.
+        code.tabs.push("src/".into());
+        code.preview = None;
+        code.preview_folder("src");
+        assert_eq!(code.preview, None);
     }
 }
