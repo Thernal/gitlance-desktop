@@ -619,7 +619,7 @@ impl Workspace {
                         .w(px(list_width(self.layout.list)))
                         .flex_none()
                         .p(px(16.))
-                        .child(skeleton(7)),
+                        .child(skeleton("requests-loading", 7)),
                 )
                 .child(
                     island()
@@ -627,7 +627,7 @@ impl Workspace {
                         .bg(theme::editor())
                         .px(px(28.))
                         .py(px(26.))
-                        .child(skeleton(3)),
+                        .child(skeleton("request-preview-loading", 3)),
                 )
                 .into_any_element()
         } else if shown.is_empty() && past.is_none_or(|p| !p.more) {
@@ -2263,22 +2263,25 @@ pub(super) fn empty_state(
         .children(action.map(|a| div().pt(px(6.)).child(a)))
 }
 
-/// Rows still loading: two grey bars each.
-pub(super) fn skeleton(rows: usize) -> Div {
+/// Rows still loading: two grey bars each, breathing as the diff's shimmer does.
+pub(super) fn skeleton(id: &'static str, rows: usize) -> gpui::AnyElement {
     const LONG: [f32; 6] = [62., 48., 70., 55., 66., 44.];
     const SHORT: [f32; 6] = [40., 52., 34., 46., 38., 50.];
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(22.))
-        .children((0..rows).map(|n| {
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(7.))
-                .child(bar(LONG[n % 6], 10.))
-                .child(bar(SHORT[n % 6], 7.))
-        }))
+    super::motion::breathe(
+        id,
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(22.))
+            .children((0..rows).map(|n| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(7.))
+                    .child(bar(LONG[n % 6], 10.))
+                    .child(bar(SHORT[n % 6], 7.))
+            })),
+    )
 }
 
 fn bar(percent: f32, height: f32) -> Div {

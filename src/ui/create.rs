@@ -50,9 +50,10 @@ pub struct NewRequest {
     /// The labels chosen, and the milestone (its id).
     labels: Vec<String>,
     milestone: Option<u64>,
-    /// The project's labels and milestones, read as the form opens.
+    /// The project's labels and milestones, read as the form opens; `lists_read` once they are.
     all_labels: Vec<mr::Label>,
     milestones: Vec<mr::Milestone>,
+    lists_read: bool,
     menu: Option<Menu>,
     /// The files merging into the target would leave in conflict; `None` while not known.
     conflicts: Option<Vec<String>>,
@@ -201,6 +202,7 @@ impl Workspace {
             milestone: None,
             all_labels: Vec::new(),
             milestones: Vec::new(),
+            lists_read: false,
             menu: None,
             conflicts: None,
             suggested: Vec::new(),
@@ -271,6 +273,7 @@ impl Workspace {
                 };
                 n.all_labels = labels;
                 n.milestones = milestones;
+                n.lists_read = true;
                 if let Some(text) = template {
                     let had_file = !n.templates.is_empty();
                     n.templates
@@ -1070,7 +1073,20 @@ impl Workspace {
                 .child(text.to_owned())
                 .into_any_element()
         };
-        let labels = if n.labels.is_empty() {
+        // Still being read: a bar where the value will be, not "No labels in this project".
+        let reading = |id: &'static str| {
+            super::motion::breathe(
+                id,
+                div()
+                    .w(px(90.))
+                    .h(px(10.))
+                    .rounded(px(4.))
+                    .bg(theme::hover()),
+            )
+        };
+        let labels = if n.labels.is_empty() && !n.lists_read {
+            reading("create-labels-loading")
+        } else if n.labels.is_empty() {
             faint(if n.all_labels.is_empty() {
                 "No labels in this project"
             } else {
@@ -1106,6 +1122,7 @@ impl Workspace {
             .and_then(|id| n.milestones.iter().find(|m| m.id == id))
         {
             Some(m) => div().truncate().child(m.title.clone()).into_any_element(),
+            None if !n.lists_read => reading("create-milestone-loading"),
             None => faint(if n.milestones.is_empty() {
                 "No open milestones"
             } else {

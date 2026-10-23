@@ -317,6 +317,13 @@ impl Workspace {
                         .children(self.render_pill(cx))
                         .child(if self.find.shown.as_ref().is_some_and(Vec::is_empty) {
                             self.render_no_match().into_any_element()
+                        } else if self.commits.is_empty() && self.branch_task.is_some() {
+                            // The branch's commits are being read.
+                            div()
+                                .px(px(14.))
+                                .py(px(10.))
+                                .child(super::roots::skeleton("commits-loading", 5))
+                                .into_any_element()
                         } else {
                             uniform_list(
                                 "commits",

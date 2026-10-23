@@ -160,26 +160,35 @@ pub fn appear<E: IntoElement + 'static>(
 pub fn shimmer(id: impl Into<ElementId>, lines: usize) -> gpui::AnyElement {
     use gpui::{div, prelude::*};
     const WIDTHS: [f32; 7] = [0.62, 0.48, 0.71, 0.36, 0.55, 0.67, 0.42];
-    div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .gap(super::px(10.))
-        .children((0..lines).map(|n| {
-            div()
-                .h(super::px(10.))
-                .w(gpui::relative(WIDTHS[n % WIDTHS.len()]))
-                .rounded(super::px(4.))
-                .bg(super::theme::hover())
-        }))
-        .with_animation(
-            id,
-            Animation::new(Duration::from_millis(1400))
-                .repeat()
-                .with_easing(gpui::pulsating_between(0.45, 1.)),
-            |bars, v| bars.opacity(v),
-        )
-        .into_any_element()
+    breathe(
+        id,
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(super::px(10.))
+            .children((0..lines).map(|n| {
+                div()
+                    .h(super::px(10.))
+                    .w(gpui::relative(WIDTHS[n % WIDTHS.len()]))
+                    .rounded(super::px(4.))
+                    .bg(super::theme::hover())
+            })),
+    )
+}
+
+/// Bars in place of what is being read (a list's rows, a field's values) light up and dim as
+/// `shimmer`'s do, so a page that is still reading never reads as empty.
+pub fn breathe(id: impl Into<ElementId>, bars: gpui::Div) -> gpui::AnyElement {
+    use gpui::prelude::*;
+    bars.with_animation(
+        id,
+        Animation::new(Duration::from_millis(1400))
+            .repeat()
+            .with_easing(gpui::pulsating_between(0.45, 1.)),
+        |bars, v| bars.opacity(v),
+    )
+    .into_any_element()
 }
 
 impl super::Workspace {

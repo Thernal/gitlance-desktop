@@ -49,7 +49,7 @@ impl Workspace {
                 .bg(theme::editor())
                 .px(px(28.))
                 .py(px(26.))
-                .child(super::roots::skeleton(4))
+                .child(super::roots::skeleton("request-loading", 4))
                 .into_any_element(),
             (Some(m), Section::Overview) => self.render_overview(m, cx),
             (Some(m), _) => self.render_commits_tab(m, cx),

@@ -63,6 +63,8 @@ pub struct Requests {
     pub listed_at: Option<i64>,
     /// The request of the open branch, when it is one's source branch.
     pub current: Option<u64>,
+    /// Its discussions are being read: Discussions shimmers instead of saying there are none.
+    pub reading: bool,
     pub threads: Vec<Thread>,
     /// One's own pending comments on the current request.
     pub drafts: Vec<Draft>,
@@ -323,10 +325,12 @@ impl Workspace {
         if let Some(iid) = iid {
             self.mark_opened(iid);
         }
+        self.requests.reading = false;
         let (Some(iid), Some(remote)) = (iid, self.web.clone()) else {
             return;
         };
         let known = self.requests.login.is_some();
+        self.requests.reading = true;
         self.requests.thread_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -347,6 +351,7 @@ impl Workspace {
                 .await;
             this.update(cx, |this, cx| {
                 if this.requests.current == Some(iid) {
+                    this.requests.reading = false;
                     match result {
                         Ok((threads, drafts, pipeline, approvals, login, details)) => {
                             if login.is_some() {
@@ -1695,7 +1700,13 @@ impl Workspace {
                         )
                 }))
                 .children(outdated_items)
-                .children((total == 0).then(|| {
+                .children((total == 0 && self.requests.reading).then(|| {
+                    div()
+                        .px(px(14.))
+                        .py(px(12.))
+                        .child(super::roots::skeleton("discussions-loading", 3))
+                }))
+                .children((total == 0 && !self.requests.reading).then(|| {
                     div()
                         .px(px(14.))
                         .py(px(10.))

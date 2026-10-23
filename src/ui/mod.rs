@@ -2093,6 +2093,8 @@ impl Workspace {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                // Read: the commits list stops shimmering.
+                this.branch_task = None;
                 match loaded {
                     Ok((versions, commits, facts, own)) => {
                         this.versions = versions;

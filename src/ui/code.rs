@@ -137,6 +137,7 @@ impl Workspace {
                 .await;
             this.update(cx, |this, cx| {
                 if this.code.read_at == Some(at) {
+                    this.code.task = None;
                     (this.code.files, this.code.readme) = read;
                     cx.notify();
                 }
@@ -346,6 +347,19 @@ impl Workspace {
     /// Code: the tree beside the folder page or the file's tabs, the tool window after them.
     pub(super) fn render_code_space(&self, cx: &mut Context<Self>) -> Div {
         let page = match self.nav_page() {
+            // A file being read that is not on screen yet: a shimmer of lines, not the one before.
+            Some(Page::File(path))
+                if self.file_reading.is_some()
+                    && self.file_view.as_ref().is_none_or(|v| &v.path != path) =>
+            {
+                self.code_island(cx)
+                    .flex_1()
+                    .min_w_0()
+                    .bg(theme::editor())
+                    .p(px(24.))
+                    .child(super::motion::shimmer("file-loading", 9))
+                    .into_any_element()
+            }
             Some(Page::File(_)) => self.render_file_view(cx).unwrap_or_else(|| {
                 self.code_island(cx)
                     .flex_1()
@@ -424,6 +438,17 @@ impl Workspace {
         .track_scroll(&self.code.scroll)
         .flex_1()
         .pb(px(6.));
+        // The first read of the project's files: the tree shimmers rather than reading as empty.
+        let list = if self.code.files.is_empty() && self.code.task.is_some() {
+            div()
+                .flex_1()
+                .px(px(14.))
+                .py(px(8.))
+                .child(super::motion::shimmer("code-tree-loading", 8))
+                .into_any_element()
+        } else {
+            list.into_any_element()
+        };
         island()
             .w(px(self.layout.sidebar))
             .flex_none()

@@ -77,6 +77,8 @@ pub struct InboxView {
     pub filter: InboxFilter,
     /// By discussion id; `None` once read and not found (the commit is not here).
     excerpts: HashMap<String, Option<Excerpt>>,
+    /// The discussion whose code is being read: its excerpt shimmers.
+    reading: Option<String>,
     task: Option<Task<()>>,
     /// What the composer writes to: request, and its discussion (none: a comment on the request).
     pub reply: Option<(u64, Option<String>)>,
@@ -284,12 +286,14 @@ impl Workspace {
         };
         let heads: Vec<String> = t.commit.iter().cloned().chain([m.head.clone()]).collect();
         let (id, target, new, old) = (t.id.clone(), m.target.clone(), t.new_line, t.old_line);
+        self.inbox_view.reading = Some(id.clone());
         self.inbox_view.task = Some(cx.spawn(async move |this, cx| {
             let found = cx
                 .background_executor()
                 .spawn(async move { excerpt(&root, &target, &heads, &path, new, old) })
                 .await;
             this.update(cx, |this, cx| {
+                this.inbox_view.reading.take_if(|r| *r == id);
                 this.inbox_view.excerpts.insert(id, found);
                 cx.notify();
             })
@@ -390,7 +394,7 @@ impl Workspace {
                         .w(px(self.layout.list))
                         .flex_none()
                         .p(px(16.))
-                        .child(super::roots::skeleton(6)),
+                        .child(super::roots::skeleton("inbox-loading", 6)),
                 )
                 .child(
                     island()
@@ -398,7 +402,7 @@ impl Workspace {
                         .bg(theme::editor())
                         .px(px(28.))
                         .py(px(26.))
-                        .child(super::roots::skeleton(3)),
+                        .child(super::roots::skeleton("inbox-preview-loading", 3)),
                 )
                 .into_any_element()
         } else if rows.is_empty() {
@@ -877,7 +881,7 @@ impl Workspace {
                     }
                 })
                 .collect();
-            excerpt_view(&c.path, c.line, Some(&Excerpt { lines }))
+            excerpt_view(&c.path, c.line, Some(Some(&Excerpt { lines })))
         });
         let thread = self.render_thread(id, 0., cx.entity().downgrade());
         let open = super::bar::bar_button("inbox-agent-open", "Open at the line", "↵", true)
@@ -954,10 +958,15 @@ impl Workspace {
             .font_weight(FontWeight::SEMIBOLD)
             .child(n.title.clone());
         let code = thread.and_then(|t| {
-            let ex = self.inbox_view.excerpts.get(&t.id)?;
             let path = t.path.clone()?;
             let line = t.new_line.or(t.old_line)?;
-            Some(excerpt_view(&path, line, ex.as_ref()))
+            match self.inbox_view.excerpts.get(&t.id) {
+                Some(ex) => Some(excerpt_view(&path, line, Some(ex.as_ref()))),
+                None if self.inbox_view.reading.as_ref() == Some(&t.id) => {
+                    Some(excerpt_view(&path, line, None))
+                }
+                None => None,
+            }
         });
         // The discussion, or what the notice says when there is none (a mention in a description).
         let talk = match thread {
@@ -1145,7 +1154,8 @@ fn inbox_keys(agent: Option<bool>) -> Div {
 
 /// The card of the code a discussion is on: the path and line, then the lines (or a word that
 /// they are not here).
-fn excerpt_view(path: &str, line: u32, ex: Option<&Excerpt>) -> Div {
+/// `ex`: None while it is being read, `Some(None)` when the commit is not here.
+fn excerpt_view(path: &str, line: u32, ex: Option<Option<&Excerpt>>) -> Div {
     let head = div()
         .flex()
         .items_center()
@@ -1162,7 +1172,12 @@ fn excerpt_view(path: &str, line: u32, ex: Option<&Excerpt>) -> Div {
         .child(div().flex_1().min_w_0().truncate().child(path.to_owned()))
         .child(format!("line {line}"));
     let body = match ex {
-        Some(ex) => div()
+        None => div()
+            .px(px(12.))
+            .pt(px(4.))
+            .pb(px(12.))
+            .child(super::motion::shimmer("inbox-excerpt-loading", 4)),
+        Some(Some(ex)) => div()
             .pb(px(6.))
             .font_family(theme::CODE_FONT)
             .text_size(px(12.))
@@ -1209,7 +1224,7 @@ fn excerpt_view(path: &str, line: u32, ex: Option<&Excerpt>) -> Div {
                             .child(l.text.clone()),
                     )
             })),
-        None => div()
+        Some(None) => div()
             .px(px(12.))
             .pb(px(10.))
             .text_size(px(12.))
