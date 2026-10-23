@@ -108,11 +108,10 @@ impl Group {
     }
 }
 
-/// The groups folded in a project whose list was never folded or unfolded: what you reviewed.
-const FOLDED: [Group; 1] = [Group::Reviewed];
-
 /// What the requests list keeps per project (`<repo>\t<folded groups>\t<requests opened>`, both
-/// comma-separated) (#81).
+/// comma-separated, then `folds` once a group was folded or unfolded by hand) (#81). Every group
+/// starts open (the developer, 2026-10-23); a line written before the folds were yours carries the
+/// old default (Reviewed folded), and is read as nothing folded.
 const LIST_FILE: &str = "requests-list.txt";
 
 /// The height of a group's band in the requests list.
@@ -178,6 +177,8 @@ pub struct Roots {
     /// a row's dot is gone once you have (#81).
     folded: HashSet<Group>,
     opened: HashSet<u64>,
+    /// A group was folded or unfolded by hand: the folds are kept.
+    chosen: bool,
     kept_of: Option<String>,
 }
 
@@ -187,8 +188,8 @@ impl Roots {
         if self.kept_of.as_deref() == Some(repo) {
             return;
         }
-        (self.folded, self.opened) = kept_list(&crate::storage::read(LIST_FILE), repo)
-            .unwrap_or_else(|| (FOLDED.into_iter().collect(), HashSet::new()));
+        (self.folded, self.opened, self.chosen) =
+            kept_list(&crate::storage::read(LIST_FILE), repo).unwrap_or_default();
         self.kept_of = Some(repo.to_owned());
     }
 
@@ -197,21 +198,25 @@ impl Roots {
             let text = crate::storage::read(LIST_FILE);
             crate::storage::save(
                 LIST_FILE,
-                with_kept_list(&text, repo, &self.folded, &self.opened),
+                with_kept_list(&text, repo, &self.folded, &self.opened, self.chosen),
             );
         }
     }
 }
 
-/// Repository `repo`'s line of `requests-list.txt`: its folded groups and the requests opened;
-/// none when it has no line.
-fn kept_list(text: &str, repo: &str) -> Option<(HashSet<Group>, HashSet<u64>)> {
+/// Repository `repo`'s line of `requests-list.txt`: its folded groups (none unless folded by
+/// hand), the requests opened, and whether the folds are yours; none when it has no line.
+fn kept_list(text: &str, repo: &str) -> Option<(HashSet<Group>, HashSet<u64>, bool)> {
     let line = text.lines().find(|l| l.split('\t').next() == Some(repo))?;
-    let mut parts = line.split('\t').skip(1);
-    let mut next = || parts.next().unwrap_or_default().split(',');
-    let folded = next().filter_map(Group::parse).collect();
-    let opened = next().filter_map(|iid| iid.parse().ok()).collect();
-    Some((folded, opened))
+    let parts: Vec<&str> = line.split('\t').skip(1).collect();
+    let field = |n: usize| parts.get(n).copied().unwrap_or_default().split(',');
+    let chosen = parts.get(2) == Some(&"folds");
+    let folded = field(0)
+        .filter_map(Group::parse)
+        .filter(|_| chosen)
+        .collect();
+    let opened = field(1).filter_map(|iid| iid.parse().ok()).collect();
+    Some((folded, opened, chosen))
 }
 
 /// `text` with repository `repo`'s line written anew; other repositories' kept.
@@ -220,19 +225,21 @@ fn with_kept_list(
     repo: &str,
     folded: &HashSet<Group>,
     opened: &HashSet<u64>,
+    chosen: bool,
 ) -> String {
     let mut folded: Vec<Group> = folded.iter().copied().collect();
     folded.sort();
     let mut opened: Vec<u64> = opened.iter().copied().collect();
     opened.sort();
     let line = format!(
-        "{repo}\t{}\t{}",
+        "{repo}\t{}\t{}{}",
         folded.iter().map(|g| g.key()).collect::<Vec<_>>().join(","),
         opened
             .iter()
             .map(u64::to_string)
             .collect::<Vec<_>>()
-            .join(",")
+            .join(","),
+        if chosen { "\tfolds" } else { "" }
     );
     let mut lines: Vec<String> = text
         .lines()
@@ -506,6 +513,7 @@ impl Workspace {
     }
 
     fn toggle_group(&mut self, g: Group, cx: &mut Context<Self>) {
+        self.roots.chosen = true;
         if !self.roots.folded.remove(&g) {
             self.roots.folded.insert(g);
         }
@@ -2193,20 +2201,28 @@ mod tests {
     fn a_projects_folds_and_opened_requests_are_kept_on_its_own_line() {
         let folded = HashSet::from([Group::New, Group::Reviewed]);
         let opened = HashSet::from([415, 398]);
-        let text = with_kept_list("b\tasks\t7\n", "a", &folded, &opened);
-        assert_eq!(text, "a\tothers,reviewed\t398,415\nb\tasks\t7\n");
-        assert_eq!(kept_list(&text, "a"), Some((folded, opened)));
+        let text = with_kept_list("b\tasks\t7\tfolds\n", "a", &folded, &opened, true);
+        assert_eq!(
+            text,
+            "a\tothers,reviewed\t398,415\tfolds\nb\tasks\t7\tfolds\n"
+        );
+        assert_eq!(kept_list(&text, "a"), Some((folded, opened, true)));
         assert_eq!(
             kept_list(&text, "b"),
-            Some((HashSet::from([Group::Asks]), HashSet::from([7])))
+            Some((HashSet::from([Group::Asks]), HashSet::from([7]), true))
         );
-        // Every group unfolded, nothing opened: a line still, so the defaults do not come back.
-        let none = with_kept_list(&text, "a", &HashSet::new(), &HashSet::new());
+        // Every group unfolded by hand, nothing opened: a line still.
+        let none = with_kept_list(&text, "a", &HashSet::new(), &HashSet::new(), true);
         assert_eq!(
             kept_list(&none, "a"),
-            Some((HashSet::new(), HashSet::new()))
+            Some((HashSet::new(), HashSet::new(), true))
         );
         assert_eq!(kept_list(&none, "c"), None);
+        // A line from before the folds were yours: its fold was the old default, so none.
+        assert_eq!(
+            kept_list("a\treviewed\t398\n", "a"),
+            Some((HashSet::new(), HashSet::from([398]), false))
+        );
     }
 
     #[test]
