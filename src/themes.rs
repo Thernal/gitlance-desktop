@@ -599,7 +599,7 @@ pub fn from_hsva([h, s, v, a]: [f32; 4]) -> u32 {
     byte(r) << 24 | byte(g) << 16 | byte(b) << 8 | (a.clamp(0., 1.) * 255.).round() as u32
 }
 
-fn luminance(c: u32) -> f32 {
+pub(crate) fn luminance(c: u32) -> f32 {
     let ch = |shift: u32| {
         let v = ((c >> shift) & 0xff) as f32 / 255.;
         if v <= 0.03928 {

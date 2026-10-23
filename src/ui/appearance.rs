@@ -907,6 +907,105 @@ impl Workspace {
                     )
                     .children(t.problems.iter().map(|p| div().child(format!("· {p}"))))
             }))
+            .child(self.render_file_icons(cx))
+            .into_any_element()
+    }
+
+    /// File icons (#95): what they are, a few of them, the user's folder and what it gives.
+    fn render_file_icons(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (svgs, rules) = crate::file_icons::counts();
+        let problems = crate::file_icons::problems();
+        let folder = crate::file_icons::folder()
+            .map(|d| super::format::home_relative(&d))
+            .unwrap_or_default();
+        let samples = [
+            ("LoginViewModel.kt", false),
+            ("build.gradle.kts", false),
+            ("Main.java", false),
+            ("package.json", false),
+            ("README.md", false),
+            ("Dockerfile", false),
+            ("core", true),
+            (".github", true),
+        ];
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(section(
+                "File icons",
+                "IntelliJ Community's icons, by a file's name or extension. Yours go in the icons folder: name.svg for a whole name (Dockerfile.svg), an extension (kt.svg) or one of the icons replaced (folder.svg, kotlin.svg), name_dark.svg for dark themes; folders.txt and files.txt hold a regular expression on the path from the repository's root, then the icon, a line each — (^|/)src/test$ testRoot.",
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_x(px(14.))
+                    .gap_y(px(6.))
+                    .text_size(px(12.))
+                    .text_color(theme::muted())
+                    .children(samples.into_iter().map(|(name, is_folder)| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(if is_folder {
+                                icons::folder_icon(name, 16.)
+                            } else {
+                                icons::file_icon(name, 16.)
+                            })
+                            .child(name)
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        small_button("icons-folder", "Open icons folder").on_click(cx.listener(
+                            |_, _: &ClickEvent, _, cx| {
+                                if let Some(dir) = crate::file_icons::folder() {
+                                    crate::file_icons::start_folder(&dir);
+                                    cx.reveal_path(&dir);
+                                }
+                            },
+                        )),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(11.))
+                            .text_color(theme::muted())
+                            .child(format!(
+                                "{} · {}",
+                                super::plural(svgs, "icon"),
+                                super::plural(rules, "rule")
+                            )),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(theme::CODE_FONT)
+                            .text_size(px(11.))
+                            .text_color(theme::faint())
+                            .child(folder),
+                    ),
+            )
+            .children((!problems.is_empty()).then(|| {
+                div()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .rounded(px(ROW_RADIUS))
+                    .bg(theme::danger_bg())
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .text_size(px(12.))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Icon rules"))
+                    .children(problems.into_iter().map(|p| div().child(format!("· {p}"))))
+            }))
             .into_any_element()
     }
 

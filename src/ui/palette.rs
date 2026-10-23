@@ -1269,10 +1269,21 @@ impl Workspace {
                 item.pick,
                 Pick::File(_) | Pick::RepoFile(_) | Pick::Project(_)
             );
+            // A file's icon before it (#95).
+            let path = match &item.pick {
+                Pick::File(f) => self
+                    .diff
+                    .as_ref()
+                    .and_then(|d| d.files.get(*f))
+                    .map(|f| f.path().to_owned()),
+                Pick::RepoFile(path) => Some(path.clone()),
+                _ => None,
+            };
             rows.push(
                 super::row(("palette-item", ix), selected)
                     .h(px(28.))
                     .gap_3()
+                    .children(path.map(|p| super::icons::file_icon(&p, 16.)))
                     .child(
                         div()
                             .when(!file, |s| s.flex_1())

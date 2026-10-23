@@ -454,7 +454,8 @@ pub fn run(path: Option<PathBuf>) {
                     cx.background_executor()
                         .timer(std::time::Duration::from_secs(2))
                         .await;
-                    if theme::reload_if_changed() {
+                    // The icons folder too (#95).
+                    if theme::reload_if_changed() | crate::file_icons::reload_if_changed() {
                         cx.update(|cx| cx.refresh_windows());
                     }
                     // Reduce motion may have been turned on or off in System Settings.
@@ -3779,6 +3780,7 @@ impl Workspace {
                     .border_b_1()
                     .border_color(theme::island_border())
                     .child(change_badge(f))
+                    .child(icons::file_icon(f.path(), 16.))
                     .child(div().flex_1().min_w_0().truncate().child(path))
                     // An SVG read as its source can go back to the picture.
                     .children(

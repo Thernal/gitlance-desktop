@@ -328,6 +328,30 @@ pub fn icon(name: &'static str) -> Svg {
         .flex_none()
 }
 
+/// The icon of the file at `path` (from the repository's root), in colour, `size` square
+/// (#95, `crate::file_icons`).
+pub fn file_icon(path: &str, size: f32) -> gpui::AnyElement {
+    typed(crate::file_icons::file(path, !super::theme::light()), size)
+}
+
+/// The icon of the folder at `path`.
+pub fn folder_icon(path: &str, size: f32) -> gpui::AnyElement {
+    typed(
+        crate::file_icons::folder_icon(path, !super::theme::light()),
+        size,
+    )
+}
+
+fn typed(image: Option<std::sync::Arc<gpui::Image>>, size: f32) -> gpui::AnyElement {
+    match image {
+        Some(image) => gpui::img(image)
+            .size(px(size))
+            .flex_none()
+            .into_any_element(),
+        None => icon("file").size(px(size)).into_any_element(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

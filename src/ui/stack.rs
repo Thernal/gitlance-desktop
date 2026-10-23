@@ -894,6 +894,7 @@ impl Workspace {
                             )),
                     )
                     .child(super::change_badge(file))
+                    .child(super::icons::file_icon(file.path(), 16.))
                     .child(
                         super::hover::cut(("file-path", ix), path)
                             .flex_1()

@@ -444,6 +444,7 @@ impl Workspace {
                             )
                             .children(self.review_box(ix, cx))
                             .child(change_badge(file))
+                            .child(super::icons::file_icon(file.path(), 16.))
                             .child(div().flex_1().min_w_0().truncate().child(name))
                             .children(super::generated_tag(file))
                             .children(super::working::file_tag(diff.tags.get(file.path())))
@@ -496,6 +497,7 @@ impl Workspace {
                             .size(px(16.))
                             .text_color(theme::muted()),
                         )
+                        .child(super::icons::folder_icon(path, 16.))
                         .child(div().flex_1().min_w_0().truncate().child(name.clone()))
                         .child(
                             div()
@@ -530,6 +532,7 @@ impl Workspace {
             .when(done, |s| s.text_color(theme::muted()))
             .children(self.review_box(ix, cx))
             .child(change_badge(file))
+            .child(super::icons::file_icon(path, 16.))
             .child(
                 div()
                     .flex_1()

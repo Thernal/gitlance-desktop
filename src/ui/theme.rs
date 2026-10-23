@@ -49,6 +49,11 @@ fn get(t: T) -> Rgba {
     rgba(raw(t as usize))
 }
 
+/// Whether the window's theme is light: its window lighter than its text.
+pub fn light() -> bool {
+    themes::luminance(raw(T::Bg1 as usize)) > themes::luminance(raw(T::Text1 as usize))
+}
+
 /// Token `t` at `alpha` (0–255) over whatever is under it.
 fn with_alpha(t: T, alpha: u32) -> Rgba {
     rgba(raw(t as usize) & 0xffffff00 | alpha)

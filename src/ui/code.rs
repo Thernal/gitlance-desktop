@@ -361,11 +361,17 @@ impl Workspace {
             .h(px(26.))
             .pl(px(8. + row.depth as f32 * 14.))
             .gap(px(6.))
+            // A folder's chevron, then its icon; a file's icon under the folders' (#95).
             .child(match row.folder {
                 Some(open) => icons::icon(if open { "chevron" } else { "chevron-right" })
                     .size(px(12.))
-                    .text_color(theme::faint()),
-                None => icons::icon("file").size(px(13.)).text_color(theme::faint()),
+                    .text_color(theme::faint())
+                    .into_any_element(),
+                None => div().w(px(12.)).flex_none().into_any_element(),
+            })
+            .child(match row.folder {
+                Some(_) => icons::folder_icon(&row.path, 16.),
+                None => icons::file_icon(&row.path, 16.),
             })
             .child(
                 div()
@@ -570,7 +576,7 @@ impl Workspace {
                         s.text_color(theme::muted())
                             .hover(|s| s.text_color(theme::text()))
                     })
-                    .child(icons::icon("file").size(px(12.)).text_color(theme::faint()))
+                    .child(icons::file_icon(&path, 14.))
                     .child(div().when(preview, |s| s.italic()).child(name))
                     .child(
                         div()
@@ -630,7 +636,7 @@ impl Workspace {
                     .border_b_1()
                     .border_color(theme::island_border())
                     .text_size(px(12.))
-                    .child(icons::icon("file").size(px(13.)).text_color(theme::faint()))
+                    .child(icons::file_icon(path, 14.))
                     .child(
                         div()
                             .font_family(theme::CODE_FONT)

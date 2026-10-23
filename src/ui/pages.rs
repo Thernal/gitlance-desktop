@@ -204,11 +204,7 @@ impl Workspace {
                     super::row(("code-recent", ix), false)
                         .h(px(28.))
                         .gap_2()
-                        .child(
-                            super::icons::icon("file")
-                                .size(px(14.))
-                                .text_color(theme::faint()),
-                        )
+                        .child(super::icons::file_icon(&path, 16.))
                         .child(div().flex_1().min_w_0().truncate().child(path))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.open_file_view(open.clone(), cx)

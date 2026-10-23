@@ -8,6 +8,7 @@ mod avatars;
 mod codeowners;
 mod editor;
 mod emoji;
+mod file_icons;
 mod files;
 mod fswatch;
 mod generated;

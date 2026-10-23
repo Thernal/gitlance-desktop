@@ -551,11 +551,14 @@ impl Workspace {
                                 .bg(theme::selected())
                                 .text_color(theme::text())
                         })
-                        .child(
-                            icons::icon(open.icon)
+                        // Code's file by its own icon (#95).
+                        .child(match open.item {
+                            None => icons::file_icon(&open.tip, 14.),
+                            Some(_) => icons::icon(open.icon)
                                 .size(px(14.))
-                                .text_color(theme::faint()),
-                        )
+                                .text_color(theme::faint())
+                                .into_any_element(),
+                        })
                         .child(
                             super::hover::cut(
                                 SharedString::from(format!("{id}-label-{n}")),

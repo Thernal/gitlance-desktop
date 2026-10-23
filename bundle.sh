@@ -18,6 +18,12 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin" "$app/Contents/MacOS/GitLance"
 cp assets/GitLance.icns "$app/Contents/Resources/GitLance.icns"
+# What the bundled third-party assets ask to travel with them: IntelliJ's icons (Apache 2.0,
+# its licence and notice) and GitLab's emoji list (MIT).
+mkdir -p "$app/Contents/Resources/Licenses"
+cp assets/icons/intellij/LICENSE "$app/Contents/Resources/Licenses/intellij-icons-LICENSE"
+cp assets/icons/intellij/NOTICE "$app/Contents/Resources/Licenses/intellij-icons-NOTICE"
+cp assets/emoji/LICENSE "$app/Contents/Resources/Licenses/gitlab-emoji-LICENSE"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

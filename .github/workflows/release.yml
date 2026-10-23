@@ -78,6 +78,10 @@ jobs:
           New-Item -ItemType Directory -Force dist, pkg/GitLance | Out-Null
           Copy-Item target/release/gitlance.exe pkg/GitLance/GitLance.exe
           Copy-Item README.md, LICENSE pkg/GitLance/
+          New-Item -ItemType Directory -Force pkg/GitLance/licenses | Out-Null
+          Copy-Item assets/icons/intellij/LICENSE pkg/GitLance/licenses/intellij-icons-LICENSE
+          Copy-Item assets/icons/intellij/NOTICE pkg/GitLance/licenses/intellij-icons-NOTICE
+          Copy-Item assets/emoji/LICENSE pkg/GitLance/licenses/gitlab-emoji-LICENSE
           Compress-Archive -Path pkg/GitLance -DestinationPath "dist/GitLance-$env:VERSION-windows-x64.zip"
       - uses: actions/upload-artifact@v4
         with:
@@ -104,6 +108,10 @@ jobs:
           mkdir -p dist "pkg/gitlance-$VERSION"
           cp target/release/gitlance README.md LICENSE assets/linux/gitlance.desktop "pkg/gitlance-$VERSION/"
           cp assets/icon.png "pkg/gitlance-$VERSION/gitlance.png"
+          mkdir -p "pkg/gitlance-$VERSION/licenses"
+          cp assets/icons/intellij/LICENSE "pkg/gitlance-$VERSION/licenses/intellij-icons-LICENSE"
+          cp assets/icons/intellij/NOTICE "pkg/gitlance-$VERSION/licenses/intellij-icons-NOTICE"
+          cp assets/emoji/LICENSE "pkg/gitlance-$VERSION/licenses/gitlab-emoji-LICENSE"
           tar -C pkg -czf "dist/gitlance-$VERSION-linux-x86_64.tar.gz" "gitlance-$VERSION"
 
           app=GitLance.AppDir
@@ -112,6 +120,8 @@ jobs:
           cp assets/linux/gitlance.desktop "$app/"
           cp assets/icon.png "$app/gitlance.png"
           cp assets/icon.png "$app/usr/share/icons/hicolor/512x512/apps/gitlance.png"
+          mkdir -p "$app/usr/share/licenses/gitlance"
+          cp "pkg/gitlance-$VERSION/licenses/"* "$app/usr/share/licenses/gitlance/"
           ln -s usr/bin/gitlance "$app/AppRun"
           curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
