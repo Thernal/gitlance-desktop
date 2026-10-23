@@ -61,7 +61,7 @@ impl Space {
         }
     }
 
-    fn id(self) -> &'static str {
+    pub(super) fn id(self) -> &'static str {
         match self {
             Space::Inbox => "space-inbox",
             Space::Code => "space-code",
@@ -500,10 +500,10 @@ impl Workspace {
                     .text_color(theme::faint())
                     .child(super::words::say(m.line()).into_owned())
             });
+            let shows = !folded && !shut && !opens.is_empty();
             let opens = opens
                 .into_iter()
                 .enumerate()
-                .filter(|_| !folded && !shut)
                 .map(|(n, open)| {
                     let group: gpui::SharedString = format!("{id}-open-{n}").into();
                     let on = open.on;
@@ -613,6 +613,13 @@ impl Workspace {
                         .into_any_element()
                 })
                 .collect::<Vec<_>>();
+            // What is open under it folds away and back in size and alpha (#110).
+            let opens = self.folding(
+                format!("{id}-opens"),
+                &format!("opens-{id}"),
+                shows,
+                div().flex().flex_col().gap(px(2.)).children(opens),
+            );
             div()
                 .flex_none()
                 .flex()

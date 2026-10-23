@@ -2040,6 +2040,7 @@ impl Workspace {
             )
             .on_click(move |_, _, cx| {
                 fold.update(cx, |this, cx| {
+                    this.mark_motion(&format!("agent-thread-{id}"), cx);
                     if !this.toggled_agent.remove(&id) {
                         this.toggled_agent.insert(id);
                     }
@@ -2121,7 +2122,13 @@ impl Workspace {
             .child(
                 discussion::frame(Source::Agent, false)
                     .child(bar)
-                    .children(open.then_some(notes)),
+                    // Its notes open and fold in size and alpha (#110).
+                    .children(self.folding(
+                        format!("agent-thread-body-{id}"),
+                        &format!("agent-thread-{id}"),
+                        open,
+                        notes,
+                    )),
             )
             .into_any_element()
     }

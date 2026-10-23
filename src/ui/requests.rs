@@ -901,24 +901,25 @@ impl Workspace {
                         .ok();
                     })
                     .child(bar)
-                    .when(open, |s| {
-                        let body = div()
-                            .flex()
-                            .flex_col()
-                            .children(history)
-                            .child(div().flex().flex_col().children(notes))
-                            .children(reply_row);
-                        if self.motion.recent(&format!("thread-{ix}")) {
-                            s.child(super::motion::appear(
-                                body,
-                                "thread-opening",
-                                super::motion::BASE,
-                                |body, v| body.opacity(v),
-                            ))
-                        } else {
-                            s.child(body)
-                        }
-                    }),
+                    // Its notes open and fold in size and alpha (#56, 10; #110).
+                    // Built only while it shows: a folded one draws no notes.
+                    .children(
+                        (open || self.motion.recent(&format!("thread-{ix}")))
+                            .then(|| {
+                                self.folding(
+                                    format!("thread-body-{ix}"),
+                                    &format!("thread-{ix}"),
+                                    open,
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .children(history)
+                                        .child(div().flex().flex_col().children(notes))
+                                        .children(reply_row),
+                                )
+                            })
+                            .flatten(),
+                    ),
             )
             .into_any_element()
     }

@@ -78,6 +78,37 @@ impl Widths {
     }
 }
 
+/// What folds open and shut, its height as last drawn open, by name (#110): a fold grows to it.
+#[derive(Clone, Default)]
+pub struct Heights(Rc<RefCell<HashMap<String, f32>>>);
+
+impl Heights {
+    /// `key`'s height as last drawn; 0 before it is.
+    pub fn get(&self, key: &str) -> f32 {
+        self.0.borrow().get(key).copied().unwrap_or(0.)
+    }
+
+    /// Laid over the content `key` (its parent `relative`): measures it as it is drawn; a new
+    /// height draws the window again.
+    pub fn measure(&self, key: String) -> impl IntoElement {
+        let heights = self.0.clone();
+        canvas(
+            move |bounds, window, _| {
+                let height = f32::from(bounds.size.height);
+                let old = heights.borrow_mut().insert(key.clone(), height);
+                if old.is_none_or(|old| (old - height).abs() > 0.5) {
+                    window.request_animation_frame();
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

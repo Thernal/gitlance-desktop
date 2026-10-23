@@ -1177,6 +1177,7 @@ impl Workspace {
 
     /// The menu's open items of a space shown or folded away.
     pub(super) fn toggle_open_items(&mut self, space: Space, cx: &mut Context<Self>) {
+        self.mark_motion(&format!("opens-{}", space.id()), cx);
         self.nav.folded[space.ix()] = !self.nav.folded[space.ix()];
         cx.notify();
     }

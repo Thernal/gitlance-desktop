@@ -374,7 +374,9 @@ impl Workspace {
     }
 
     pub(super) fn toggle_dir(&mut self, path: &str, cx: &mut Context<Self>) {
-        if !self.collapsed.remove(path) {
+        if self.collapsed.remove(path) {
+            self.tree_opening(path, cx);
+        } else {
             self.collapsed.insert(path.to_owned());
         }
         cx.notify();
@@ -594,7 +596,19 @@ fn uniform_list_files(
             let items = this.items();
             range
                 .filter_map(|i| items.get(i))
-                .map(|item| this.render_file_item(item, cx))
+                .map(|item| {
+                    let path = match item {
+                        FileItem::File { ix, .. } => this
+                            .diff
+                            .as_ref()
+                            .and_then(|d| d.files.get(*ix))
+                            .map(|f| f.path().to_owned())
+                            .unwrap_or_default(),
+                        FileItem::Dir { path, .. } => path.clone(),
+                    };
+                    let row = this.render_file_item(item, cx);
+                    this.tree_row(&path, row)
+                })
                 .collect::<Vec<_>>()
         }),
     )

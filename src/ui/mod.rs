@@ -1581,6 +1581,10 @@ pub struct Workspace {
     body_width: Rc<Shared<f32>>,
     /// Each list's width as last drawn: its rows keep what it has room for (#79).
     widths: room::Widths,
+    /// What folds, its open height (#110, `folding`).
+    heights: room::Heights,
+    /// The tree folder opened last, and a count of openings: its rows fade in (`tree_row`).
+    tree_opened: Option<(String, usize)>,
     /// What a narrow window folded, for the session (#80).
     narrowed: narrow::Narrowed,
     /// An open composer stepped aside for a field clicked or opened since (a filter, a find):
@@ -1782,6 +1786,8 @@ impl Workspace {
             offset: 0.,
             body_width: Rc::new(Shared::new(0.)),
             widths: Default::default(),
+            heights: Default::default(),
+            tree_opened: None,
             narrowed: Default::default(),
             compose_aside: false,
             file_jump: None,

@@ -513,6 +513,7 @@ impl Workspace {
     }
 
     fn toggle_group(&mut self, g: Group, cx: &mut Context<Self>) {
+        self.mark_motion(&format!("group-{}", g.key()), cx);
         self.roots.chosen = true;
         if !self.roots.folded.remove(&g) {
             self.roots.folded.insert(g);
@@ -628,13 +629,20 @@ impl Workspace {
                     rows.push(self.group_band(g, count, false, top, cx).into_any_element());
                 }
                 let is_picked = picked.is_some_and(|p| p.iid == m.iid);
-                if self.folds(g) && !is_picked {
+                // Each row folds with its group, in size and alpha (#110): the group opens and
+                // shuts as one, and every row stays a child of its own for the held band.
+                let Some(row) = self.folding(
+                    format!("request-row-{}", m.iid),
+                    &format!("group-{}", g.key()),
+                    !self.folds(g) || is_picked,
+                    self.request_row(m, g, cx),
+                ) else {
                     continue;
-                }
+                };
                 if is_picked {
                     picked_row = Some(rows.len());
                 }
-                rows.push(self.request_row(m, g, cx).into_any_element());
+                rows.push(row);
             }
             // The rows as the last frame laid them out, when they are these rows: where the list's
             // top is, so the band above it is held there.

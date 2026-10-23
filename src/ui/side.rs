@@ -224,20 +224,20 @@ impl Workspace {
                         true,
                         cx,
                     ))
-                    .children((!folded || self.motion.recent("fold-0")).then(|| {
-                        super::motion::toward(
+                    // Opening and folding alike, to its own height and back (#110); the padding
+                    // inside, so nothing is left of it at the end.
+                    .children(
+                        self.folding(
+                            "versions",
+                            "fold-0",
+                            !folded,
                             div()
                                 .id("versions-list")
+                                .max_h(px(240.))
                                 .overflow_y_scroll()
-                                .pb(px(6.))
-                                .child(self.version_rows(cx)),
-                            "versions-open",
-                            !folded,
-                            false,
-                            super::motion::BASE,
-                            |list, v| list.max_h(px(240. * v)).opacity(v),
-                        )
-                    }))
+                                .child(div().pb(px(6.)).child(self.version_rows(cx))),
+                        ),
+                    )
                     .into_any_element(),
             );
         }

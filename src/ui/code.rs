@@ -135,7 +135,9 @@ impl Workspace {
     /// Folder `path` opens as Code's page (#97), unfolded in the tree.
     pub(super) fn open_folder_page(&mut self, path: String, cx: &mut Context<Self>) {
         self.code.reveal(&path);
-        self.code.open.insert(path.clone());
+        if self.code.open.insert(path.clone()) {
+            self.tree_opening(&path, cx);
+        }
         self.nav.space = Space::Code;
         self.arrive(Page::Folder(path.clone()));
         self.read_folder_readme(&path, cx);
@@ -330,7 +332,11 @@ impl Workspace {
                 range
                     .filter_map(|ix| rows.get(ix).cloned())
                     .enumerate()
-                    .map(|(n, row)| this.render_tree_row(row, shown.as_deref(), n, cx))
+                    .map(|(n, row)| {
+                        let path = row.path.clone();
+                        let drawn = this.render_tree_row(row, shown.as_deref(), n, cx);
+                        this.tree_row(&path, drawn)
+                    })
                     .collect::<Vec<_>>()
             }),
         )
@@ -442,6 +448,7 @@ impl Workspace {
                             cx.stop_propagation();
                             if !this.code.open.remove(&fold) {
                                 this.code.open.insert(fold.clone());
+                                this.tree_opening(&fold, cx);
                             }
                             cx.notify();
                         }))

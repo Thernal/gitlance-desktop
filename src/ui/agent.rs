@@ -1033,13 +1033,15 @@ impl Workspace {
         } else {
             ordered.len().saturating_sub(CHATS_SHOWN)
         };
-        let shown: Vec<&crate::agents::Chat> = ordered
+        // Every chat, each shown or folded away with N more (#110: in size and alpha).
+        let shown: Vec<(&crate::agents::Chat, bool)> = ordered
             .iter()
             .enumerate()
-            .filter(|(i, c)| {
-                *i < CHATS_SHOWN || hidden == 0 || Some(c.session.as_str()) == picked_chat
+            .map(|(i, c)| {
+                let shows =
+                    i < CHATS_SHOWN || hidden == 0 || Some(c.session.as_str()) == picked_chat;
+                (*c, shows)
             })
-            .map(|(_, c)| *c)
             .collect();
         let more = (ordered.len() > CHATS_SHOWN).then(|| {
             div()
@@ -1061,6 +1063,7 @@ impl Workspace {
                     "Fewer ▴".to_owned()
                 })
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.mark_motion("chats-more", cx);
                     this.agents_all_chats = !this.agents_all_chats;
                     cx.notify();
                 }))
@@ -1068,7 +1071,7 @@ impl Workspace {
         let chats: Vec<_> = shown
             .into_iter()
             .enumerate()
-            .map(|(ix, c)| {
+            .filter_map(|(ix, (c, shows))| {
                 let busy = busy_of(c);
                 let on = picked_chat == Some(c.session.as_str());
                 let session = c.session.clone();
@@ -1089,7 +1092,7 @@ impl Workspace {
                     super::hover::full_date(c.beat)
                 )
                 .into();
-                div()
+                let row = div()
                     .id(("chat-row", ix))
                     .mx(px(6.))
                     .px(px(8.))
@@ -1160,7 +1163,8 @@ impl Workspace {
                                         div().font_family(theme::CODE_FONT).child(c.branch.clone())
                                     })),
                             ),
-                    )
+                    );
+                self.folding(format!("chat-row-{}", c.session), "chats-more", shows, row)
             })
             .collect();
         // Where a note written here goes, and the way to change it (#77).
@@ -1586,16 +1590,27 @@ impl Workspace {
                     .line_clamp(2)
                     .child(self.one_line(&c.body)),
             )
-            .children((picked && !actions.is_empty()).then(|| {
-                div()
-                    .pt(px(4.))
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .children(actions)
-            }))
+            // What can be done with it opens under the picked row, in size and alpha (#110).
+            .children(
+                (!actions.is_empty())
+                    .then(|| {
+                        self.folding(
+                            format!("agent-row-actions-{id}"),
+                            "agent-row",
+                            picked,
+                            div()
+                                .pt(px(4.))
+                                .flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .children(actions),
+                        )
+                    })
+                    .flatten(),
+            )
             .tip(tip.join("\n"))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.mark_motion("agent-row", cx);
                 this.agent_row = Some(id);
                 this.jump_to(id, cx)
             }))
@@ -1642,6 +1657,7 @@ impl Workspace {
             (None, _) => 0,
         };
         if let Some(&id) = ids.get(to) {
+            self.mark_motion("agent-row", cx);
             self.agent_row = Some(id);
             self.jump_to(id, cx);
         }
