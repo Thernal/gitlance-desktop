@@ -883,7 +883,7 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             continue;
                         }
                         "menu" => {
-                            this.repo_menu = true;
+                            this.open_palette(palette::Kind::Projects, cx);
                             continue;
                         }
                         "settings" => {
@@ -1552,8 +1552,6 @@ pub struct Workspace {
     options: ViewOptions,
     settings: Settings,
     settings_open: bool,
-    /// The repository menu in the title bar is open.
-    repo_menu: bool,
     find: find::Find,
     watch: watch::Watch,
     /// Review comments of this repository, the one being written, and the Review island.
@@ -1799,7 +1797,6 @@ impl Workspace {
             options: ViewOptions::load(&settings),
             settings,
             settings_open: false,
-            repo_menu: false,
             find: find::Find::default(),
             watch: watch::Watch::default(),
             comments: Vec::new(),

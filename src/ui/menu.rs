@@ -130,7 +130,6 @@ impl Workspace {
         let (titles, groups): (Vec<_>, Vec<_>) =
             groups.into_iter().filter(|(_, g)| !g.is_empty()).unzip();
         if !groups.is_empty() {
-            self.repo_menu = false;
             self.ctx_menu = Some(CtxMenu { at, groups, titles });
             self.menu_leaving = None;
             cx.notify();

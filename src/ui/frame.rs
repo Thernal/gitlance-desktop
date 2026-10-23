@@ -234,14 +234,16 @@ impl Workspace {
                     .rounded(px(ROW_RADIUS))
                     .font_weight(FontWeight::SEMIBOLD)
                     .cursor_pointer()
-                    .when(self.repo_menu, |s| s.bg(theme::hover()))
                     .hover(|s| s.bg(theme::hover()))
                     .child(repo)
                     .child(icons::icon("chevron").text_color(theme::muted()))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.repo_menu = !this.repo_menu;
-                        cx.notify();
-                    }))
+                    // Open a repository (⌘T): the projects filtered as you type, a path, Browse
+                    // (the developer, 2026-10-23: its old menu took no typing).
+                    .on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.open_palette(palette::Kind::Projects, cx)
+                        }),
+                    )
             }))
             .child(
                 // The empty part of the bar: a double click zooms the window, as in other apps.
@@ -329,99 +331,6 @@ impl Workspace {
     }
 
     /// The menu under the repository name, over a backdrop that closes it.
-    pub(super) fn render_repo_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let item =
-            |id: &'static str, icon: &'static str, label: &'static str, key: &'static str| {
-                row(id, false)
-                    .h(px(30.))
-                    .gap_2()
-                    .child(icons::icon(icon).text_color(theme::muted()))
-                    .child(div().flex_1().child(label))
-                    .child(keys::caps(key, keys::On::Plain))
-            };
-        div()
-            .absolute()
-            .size_full()
-            .child(
-                div()
-                    .id("repo-menu-backdrop")
-                    .absolute()
-                    .size_full()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.repo_menu = false;
-                            cx.notify();
-                        }),
-                    ),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .occlude()
-                    .top(px(TITLE_BAR - 4.))
-                    .left(px(78.))
-                    .w(px(340.))
-                    .p(px(6.))
-                    .flex()
-                    .flex_col()
-                    .rounded(px(ISLAND_RADIUS))
-                    .border_1()
-                    .border_color(theme::island_border())
-                    .bg(theme::panel())
-                    .shadow_lg()
-                    .child(
-                        item("menu-open", "open", "Open repository…", "⌘O").on_click(cx.listener(
-                            |this, _, window, cx| {
-                                this.repo_menu = false;
-                                this.open(&Open, window, cx);
-                            },
-                        )),
-                    )
-                    .when(self.root.is_some(), |s| {
-                        s.child(item("menu-refresh", "refresh", "Refresh", "⌘R").on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.repo_menu = false;
-                                this.refresh(&Refresh, window, cx);
-                            }),
-                        ))
-                    })
-                    .children((!self.recent.is_empty()).then(|| {
-                        div()
-                            .flex()
-                            .flex_col()
-                            .child(div().h(px(1.)).my(px(4.)).bg(theme::island_border()))
-                            .child(island_label("Recent"))
-                            .children(self.recent.iter().enumerate().map(|(ix, path)| {
-                                let target = path.clone();
-                                let name = path
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().into_owned())
-                                    .unwrap_or_default();
-                                let parent =
-                                    path.parent().map(format::home_relative).unwrap_or_default();
-                                row(("menu-recent", ix), self.root.as_ref() == Some(path))
-                                    .h(px(30.))
-                                    .gap_2()
-                                    .child(div().child(name))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_size(px(11.))
-                                            .text_color(theme::faint())
-                                            .child(parent),
-                                    )
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.repo_menu = false;
-                                        this.request_open(target.clone(), None, cx);
-                                    }))
-                            }))
-                    })),
-            )
-    }
-
     /// The versions, newest first, for the side panel's Versions section.
     pub(super) fn version_rows(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let latest = self.versions.len() - 1;
@@ -1185,7 +1094,6 @@ impl Render for Workspace {
                     .into_any_element(),
             })
             // Last, so it paints over everything.
-            .children(self.repo_menu.then(|| self.render_repo_menu(cx)))
             .children(self.render_ctx_menu(window.viewport_size(), cx))
             .children(self.render_mention_card(cx))
             .children(self.render_blame_tip())

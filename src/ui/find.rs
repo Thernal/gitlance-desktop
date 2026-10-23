@@ -298,9 +298,6 @@ impl Workspace {
                 cx.notify();
             } else if self.ctx_menu.is_some() {
                 self.close_menu(cx);
-            } else if self.repo_menu {
-                self.repo_menu = false;
-                cx.notify();
             } else if self.field.is_some() {
                 self.filter_key(event, cx);
             } else if self.dfind.is_some() {

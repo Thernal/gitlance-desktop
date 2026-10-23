@@ -466,7 +466,6 @@ impl Workspace {
         self.dfind = None;
         self.find.text = None;
         self.ctx_menu = None;
-        self.repo_menu = false;
         self.reset_field_edit();
         let theme = matches!(kind, Kind::Theme);
         let files = match (&kind, &self.root) {
