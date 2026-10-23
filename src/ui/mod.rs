@@ -120,6 +120,7 @@ actions!(
         ToggleFiles,
         ToggleRequests,
         FocusDiff,
+        ZenOneFile,
         CopySelection,
         SelectAll,
         NextChange,
@@ -217,6 +218,8 @@ actions!(
 const COMMIT_LIMIT: usize = 5000;
 const DIFF_ROW: f32 = 20.;
 const CODE_SIZE: f32 = 12.;
+/// The most a file shown alone in zen is wide: a reading width (#55).
+const READING_WIDTH: f32 = 1100.;
 const TITLE_BAR: f32 = 38.;
 /// Space between islands; the resize handles live in it. Flat panes have none (`gap`).
 const GAP: f32 = 8.;
@@ -391,6 +394,7 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("cmd-8"), Tab8, Some("Workspace")),
         KeyBinding::new(&k("cmd-9"), Tab9, Some("Workspace")),
         KeyBinding::new(&k("cmd-."), FocusDiff, Some("Workspace")),
+        KeyBinding::new(&k("cmd-alt-."), ZenOneFile, Some("Workspace")),
         KeyBinding::new(&k("cmd-c"), CopySelection, Some("Workspace")),
         KeyBinding::new(&k("cmd-a"), SelectAll, Some("Workspace && !Typing")),
         KeyBinding::new(&k("f7"), NextChange, Some("Workspace")),
@@ -1364,6 +1368,8 @@ pub struct Workspace {
     recording: Option<&'static str>,
     /// Zen (⌘.): what the branches and files islands were before it hid them.
     zen: Option<(bool, bool)>,
+    /// Zen shows one file at a time, at a reading width (⌥⌘., #55).
+    zen_one: bool,
     /// The Submit review card (`submit.rs`).
     submit: Option<submit::Submit>,
     /// The pending comment ⌥N / ⌥P is on.
@@ -1660,6 +1666,7 @@ impl Workspace {
             submit: None,
             draft_at: None,
             zen: None,
+            zen_one: false,
             recording: None,
             note_sel: None,
             settings_section: Default::default(),
@@ -2516,11 +2523,7 @@ impl Workspace {
         match opt {
             Opt::Unified | Opt::FullContext => self.relayout_all(),
             Opt::FoldReviewed => self.refold(cx),
-            Opt::OneFile => {
-                self.restore_scroll = self.scroll_place();
-                self.clear_file();
-                self.select_file(self.file, cx);
-            }
+            Opt::OneFile => self.show_files_anew(cx),
             // Same rows, new heights.
             Opt::Wrap => self.diff_list.remeasure(),
             Opt::Whitespace => self.reload_diff(cx),
@@ -3046,6 +3049,10 @@ impl Workspace {
             Some((sidebar, files)) => {
                 self.layout.show_sidebar = sidebar;
                 self.layout.show_files = files;
+                // One file at a time goes with it: every file in one scroll again.
+                if std::mem::take(&mut self.zen_one) {
+                    self.show_files_anew(cx);
+                }
             }
             None => {
                 self.zen = Some((self.layout.show_sidebar, self.layout.show_files));
@@ -3058,6 +3065,25 @@ impl Workspace {
         self.mark_motion("side", cx);
         self.mark_motion("zen", cx);
         cx.notify();
+    }
+
+    /// ⌥⌘.: zen with one file at a time, at a reading width (#55); outside zen it enters zen so.
+    /// Pressed again, every file in one scroll, still in zen.
+    fn zen_one_file(&mut self, _: &ZenOneFile, window: &mut Window, cx: &mut Context<Self>) {
+        if self.zen.is_none() {
+            self.focus_diff(&FocusDiff, window, cx);
+        }
+        self.zen_one = !self.zen_one;
+        self.show_files_anew(cx);
+        cx.notify();
+    }
+
+    /// The files shown again as they now should be, one at a time or in one scroll, the file and
+    /// the place in it kept.
+    fn show_files_anew(&mut self, cx: &mut Context<Self>) {
+        self.restore_scroll = self.scroll_place();
+        self.clear_file();
+        self.select_file(self.file, cx);
     }
 
     fn toggle_unified(&mut self, _: &ToggleUnified, _: &mut Window, cx: &mut Context<Self>) {
@@ -3240,7 +3266,27 @@ impl Workspace {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .when(!commits_tab, |s| s.child(self.render_file(diff, cx)))
+                    .when(!commits_tab, |s| {
+                        let file = self.render_file(diff, cx);
+                        if self.zen_one && self.zen.is_some() {
+                            // One file at a reading width, the next one sliding in as it comes
+                            // (#55).
+                            s.justify_center().child(motion::appear(
+                                div()
+                                    .relative()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .max_w(px(READING_WIDTH))
+                                    .flex()
+                                    .child(file),
+                                ("zen-file", self.file),
+                                motion::BASE,
+                                |d, v| d.top(px(16. * (1. - v))).opacity(v),
+                            ))
+                        } else {
+                            s.child(file)
+                        }
+                    })
                     .when(commits_tab, |s| s.child(self.render_pairs(diff, cx))),
             )
             .into_any_element()
@@ -3265,9 +3311,65 @@ impl Workspace {
         }
     }
 
-    /// Zen's header: one line — what is shown, the file, how far the review is.
+    /// Zen's header: one line — what is shown, the file, how far the review is. One file at a
+    /// time: the file's name and folder, where it is among the files ("file 3 of 8") and a bar
+    /// per file — reviewed, the one shown, the rest (#55).
     fn render_zen_head(&self, diff: &Diff) -> impl IntoElement + use<> {
         let file = diff.files.get(self.file).map(|f| f.path().to_owned());
+        if self.zen_one
+            && let Some(path) = &file
+        {
+            let order = self.file_order();
+            let at = order.iter().position(|&ix| ix == self.file).unwrap_or(0);
+            let (dir, name) = match path.rsplit_once('/') {
+                Some((dir, name)) => (format!("{dir}/"), name.to_owned()),
+                None => (String::new(), path.clone()),
+            };
+            let bars = order.iter().map(|&ix| {
+                let color = if ix == self.file {
+                    theme::accent()
+                } else if self.review_state(ix) == Some(reviewed::State::Done) {
+                    theme::added()
+                } else {
+                    theme::hover()
+                };
+                div().w(px(18.)).h(px(4.)).rounded(px(2.)).bg(color)
+            });
+            return island()
+                .flex_none()
+                .flex_row()
+                .items_center()
+                .gap_3()
+                .h(px(36.))
+                .px_4()
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(name),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child(dir),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(12.))
+                        .text_color(theme::muted())
+                        .child(format!("file {} of {}", at + 1, order.len())),
+                )
+                // A bar per file while they fit; past 40 the count says it.
+                .children(
+                    (order.len() <= 40)
+                        .then(|| div().flex_none().flex().gap(px(4.)).children(bars)),
+                );
+        }
         island()
             .flex_none()
             .flex_row()

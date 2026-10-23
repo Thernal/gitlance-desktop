@@ -33,6 +33,14 @@ impl Workspace {
                 .child(pair("v", "reviewed, next"))
                 .child(pair("⌥↓", "next request"))
                 .child(pair("c", "comment"))
+                .child(pair(
+                    "⌥⌘.",
+                    if self.zen_one {
+                        "every file"
+                    } else {
+                        "one file at a time"
+                    },
+                ))
                 .child(pair("⌘.", "leave zen")),
         )
         .map(|keys| self.zen_strip("zen-keys", self.zen.is_some(), 40., keys))
@@ -934,6 +942,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_files))
             .on_action(cx.listener(Self::toggle_requests))
             .on_action(cx.listener(Self::focus_diff))
+            .on_action(cx.listener(Self::zen_one_file))
             .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::next_change))

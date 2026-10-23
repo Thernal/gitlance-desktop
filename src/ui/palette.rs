@@ -121,6 +121,7 @@ pub enum Cmd {
     ToggleFiles,
     ToggleRequests,
     FocusDiff,
+    ZenOneFile,
     Unified,
     CycleMode,
     Rendered,
@@ -250,6 +251,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Fold or open Changes", "⌥⌘2", Cmd::ToggleFiles),
     ("Branches or merge requests", "⌥⌘3", Cmd::ToggleRequests),
     ("Diff only", "⌘.", Cmd::FocusDiff),
+    ("Diff only, one file at a time", "⌥⌘.", Cmd::ZenOneFile),
     ("New tab", "⌘T", Cmd::NewTab),
     ("Settings", "⌘,", Cmd::Settings),
 ];
@@ -1526,6 +1528,7 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::ToggleFiles => Box::new(ToggleFiles),
         Cmd::ToggleRequests => Box::new(ToggleRequests),
         Cmd::FocusDiff => Box::new(FocusDiff),
+        Cmd::ZenOneFile => Box::new(ZenOneFile),
         Cmd::Unified => Box::new(ToggleUnified),
         Cmd::CycleMode => Box::new(CycleMode),
         Cmd::Wrap => Box::new(ToggleWrap),

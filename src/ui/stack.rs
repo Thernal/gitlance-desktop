@@ -162,7 +162,9 @@ fn changed_span(old: &[Row], new: &[Row]) -> Option<(usize, usize, usize)> {
 impl Workspace {
     /// Every file in one scroll: the option is on and the diff has more than one file.
     pub(super) fn wants_stack(&self) -> bool {
-        !self.options.one_file && self.diff.as_ref().is_some_and(|d| d.files.len() > 1)
+        !self.options.one_file
+            && !(self.zen_one && self.zen.is_some())
+            && self.diff.as_ref().is_some_and(|d| d.files.len() > 1)
     }
 
     /// The list index of the active file's first row.
