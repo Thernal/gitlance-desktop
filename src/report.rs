@@ -12,8 +12,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-/// The relay's address; empty until it is up. `GITLANCE_REPORT_URL` stands in for it.
-const RELAY: &str = "";
+/// The relay's address (`relay/`); `GITLANCE_REPORT_URL` stands in for it.
+const RELAY: &str = "https://gitlance-reports.h-humbat0.workers.dev";
 /// Where a report goes when it is posted by hand.
 const NEW_ISSUE: &str = "https://github.com/Thernal/gitlance-desktop/issues/new";
 /// The log lines a report carries.
