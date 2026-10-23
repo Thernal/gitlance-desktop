@@ -273,6 +273,7 @@ impl Workspace {
                     .tooltip_show_delay(crate::ui::hover::LONG)
                     .tooltip(|_, cx| cx.new(|_| Tip("Search commits  ⌘⇧F")).into())
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
                         if this.layout.fold_commits {
                             this.fold_section(1, cx);
                         }
@@ -346,14 +347,19 @@ impl Workspace {
             if !folded {
                 end.push(
                     super::diff_view::group()
-                        .child(chip("files-tree", "Tree", !list).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
+                        // A chip is not the heading: a click on it does not fold the section.
+                        .child(chip("files-tree", "Tree", !list).on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
                                 this.set_file_view(false, cx)
-                            }),
-                        ))
-                        .child(chip("files-list", "List", list).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| this.set_file_view(true, cx)),
-                        ))
+                            },
+                        )))
+                        .child(chip("files-list", "List", list).on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.set_file_view(true, cx)
+                            },
+                        )))
                         .into_any_element(),
                 );
             }

@@ -164,7 +164,11 @@ impl Workspace {
                         .text_color(theme::warning())
                         .child(self.wt.count.to_string()),
                 )
-                .on_click(cx.listener(|this, _, _, cx| this.select_working_tree(cx)))
+                // In the Commits heading: picking it does not fold the section.
+                .on_click(cx.listener(|this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.select_working_tree(cx)
+                }))
         })
     }
 }
