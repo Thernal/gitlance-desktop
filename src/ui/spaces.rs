@@ -222,17 +222,6 @@ impl Workspace {
             .collect()
     }
 
-    pub(super) fn menu_folded(&self) -> bool {
-        self.layout.fold_places
-    }
-
-    /// The title bar's first button and ⌘B: the menu to icons and back, kept in `layout.txt`.
-    pub(super) fn toggle_menu(&mut self, cx: &mut Context<Self>) {
-        self.layout.fold_places = !self.layout.fold_places;
-        self.layout.save();
-        cx.notify();
-    }
-
     /// A space's row or ⌃⌘1…4: the page it was left on, its root when it is already on screen.
     /// One the project lacks a token for opens the connect panel; one it lacks a remote or git
     /// for does nothing.
@@ -586,7 +575,9 @@ impl Workspace {
                 }
                 rows
             }))
-            .when(!nested, |s| s.children(Space::ALL.map(&row)));
+            .when(!nested, |s| s.children(Space::ALL.map(&row)))
+            // A narrow window's side panel, folded into this column (#80).
+            .children(self.render_panel_icons(cx));
         // Folding to icons narrows it (#56, 2); zen slides it away (16).
         let menu = super::motion::toward(
             menu,

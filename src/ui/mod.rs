@@ -31,6 +31,7 @@ mod markdown;
 mod md_page;
 mod menu;
 mod motion;
+mod narrow;
 mod nav;
 mod notifications;
 mod open_in;
@@ -1536,6 +1537,8 @@ pub struct Workspace {
     body_width: Rc<Shared<f32>>,
     /// Each list's width as last drawn: its rows keep what it has room for (#79).
     widths: room::Widths,
+    /// What a narrow window folded, for the session (#80).
+    narrowed: narrow::Narrowed,
     /// Advance of one code character, measured on the first render.
     char_width: f32,
     commit_scroll: UniformListScrollHandle,
@@ -1724,6 +1727,7 @@ impl Workspace {
             offset: 0.,
             body_width: Rc::new(Shared::new(0.)),
             widths: Default::default(),
+            narrowed: Default::default(),
             char_width: 0.,
             commit_scroll: UniformListScrollHandle::new(),
             file_scroll: UniformListScrollHandle::new(),
@@ -2630,7 +2634,7 @@ impl Workspace {
 
     /// The side panel's Changes is open and has the files as a zone.
     pub(super) fn files_zone(&self) -> bool {
-        self.layout.show_sidebar
+        self.side_open()
             && self.layout.show_files
             && self.diff.as_ref().is_some_and(|d| d.files.len() > 1)
     }
@@ -3684,14 +3688,17 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(div().text_size(px(12.)).text_color(theme::muted()).child(
-                                match self.change_at {
-                                    Some(at) => {
-                                        format!("change {} of {}", at + 1, self.changes.len())
-                                    }
-                                    None => plural(self.changes.len(), "change"),
-                                },
-                            ))
+                            // A diff under 600 px keeps the arrows (#80).
+                            .when(!self.tight, |s| {
+                                s.child(div().text_size(px(12.)).text_color(theme::muted()).child(
+                                    match self.change_at {
+                                        Some(at) => {
+                                            format!("change {} of {}", at + 1, self.changes.len())
+                                        }
+                                        None => plural(self.changes.len(), "change"),
+                                    },
+                                ))
+                            })
                             .child(
                                 diff_view::group()
                                     .child(chip("prev-change", "↑", false).on_click(cx.listener(
@@ -3707,19 +3714,28 @@ impl Workspace {
                         self.open_target()
                             .and_then(|(path, _)| self.open_app(&path))
                             .map(|app| {
+                                // A diff under 600 px keeps its ↗, the app in its tooltip (#80).
+                                let label = if self.tight {
+                                    "↗".to_owned()
+                                } else {
+                                    format!("Open in {} ↗", app.name())
+                                };
                                 div()
                                     .flex()
+                                    .flex_none()
                                     .child(
-                                        chip(
-                                            "open-editor",
-                                            format!("Open in {} ↗", app.name()),
-                                            false,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                                this.open_in(cx)
-                                            }),
-                                        ),
+                                        chip("open-editor", label, false)
+                                            .tooltip_show_delay(hover::LONG)
+                                            .tooltip({
+                                                let tip: SharedString =
+                                                    format!("Open in {}  ⌥⌘O", app.name()).into();
+                                                move |_, cx| {
+                                                    cx.new(|_| TipOwned(tip.clone())).into()
+                                                }
+                                            })
+                                            .on_click(cx.listener(
+                                                |this, _: &ClickEvent, _, cx| this.open_in(cx),
+                                            )),
                                     )
                                     .child(chip("open-in-more", "▾", false).on_mouse_down(
                                         MouseButton::Left,

@@ -21,6 +21,17 @@ use std::collections::{HashMap, HashSet};
 /// The width of a root's list.
 const LIST: f32 = 460.;
 
+impl Workspace {
+    /// A root's list: beside its preview at its width, or narrow the whole page (#80).
+    pub(super) fn root_list(&self) -> Div {
+        if self.compact() {
+            island().flex_1().min_w_0()
+        } else {
+            island().w(px(list_width(LIST))).flex_none()
+        }
+    }
+}
+
 /// A root's list's width: `LIST`, or a snapshot's `GITLANCE_SNAPSHOT_LIST` to see its rows
 /// narrow (#79).
 pub(super) fn list_width(width: f32) -> f32 {
@@ -647,9 +658,7 @@ impl Workspace {
                 .flex()
                 .gap(px(super::gap()))
                 .child(
-                    island()
-                        .w(px(list_width(LIST)))
-                        .flex_none()
+                    self.root_list()
                         .border_color(self.zone_border(super::zones::Zone::Branches))
                         .child(
                             div()
@@ -673,7 +682,7 @@ impl Workspace {
                                 .children(held),
                         ),
                 )
-                .child(
+                .children((!self.compact()).then(|| {
                     island().flex_1().min_w_0().bg(theme::editor()).child(
                         div()
                             .id("request-preview")
@@ -681,8 +690,8 @@ impl Workspace {
                             .min_h_0()
                             .overflow_y_scroll()
                             .children(picked.map(|m| self.request_preview(m, cx))),
-                    ),
-                )
+                    )
+                }))
                 .into_any_element()
         };
         div()
@@ -977,8 +986,10 @@ impl Workspace {
                 )
                 .tip(tip.join("\n"))
                 .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                    // A second click on the picked one opens it, as ↵ does.
-                    if this.nav.pick_request == Some(iid) && event.click_count() > 1 {
+                    // A second click on the picked one opens it, as ↵ does; with no preview
+                    // beside the list, the first (#80).
+                    let open = this.nav.pick_request == Some(iid) && event.click_count() > 1;
+                    if open || this.compact() {
                         this.field = None;
                         return this.select_request(iid, cx);
                     }
@@ -1378,9 +1389,7 @@ impl Workspace {
             .flex()
             .gap(px(super::gap()))
             .child(
-                island()
-                    .w(px(list_width(LIST)))
-                    .flex_none()
+                self.root_list()
                     .relative()
                     .border_color(self.zone_border(super::zones::Zone::Branches))
                     .child(self.widths.measure("branches"))
@@ -1394,7 +1403,7 @@ impl Workspace {
                             .children(list),
                     ),
             )
-            .child(
+            .children((!self.compact()).then(|| {
                 island().flex_1().min_w_0().bg(theme::editor()).child(
                     div()
                         .id("branch-preview")
@@ -1404,8 +1413,8 @@ impl Workspace {
                         .flex_col()
                         .overflow_y_scroll()
                         .child(preview),
-                ),
-            )
+                )
+            }))
             .into_any_element()
     }
 
@@ -1650,7 +1659,8 @@ impl Workspace {
                     },
                 )
                 .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                    if this.nav.pick_branch == Some(row) && event.click_count() > 1 {
+                    let open = this.nav.pick_branch == Some(row) && event.click_count() > 1;
+                    if open || this.compact() {
                         return this.open_branch_row(row, cx);
                     }
                     this.zone = super::zones::Zone::Branches;
@@ -1910,6 +1920,18 @@ impl Workspace {
 
     /// The list's filter in the page bar: ⌘F gives it the keyboard.
     pub(super) fn bar_filter(&self, placeholder: &'static str, cx: &Context<Self>) -> AnyElement {
+        // Narrow, the field is its icon until it is used (#80).
+        if self.compact() && self.field != Some(Field::Branches) && self.bfilter.is_empty() {
+            return super::bar::bar_icon(
+                "list-filter-icon",
+                "search",
+                format!("{placeholder}  ⌘F"),
+            )
+            .on_click(
+                cx.listener(|this, _: &ClickEvent, _, cx| this.start_field(Field::Branches, cx)),
+            )
+            .into_any_element();
+        }
         div()
             .flex()
             .items_center()

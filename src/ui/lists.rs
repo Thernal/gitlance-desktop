@@ -453,7 +453,11 @@ impl Workspace {
                                     this.file_context(ix, event.position, cx)
                                 }),
                             )
-                            .on_click(cx.listener(move |this, _, _, cx| this.select_file(ix, cx))),
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                // Picked in the drawer, it goes and the file is on screen (#80).
+                                this.close_drawer(cx);
+                                this.select_file(ix, cx)
+                            })),
                     )
                     .into_any_element()
             }
@@ -549,7 +553,11 @@ impl Workspace {
                     this.file_context(ix, event.position, cx)
                 }),
             )
-            .on_click(cx.listener(move |this, _, _, cx| this.select_file(ix, cx)));
+            .on_click(cx.listener(move |this, _, _, cx| {
+                // Picked in the drawer, it goes and the file is on screen (#80).
+                this.close_drawer(cx);
+                this.select_file(ix, cx)
+            }));
         div()
             .w_full()
             .h(px(42.))

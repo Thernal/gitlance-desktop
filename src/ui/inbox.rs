@@ -355,22 +355,27 @@ impl Workspace {
             .flex()
             .gap(px(super::gap()))
             .child(
-                island()
-                    .w(px(super::roots::list_width(self.layout.sidebar.max(360.))))
-                    .flex_none()
-                    .relative()
-                    .child(self.widths.measure("inbox"))
-                    .child(
-                        div()
-                            .id("inbox-list")
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .pb(px(6.))
-                            .children(list),
-                    ),
+                if self.compact() {
+                    island().flex_1().min_w_0()
+                } else {
+                    island()
+                        .w(px(super::roots::list_width(self.layout.sidebar.max(360.))))
+                        .flex_none()
+                }
+                .relative()
+                .child(self.widths.measure("inbox"))
+                .child(
+                    div()
+                        .id("inbox-list")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .pb(px(6.))
+                        .children(list),
+                ),
             )
-            .child(
+            // Narrow, the list is the page and a notice opens where it points (#80).
+            .children((!self.compact()).then(|| {
                 island()
                     .flex_1()
                     .min_w_0()
@@ -383,8 +388,8 @@ impl Workspace {
                             .overflow_y_scroll()
                             .child(preview),
                     )
-                    .child(inbox_keys()),
-            )
+                    .child(inbox_keys())
+            }))
     }
 
     /// One notice: unread dot, who did what, the request always; when, and the start of what was
@@ -472,7 +477,13 @@ impl Workspace {
                     })),
             )
             .tip(tip.join("\n"))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.inbox_select(ix, cx)))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if this.compact() {
+                    this.inbox = false;
+                    return this.open_notice(ix, cx);
+                }
+                this.inbox_select(ix, cx)
+            }))
     }
 
     /// The selected notice: its request, the code, the discussion, the reply.

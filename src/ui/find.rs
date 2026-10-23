@@ -303,6 +303,8 @@ impl Workspace {
                 self.close_dfind(cx);
             } else if self.find.text.is_some() {
                 self.close_find(cx);
+            } else if self.side_drawer() {
+                self.close_drawer(cx);
             } else if self.settings_open {
                 self.settings_open = false;
                 cx.notify();

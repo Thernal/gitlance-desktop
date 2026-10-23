@@ -76,8 +76,7 @@ impl Workspace {
             return out;
         }
         // A tabbed item's commits are its Commits tab, not a section of the panel (#73, #74).
-        if self.layout.show_sidebar && !self.layout.fold_commits && self.item_sections().is_empty()
-        {
+        if self.side_open() && !self.layout.fold_commits && self.item_sections().is_empty() {
             out.push(Zone::Commits);
         }
         if self.diff.is_some() && !self.settings_open {

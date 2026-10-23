@@ -42,9 +42,16 @@ impl Workspace {
         let space = self.nav.space;
         let page = self.nav_page().cloned();
         let (path, id, mono) = self.path_of(space, page.as_ref());
+        // Narrow, the path is ‹ — one level up — and the id (#80).
+        let up = self
+            .compact()
+            .then(|| path.iter().rev().find_map(|c| c.to.clone()))
+            .flatten();
+        let path = if self.compact() { Vec::new() } else { path };
         let count = self.count_of(space, page.as_ref());
         let public = space == Space::Requests && page.is_some();
-        let from = self.nav.from.filter(|_| page.is_some());
+        // Narrow, ‹ is one level up; ⌘[ and the title bar still go back (#80).
+        let from = self.nav.from.filter(|_| page.is_some() && !self.compact());
         let crumbs = path.into_iter().enumerate().map(|(n, crumb)| {
             let link = crumb.to.clone();
             div()
@@ -105,6 +112,22 @@ impl Workspace {
                     .gap(px(6.))
                     .overflow_hidden()
                     .text_color(theme::muted())
+                    .children(up.map(|to| {
+                        div()
+                            .id("crumb-up")
+                            .flex_none()
+                            .px(px(4.))
+                            .rounded(px(super::ROW_RADIUS))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                            .child("‹")
+                            .tooltip_show_delay(super::hover::LONG)
+                            .tooltip(|_, cx| cx.new(|_| super::Tip("Up a level  esc")).into())
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.nav.from = None;
+                                this.show(space, to.clone(), cx)
+                            }))
+                    }))
                     .children(crumbs)
                     .child(
                         div()
@@ -298,7 +321,7 @@ impl Workspace {
             }
             (Space::Branches, None) => out.push(self.bar_filter("Filter branches", cx)),
             (Space::Inbox, _) if self.notices.unread() > 0 => out.push(
-                bar_button("bar-read-all", "Mark all read", "", false)
+                self.bar_action("bar-read-all", "check", "Mark all read", "")
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.read_all_notices(cx)))
                     .into_any_element(),
             ),
@@ -309,11 +332,11 @@ impl Workspace {
                 match ix.and_then(|ix| self.request_of_branch(ix).map(|m| m.iid)) {
                     // Its request has a page of its own: the way there.
                     Some(iid) => out.push(
-                        bar_button(
+                        self.bar_action(
                             "bar-request",
+                            "pull-request",
                             &format!("{} →", words::number(iid)),
                             "",
-                            false,
                         )
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.select_request(iid, cx)
@@ -334,14 +357,14 @@ impl Workspace {
             (Space::Requests, Some(Page::RequestCommit(..)))
             | (Space::Branches, Some(Page::BranchCommit(..))) => {
                 out.push(
-                    bar_button("bar-previous-commit", "Previous", "[", false)
+                    self.bar_action("bar-previous-commit", "back", "Previous", "[")
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.step_item_commit(false, cx);
                         }))
                         .into_any_element(),
                 );
                 out.push(
-                    bar_button("bar-next-commit", "Next", "]", false)
+                    self.bar_action("bar-next-commit", "forward", "Next", "]")
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.step_item_commit(true, cx);
                         }))
@@ -355,7 +378,7 @@ impl Workspace {
                     n => format!("Submit review · {n}"),
                 };
                 out.push(
-                    bar_button("bar-submit", &label, "⇧⌘↵", false)
+                    self.bar_action("bar-submit", "send", &label, "⇧⌘↵")
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_submit(cx)))
                         .into_any_element(),
                 );
@@ -385,6 +408,55 @@ fn space_name(space: Space) -> &'static str {
         Space::Branches => "Branches",
         Space::Requests => "Merge requests",
     }
+}
+
+impl Workspace {
+    /// A secondary action of the bar: its label and key, or in a narrow window its icon alone,
+    /// the label and the key in its tooltip (#80).
+    pub(super) fn bar_action(
+        &self,
+        id: &'static str,
+        icon: &'static str,
+        label: &str,
+        key: &'static str,
+    ) -> gpui::Stateful<gpui::Div> {
+        if !self.compact() {
+            return bar_button(id, label, key, false);
+        }
+        let tip = if key.is_empty() {
+            words::say(label).into_owned()
+        } else {
+            format!("{}  {key}", words::say(label))
+        };
+        bar_icon(id, icon, tip)
+    }
+}
+
+/// A bar's button as its icon alone, what it does in its tooltip.
+pub(super) fn bar_icon(
+    id: &'static str,
+    icon: &'static str,
+    tip: String,
+) -> gpui::Stateful<gpui::Div> {
+    use super::hover::Hover;
+    div()
+        .id(id)
+        .flex_none()
+        .size(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(super::ROW_RADIUS))
+        .border_1()
+        .border_color(theme::island_border())
+        .cursor_pointer()
+        .hover(|s| s.bg(theme::hover()))
+        .child(
+            super::icons::icon(icon)
+                .size(px(15.))
+                .text_color(theme::muted()),
+        )
+        .tip(tip)
 }
 
 /// A button of the bar: its label and its key as caps; the primary one filled.

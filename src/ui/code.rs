@@ -200,9 +200,14 @@ impl Workspace {
             .min_h_0()
             .flex()
             .gap(px(super::gap()))
-            .children(self.layout.show_sidebar.then(|| self.render_code_tree(cx)))
+            .children(self.side_docked().then(|| self.render_code_tree(cx)))
             .child(page)
             .children(self.render_tool(cx))
+            // Narrow, the tree opens over the page (#80).
+            .children(
+                self.side_drawer()
+                    .then(|| self.drawer(self.render_code_tree(cx))),
+            )
     }
 
     /// The project's tree: its name and the revision chip, Go to file, the folders and files.
@@ -340,7 +345,8 @@ impl Workspace {
                     }
                     return cx.notify();
                 }
-                // A second click keeps it as a tab.
+                // A second click keeps it as a tab; picked in the drawer, it goes (#80).
+                this.close_drawer(cx);
                 this.open_code_file(path.clone(), e.click_count() < 2, cx)
             }))
             .into_any_element()

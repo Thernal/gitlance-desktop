@@ -1162,9 +1162,10 @@ impl Workspace {
                 .filter(|c| !c.archived && f.takes(kind_of(c, &alive)))
                 .count()
         };
+        // A narrow window's chips go to a second line rather than past its edge (#80).
         let filters = [Filter::All, Filter::NeedsYou, Filter::Waiting, Filter::Done]
             .into_iter()
-            .fold(super::diff_view::group(), |group, f| {
+            .fold(super::diff_view::group().flex_wrap(), |group, f| {
                 group.child(
                     super::diff_view::chip(
                         f.id(),

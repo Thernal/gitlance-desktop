@@ -225,7 +225,15 @@ impl Workspace {
                             window.titlebar_double_click();
                         }
                     })
-                    .children(self.root.is_some().then(|| {
+                    // Narrow, search is its icon (#80).
+                    .children((self.root.is_some() && self.compact()).then(|| {
+                        icon_button("title-search-icon", "search", "Search or run a command  ⌘K")
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.search(palette::Scope::All, cx)),
+                            )
+                    }))
+                    .children((self.root.is_some() && !self.compact()).then(|| {
                         div()
                             .id("title-search")
                             .flex_shrink(1.)
@@ -759,7 +767,10 @@ impl Workspace {
                     this.commit_context(ix, event.position, cx)
                 }),
             )
-            .on_click(cx.listener(move |this, _, _, cx| this.select_commit(ix, cx)));
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.close_drawer(cx);
+                this.select_commit(ix, cx)
+            }));
         // A long hover: the commit's card (#53) — its whole message start, author, date, id, labels.
         let item = match self.commit_card(ix) {
             Some(card) => {
@@ -798,10 +809,11 @@ impl Render for Workspace {
         let win: f32 = window.viewport_size().width.into();
         if (win - self.win_width).abs() > 0.5 {
             self.win_width = win;
+            self.follow_width();
         }
         // A folded section has no keyboard: it goes to the diff.
         let folded_zone = match self.zone {
-            zones::Zone::Commits => self.layout.fold_commits || !self.layout.show_sidebar,
+            zones::Zone::Commits => self.layout.fold_commits || !self.side_open(),
             zones::Zone::Files => !self.files_zone(),
             _ => false,
         };
@@ -809,7 +821,8 @@ impl Render for Workspace {
             self.zone = zones::Zone::Diff;
         }
         let body = self.body_width.get();
-        let narrow = body > 0. && body < 700.;
+        // Under 1280 px of window too (#80).
+        let narrow = (body > 0. && body < 700.) || self.menu_narrow();
         // At the interface size chosen: 600 px of the design is more at 150 %.
         let tight = body > 0. && body < f32::from(px(600.));
         if narrow != self.narrow || tight != self.tight {
@@ -1009,13 +1022,12 @@ impl Render for Workspace {
                     this.search(palette::Scope::Branches, cx)
                 }
             }))
+            // ⌃2 ⌃3: a section of the side panel; narrow, its drawer opens there (#80).
+            .on_action(cx.listener(|this, _: &FocusCommits, _, cx| {
+                this.focus_panel(zones::Zone::Commits, cx)
+            }))
             .on_action(
-                cx.listener(|this, _: &FocusCommits, _, cx| {
-                    this.set_zone(zones::Zone::Commits, cx)
-                }),
-            )
-            .on_action(
-                cx.listener(|this, _: &FocusFiles, _, cx| this.set_zone(zones::Zone::Files, cx)),
+                cx.listener(|this, _: &FocusFiles, _, cx| this.focus_panel(zones::Zone::Files, cx)),
             )
             .on_action(
                 cx.listener(|this, _: &FocusDiffZone, _, cx| this.set_zone(zones::Zone::Diff, cx)),

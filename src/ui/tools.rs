@@ -88,6 +88,10 @@ impl Workspace {
     /// Opens `tool` (and gives it the keyboard), or closes the one open.
     pub(super) fn set_tool(&mut self, tool: Option<Tool>, cx: &mut Context<Self>) {
         let name = tool.map_or("", Tool::name);
+        // Floating, it and the drawer are never open together (#80).
+        if tool.is_some() && self.tool_floats() {
+            self.close_drawer(cx);
+        }
         // Opened or closed, it slides (#56, 3); one tool for another is no motion.
         let was = self.tool();
         if was.is_some() != tool.is_some() {
@@ -116,9 +120,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Under 1 280 px the tool window floats over the diff instead of taking its width.
+    /// Under 1 000 px the tool window floats over the diff instead of taking its width (#80).
     pub(super) fn tool_floats(&self) -> bool {
-        self.win_width < 1280.
+        self.win_width < super::narrow::FLOAT
     }
 
     pub(super) fn toggle_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {

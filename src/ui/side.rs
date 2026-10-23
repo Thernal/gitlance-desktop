@@ -128,10 +128,58 @@ impl Workspace {
             .children(end)
     }
 
+    /// The panel shows the versions: a request's page with more than one, not on its commits nor
+    /// a branch's.
+    fn side_versions(&self) -> bool {
+        let page = self.nav_page();
+        let tabbed = !self.item_sections().is_empty();
+        let commit_level = matches!(page, Some(Page::RequestCommit(..) | Page::BranchCommit(..)));
+        let branch = tabbed && matches!(page, Some(Page::Branch(_) | Page::BranchCommit(..)));
+        self.versions.len() > 1 && !commit_level && !branch
+    }
+
+    /// The panel shows the commits: on a page without a Commits tab (the main line).
+    fn side_commits(&self) -> bool {
+        self.item_sections().is_empty()
+    }
+
+    /// The panel's sections on this page as icons, where it folds into the menu's column (#80):
+    /// its icon, its name, and the zone it gives the keyboard to.
+    pub(super) fn side_icons(&self) -> Vec<(&'static str, &'static str, Option<Zone>)> {
+        if self.settings_open || self.zen.is_some() {
+            return Vec::new();
+        }
+        match self.nav.space {
+            super::spaces::Space::Code if self.root.is_some() => {
+                vec![("folder", "Files", None)]
+            }
+            super::spaces::Space::Branches | super::spaces::Space::Requests
+                if self.nav_page().is_some()
+                    && !matches!(
+                        self.page_tab(),
+                        Some(super::nav::Section::Overview | super::nav::Section::Commits)
+                    ) =>
+            {
+                let mut icons = Vec::new();
+                if self.side_versions() {
+                    icons.push(("layers", "Versions", None));
+                }
+                if self.side_commits() && !self.commits.is_empty() {
+                    icons.push(("commit", "Commits", Some(Zone::Commits)));
+                }
+                if self.diff.as_ref().is_some_and(|d| !d.files.is_empty()) {
+                    icons.push(("files", "Changes", Some(Zone::Files)));
+                }
+                icons
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// The side panel; None when it is hidden (⌥⌘1, zen).
     pub(super) fn render_side(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         // Hidden a moment ago (⌥⌘1, zen), it is drawn on its way out (#56, 4).
-        if !self.layout.show_sidebar && !self.motion.recent("side") {
+        if !self.layout.show_sidebar && !self.motion.recent("side") && !self.side_drawer() {
             return None;
         }
         let keyboard = matches!(self.zone, Zone::Commits | Zone::Files);
@@ -142,11 +190,7 @@ impl Workspace {
         // A request's or a branch's commits are its Commits tab, a commit of it a level there: on
         // its pages the panel holds the changes — a request's with its versions — and on a commit
         // only the commit's (#73, #74).
-        let page = self.nav_page().cloned();
-        let tabbed = !self.item_sections().is_empty();
-        let commit_level = matches!(page, Some(Page::RequestCommit(..) | Page::BranchCommit(..)));
-        let branch = tabbed && matches!(page, Some(Page::Branch(_) | Page::BranchCommit(..)));
-        if self.versions.len() > 1 && !commit_level && !branch {
+        if self.side_versions() {
             let folded = self.section_folded(Section::Versions);
             let summary = match self.selection {
                 Selection::Versions { from, to } => format!(
@@ -186,7 +230,7 @@ impl Workspace {
             );
         }
 
-        if !tabbed {
+        if self.side_commits() {
             let commits_folded = self.section_folded(Section::Commits);
             let first = match self.selection {
                 Selection::Commit(ix) => self.commits.get(ix),

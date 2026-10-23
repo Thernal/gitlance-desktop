@@ -369,14 +369,16 @@ impl Workspace {
     pub(super) fn open_in_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (path, _) = self.open_target()?;
         let main = match self.open_app(&path) {
-            Some(app) => super::bar::bar_button(
-                "bar-open-in",
-                &format!("Open in {}", app.name()),
-                "⌥⌘O",
-                false,
-            )
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_in(cx))),
-            None => super::bar::bar_button("bar-open-in", "Choose an app…", "", false)
+            Some(app) => self
+                .bar_action(
+                    "bar-open-in",
+                    "external",
+                    &format!("Open in {}", app.name()),
+                    "⌥⌘O",
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_in(cx))),
+            None => self
+                .bar_action("bar-open-in", "external", "Choose an app…", "")
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, e: &MouseDownEvent, _, cx| {

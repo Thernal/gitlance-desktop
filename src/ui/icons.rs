@@ -155,6 +155,14 @@ const ICONS: &[(&str, &str)] = &[
         ),
     ),
     ("back", lucide!(r#"<path d="m15 18-6-6 6-6"/>"#)),
+    (
+        "external",
+        lucide!(
+            r#"<path d="M15 3h6v6"/>"#
+            r#"<path d="M10 14 21 3"/>"#
+            r#"<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>"#
+        ),
+    ),
     ("forward", lucide!(r#"<path d="m9 18 6-6-6-6"/>"#)),
     ("chevron", lucide!(r#"<path d="m6 9 6 6 6-6"/>"#)),
     ("chevron-right", lucide!(r#"<path d="m9 18 6-6-6-6"/>"#)),

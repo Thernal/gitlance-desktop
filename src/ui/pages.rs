@@ -98,23 +98,27 @@ impl Workspace {
             .flex_1()
             .min_h_0()
             .flex()
-            .children(self.render_side(cx).map(|side| {
-                // It slides in and out at its width (#56, 4, 16).
-                let room = self.layout.sidebar + 12.;
-                motion::toward(
-                    div()
-                        .flex()
-                        .flex_none()
-                        .overflow_hidden()
-                        .child(side)
-                        .child(self.handle(Split::Sidebar, cx)),
-                    "side-pane",
-                    self.layout.show_sidebar,
-                    self.motion.recent("side"),
-                    motion::BASE,
-                    move |pane, v| pane.max_w(px(room * v)),
-                )
-            }))
+            .children(
+                self.render_side(cx)
+                    .filter(|_| !self.compact())
+                    .map(|side| {
+                        // It slides in and out at its width (#56, 4, 16).
+                        let room = self.layout.sidebar + 12.;
+                        motion::toward(
+                            div()
+                                .flex()
+                                .flex_none()
+                                .overflow_hidden()
+                                .child(side)
+                                .child(self.handle(Split::Sidebar, cx)),
+                            "side-pane",
+                            self.layout.show_sidebar,
+                            self.motion.recent("side"),
+                            motion::BASE,
+                            move |pane, v| pane.max_w(px(room * v)),
+                        )
+                    }),
+            )
             .child(
                 div()
                     .flex_1()
@@ -134,6 +138,13 @@ impl Workspace {
                     .children(self.render_zen_keys()),
             )
             .children(self.render_tool(cx))
+            // Narrow, the side panel opens over the content (#80).
+            .children(
+                self.side_drawer()
+                    .then(|| self.render_side(cx))
+                    .flatten()
+                    .map(|side| self.drawer(side)),
+            )
     }
 
     /// Code's folder page when it has no README: Go to a file, and the files opened lately.
