@@ -338,10 +338,19 @@ fn project_items(
             (name, p)
         })
         .collect();
+    // By the name first, then by the whole path as Go to file does: `work ibam` finds
+    // ~/Desktop/Work/ABB/ibam, `abb` every project under ABB (the developer, 2026-10-23).
     let ranked: Vec<&(String, &std::path::PathBuf)> = if typed.is_empty() {
         named.iter().collect()
     } else {
+        let words: Vec<String> = typed.split_whitespace().map(str::to_lowercase).collect();
         crate::rank::rank(named.iter(), typed, |(name, _)| name.as_str())
+            .into_iter()
+            .chain(named.iter().filter(|(name, path)| {
+                crate::rank::score(typed, name).is_none()
+                    && matches(&words, &super::format::home_relative(path))
+            }))
+            .collect()
     };
     items.extend(ranked.into_iter().map(|(name, path)| Item {
         group: "Opened before",
@@ -1559,5 +1568,32 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::Space(Space::Code) => Box::new(super::GoToCode),
         Cmd::Space(Space::Branches) => Box::new(super::GoToBranches),
         Cmd::Space(Space::Requests) => Box::new(super::GoToMergeRequests),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_project_is_found_by_its_name_then_by_its_path() {
+        let recent = [
+            std::path::PathBuf::from("/w/ABB/ibam-android-app"),
+            std::path::PathBuf::from("/w/Thernal/gitlance"),
+            std::path::PathBuf::from("/w/ABB/notes"),
+        ];
+        let labels = |q: &str| {
+            project_items(q, &recent, None)
+                .into_iter()
+                .filter(|i| i.group == "Opened before")
+                .map(|i| i.label)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(labels("ibam"), ["ibam-android-app"]);
+        // The folder above them: every project under it.
+        assert_eq!(labels("abb"), ["ibam-android-app", "notes"]);
+        // A name match comes before a path match.
+        assert_eq!(labels("notes"), ["notes"]);
+        assert_eq!(labels("abb notes"), ["notes"]);
     }
 }
