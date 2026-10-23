@@ -560,10 +560,11 @@ fn card(
     id: (&'static str, usize),
     face: Div,
     name: String,
-    tag: Option<(String, bool)>,
+    tag: Option<(String, bool, Option<String>)>,
     on: bool,
     extra: Option<AnyElement>,
 ) -> gpui::Stateful<Div> {
+    use super::hover::Hover;
     div()
         .id(id)
         .flex_1()
@@ -587,15 +588,21 @@ fn card(
                 .gap(px(6.))
                 .text_size(px(12.))
                 .child(div().flex_1().min_w_0().truncate().child(name))
-                .children(tag.map(|(t, bad)| {
-                    div()
+                // A word under the card; what it means in its long hover.
+                .children(tag.map(|(t, bad, tip)| {
+                    let word = div()
+                        .id(gpui::SharedString::from(format!("{}-tag-{}", id.0, id.1)))
                         .text_size(px(11.))
                         .text_color(if bad {
                             theme::removed()
                         } else {
                             theme::faint()
                         })
-                        .child(t)
+                        .child(t);
+                    match tip {
+                        Some(tip) => word.tip(tip).into_any_element(),
+                        None => word.into_any_element(),
+                    }
                 }))
                 .children(extra),
         )
@@ -725,7 +732,7 @@ impl Workspace {
                     ("win-theme", i),
                     window_face(t),
                     t.label.clone(),
-                    tag_of(t),
+                    tag_of(t).map(|(word, bad)| (word, bad, None)),
                     choice.window == t.id,
                     Some(edit_button),
                 )
@@ -764,13 +771,22 @@ impl Workspace {
         ];
         codes.extend(all.iter().filter(|t| t.code).enumerate().map(|(i, t)| {
             let id = t.id.clone();
-            // Drawn on the window's diff surface (D16): what reads under 4.5:1 there is said.
-            let low = themes::code_on(t, window).len();
+            // Drawn on the window's diff surface (D16): what reads under 4.5:1 there is said, and
+            // which in its long hover (it no longer opens a warning under the cards).
+            let low = themes::code_on(t, window);
+            let tip = format!(
+                "On {}'s diff, text needs 4.5:1:\n{}\nFollow the window draws code in the window's own colours.",
+                window.label,
+                low.iter()
+                    .map(|(tok, r)| format!("{} {r:.1}:1", TOKENS[*tok as usize].0))
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            );
             card(
                 ("code-theme", i),
                 code_face(t),
                 t.label.clone(),
-                (low > 0).then(|| (format!("{low} under 4.5:1 here"), true)),
+                (!low.is_empty()).then(|| (format!("{} under 4.5:1 here", low.len()), true, Some(tip))),
                 choice.code.as_deref() == Some(t.id.as_str()),
                 None,
             )
@@ -802,46 +818,6 @@ impl Workspace {
                 "Syntax colours and the diff's tints. They follow the window until you pick another.",
             ))
             .child(rows_of_three(codes))
-            .children(code.and_then(|code| {
-                let low = themes::code_on(code, window);
-                let (worst, ratio) = low
-                    .iter()
-                    .copied()
-                    .min_by(|a, b| a.1.total_cmp(&b.1))?;
-                // It opens out and fades in, rather than pushing the page down at once (the
-                // developer, 2026-10-23); a new pair of themes opens it again.
-                let id = gpui::SharedString::from(format!("code-contrast-{}-{}", code.id, window.id));
-                Some(super::motion::appear(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(10.))
-                        .px(px(12.))
-                        .py(px(8.))
-                        .overflow_hidden()
-                        .rounded(px(ROW_RADIUS))
-                        .bg(theme::danger_bg())
-                        .text_size(px(12.))
-                        .child(div().flex_1().min_w_0().child(format!(
-                            "{}'s code on {}'s diff: {} of {} syntax colours under 4.5:1, {} at {ratio:.1}:1.",
-                            code.label,
-                            window.label,
-                            low.len(),
-                            themes::SYNTAX.len(),
-                            TOKENS[worst as usize].0
-                        )))
-                        .child(small_button("code-follow", "Follow the window").on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                let mut c = theme::choice();
-                                c.code = None;
-                                this.choose_theme(c, cx);
-                            }),
-                        )),
-                    id,
-                    super::motion::BASE,
-                    |warning, v| warning.max_h(px(96. * v)).opacity(v),
-                ))
-            }))
             .child(
                 div()
                     .rounded(px(8.))
@@ -1070,6 +1046,7 @@ impl Workspace {
             return false;
         };
         if edit.selected.take().is_some() {
+            self.mark_motion("token-open", cx);
             if self.field == Some(Field::ThemeValue) {
                 self.field = None;
             }
@@ -1174,6 +1151,7 @@ impl Workspace {
     }
 
     pub(super) fn pick_token(&mut self, i: usize, cx: &mut Context<Self>) {
+        self.mark_motion("token-open", cx);
         let Some(edit) = &mut self.theme_edit else {
             return;
         };
@@ -1442,21 +1420,15 @@ impl Workspace {
                     )
                     .into_any_element(),
             );
-            if selected {
-                // The token's panel opens under it (#56, 14). Not shrunk: in the scrolling
-                // column it was squeezed to nothing, and the token looked as if nothing opened.
-                list.push(
-                    super::motion::appear(
-                        div()
-                            .flex_none()
-                            .overflow_hidden()
-                            .child(self.render_token_open(i, cx)),
-                        ("token-open", i),
-                        super::motion::BASE,
-                        |panel, v| panel.max_h(px(260. * v)).opacity(v),
-                    )
-                    .into_any_element(),
-                );
+            // The token's panel opens under it and folds back, in size and alpha (#56, 14; #110).
+            // Not shrunk by the scrolling column: in it, it was squeezed to nothing.
+            if selected || self.motion.recent("token-open") {
+                list.extend(self.folding(
+                    format!("token-open-{i}"),
+                    "token-open",
+                    selected,
+                    div().flex_none().child(self.render_token_open(i, cx)),
+                ));
             }
         }
         let set = t.own.len() + t.own_roles.len();
@@ -1555,19 +1527,26 @@ impl Workspace {
                     .text_color(if bad { theme::removed() } else { theme::added() })
                     .child(text)
             }))
-            .children((!low.is_empty()).then(|| {
-                let (tok, ratio, on) = low[0];
+            // Always one line of the same height, problems or none: a colour dragged across
+            // 4.5:1 changes its words, never the page under it (the developer, 2026-10-23).
+            .child({
+                let bad = low.first().copied();
                 div()
+                    .h(px(36.))
+                    .flex_none()
                     .flex()
                     .items_center()
                     .gap(px(10.))
                     .px(px(12.))
-                    .py(px(8.))
                     .rounded(px(ROW_RADIUS))
-                    .bg(theme::danger_bg())
+                    .bg(if bad.is_some() {
+                        theme::danger_bg()
+                    } else {
+                        theme::hover()
+                    })
                     .text_size(px(12.))
-                    .child(
-                        div().flex_1().min_w_0().child(format!(
+                    .child(div().flex_1().min_w_0().truncate().child(match bad {
+                        Some((tok, ratio, on)) => format!(
                             "{} — {} is {ratio:.1}:1 on {}; text needs 4.5:1.",
                             match low.len() {
                                 1 => "1 problem".to_owned(),
@@ -1575,13 +1554,14 @@ impl Workspace {
                             },
                             TOKENS[tok as usize].0,
                             TOKENS[on as usize].0
-                        )),
-                    )
-                    .child(
+                        ),
+                        None => "Every text colour reads at 4.5:1 or more.".to_owned(),
+                    }))
+                    .children(bad.is_some().then(|| {
                         small_button("theme-raise-all", "Raise to 4.5:1")
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.raise_all(cx))),
-                    )
-            }))
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.raise_all(cx)))
+                    }))
+            })
             .child(
                 div()
                     .flex_1()
@@ -1643,19 +1623,30 @@ impl Workspace {
                 .iter()
                 .any(|&s| themes::contrast(value(t, i), t.get(s)) < 4.5);
         let base_label = edit.base.label.clone();
+        // Under the framed token, on the list's own ground: a line in the focus colour joins it
+        // to its token, no box of its own (the developer, 2026-10-23).
         div()
-            .ml(px(36.))
-            .mb(px(6.))
-            .p(px(10.))
-            .rounded(px(ROW_RADIUS))
-            .border_1()
-            .border_color(theme::island_border())
-            .bg(theme::base())
+            .ml(px(17.))
+            .mb(px(8.))
+            .pl(px(19.))
+            .pr(px(8.))
+            .pt(px(10.))
+            .pb(px(4.))
+            .border_l_2()
+            .border_color(theme::focus())
             .flex()
             .flex_col()
             .gap(px(8.))
             .text_size(px(12.))
-            .child(self.color_picker(edit.hsva, cx))
+            // A panel folding away shows its own colour, not the one now picked.
+            .child(self.color_picker(
+                if edit.selected == Some(i) {
+                    edit.hsva
+                } else {
+                    themes::to_hsva(value(t, i))
+                },
+                cx,
+            ))
             .child(
                 div()
                     .flex()
