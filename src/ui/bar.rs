@@ -201,7 +201,7 @@ impl Workspace {
         let requests = || Crumb::up("Merge requests", None);
         match page {
             None => (Vec::new(), space_root(space, &project), false),
-            Some(Page::File(path)) => {
+            Some(Page::File(path) | Page::Folder(path)) => {
                 let mut parts: Vec<&str> = path.split('/').collect();
                 let name = parts.pop().unwrap_or_default().to_owned();
                 let mut crumbs = vec![Crumb::up("Code", None), Crumb::up(project, None)];
@@ -316,6 +316,16 @@ impl Workspace {
             (Space::Code, Some(Page::File(_))) => {
                 self.file_view.as_ref().map(|v| format!("as of {}", v.at()))
             }
+            (Space::Code, Some(Page::Folder(path))) => {
+                let inside = format!("{path}/");
+                let n = self
+                    .code
+                    .files()
+                    .iter()
+                    .filter(|f| f.starts_with(&inside))
+                    .count();
+                Some(super::plural(n, "file"))
+            }
             _ => None,
         }
     }
@@ -358,6 +368,18 @@ impl Workspace {
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.read_all_notices(cx)))
                     .into_any_element(),
             ),
+            // A folder's page: a note for your agent on it (#97), then Open in.
+            (Space::Code, Some(Page::Folder(path))) => {
+                let folder = path.clone();
+                out.push(
+                    self.bar_action("bar-folder-note", "bot", "Note for your agent", "C")
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.start_folder_comment(&folder, cx)
+                        }))
+                        .into_any_element(),
+                );
+                out.extend(self.open_in_button(cx));
+            }
             // The file or the project's folder in the app it belongs to, named (#78).
             (Space::Code, _) => out.extend(self.open_in_button(cx)),
             (Space::Branches, Some(Page::Branch(refname))) => {

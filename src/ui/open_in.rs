@@ -192,6 +192,7 @@ impl Workspace {
             (Space::Code, Some(Page::File(path))) => {
                 Some((root.join(path), self.file_top_line(path)))
             }
+            (Space::Code, Some(Page::Folder(path))) => Some((root.join(path), 1)),
             (Space::Code, _) => Some((root, 1)),
             // A page showing a diff: not a request's Overview or Commits.
             (_, Some(_))

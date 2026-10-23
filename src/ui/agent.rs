@@ -1399,18 +1399,28 @@ impl Workspace {
         use super::hover::Hover;
         let id = c.id;
         let picked = self.agent_row == Some(id);
-        let place = format!(
-            "{}:{}",
-            c.path.rsplit('/').next().unwrap_or(&c.path),
-            c.line
-        );
+        // A folder's note by the folder, with its slash (#97).
+        let place = if c.is_folder() {
+            c.path.clone()
+        } else {
+            format!(
+                "{}:{}",
+                c.path.rsplit('/').next().unwrap_or(&c.path),
+                c.line
+            )
+        };
         let when = c.replies.last().map(|r| r.at).filter(|&at| at > 0);
         // Its anatomy (#79): its state, file:line and the text (two lines) always; when while
         // the window has 260 px; the chat's mark under 360 px leaves first. The tooltip holds the
         // text in full and the chat.
         let room = self.widths.room("agents");
         let chat = c.sent.as_ref().filter(|s| !s.session.is_empty());
-        let mut tip = vec![format!("{}:{}", c.path, c.line), c.body.trim().to_owned()];
+        let whole = if c.is_folder() {
+            format!("{} — the folder and everything in it", c.path)
+        } else {
+            format!("{}:{}", c.path, c.line)
+        };
+        let mut tip = vec![whole, c.body.trim().to_owned()];
         if let Some(s) = chat {
             let to = self
                 .agent_chats

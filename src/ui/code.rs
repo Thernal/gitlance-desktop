@@ -35,6 +35,9 @@ pub struct Code {
     pub preview: Option<String>,
     /// The root's README at the revision: its path and text.
     readme: Option<(String, String)>,
+    /// The folder page's README (#97): the folder, then its README's path and text, read at
+    /// `read_at`'s revision.
+    folder_readme: Option<(String, Option<(String, String)>)>,
     scroll: gpui::UniformListScrollHandle,
 }
 
@@ -118,10 +121,68 @@ impl Workspace {
     fn read_code_at(&mut self, rev: Option<(String, Oid)>, cx: &mut Context<Self>) {
         self.code.rev = rev;
         self.read_code_files(false, cx);
-        if let Some(Page::File(path)) = self.nav_page().cloned() {
-            self.open_file_view(path, cx);
+        match self.nav_page().cloned() {
+            Some(Page::File(path)) => self.open_file_view(path, cx),
+            Some(Page::Folder(path)) => {
+                self.code.folder_readme = None;
+                self.read_folder_readme(&path, cx);
+            }
+            _ => {}
         }
         cx.notify();
+    }
+
+    /// Folder `path` opens as Code's page (#97), unfolded in the tree.
+    pub(super) fn open_folder_page(&mut self, path: String, cx: &mut Context<Self>) {
+        self.code.reveal(&path);
+        self.code.open.insert(path.clone());
+        self.nav.space = Space::Code;
+        self.arrive(Page::Folder(path.clone()));
+        self.read_folder_readme(&path, cx);
+        cx.notify();
+    }
+
+    /// Reads the README of folder `dir` at Code's revision, unless it is the one held.
+    pub(super) fn read_folder_readme(&mut self, dir: &str, cx: &mut Context<Self>) {
+        if self
+            .code
+            .folder_readme
+            .as_ref()
+            .is_some_and(|(d, _)| d == dir)
+        {
+            return;
+        }
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let Some(path) = files::readme(&self.code.files, dir).cloned() else {
+            self.code.folder_readme = Some((dir.to_owned(), None));
+            return;
+        };
+        let (at, plain, dir) = (self.code.at(), self.plain, dir.to_owned());
+        self.code.folder_readme = Some((dir.clone(), None));
+        cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    match (at, plain) {
+                        (Some(rev), false) => Repo::open(&root).ok()?.file_at(rev, &path),
+                        _ => std::fs::read_to_string(root.join(&path)).ok(),
+                    }
+                    .map(|text| (path, text))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some((d, readme)) = this.code.folder_readme.as_mut()
+                    && *d == dir
+                {
+                    *readme = read;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// File `path` opens in Code: as the preview tab (`preview`) the next click replaces, or kept.
@@ -210,6 +271,7 @@ impl Workspace {
                         island().flex_1().bg(theme::editor()).into_any_element()
                     }))
                     .into_any_element(),
+                Some(Page::Folder(path)) => self.render_dir_page(path, cx),
                 _ => self.render_folder_page(cx),
             };
         div()
@@ -257,7 +319,7 @@ impl Workspace {
             .unwrap_or_default();
         let rows = files::rows(&self.code.files, &self.code.open);
         let shown = match self.nav_page() {
-            Some(Page::File(path)) => Some(path.clone()),
+            Some(Page::File(path) | Page::Folder(path)) => Some(path.clone()),
             _ => None,
         };
         let chip = self.code_revision_label();
@@ -355,18 +417,36 @@ impl Workspace {
         let selected = shown == Some(row.path.as_str());
         let preview = self.code.preview.as_deref() == Some(row.path.as_str());
         let path = row.path.clone();
+        // A folder whose note for the agent waits (#97).
+        let noted = row.folder.is_some() && self.folder_note_waits(&row.path);
         super::row(SharedString::from(format!("tree-{}", row.path)), selected)
             // Its whole path, whatever the depth (#79).
             .tip(row.path.clone())
             .h(px(26.))
             .pl(px(8. + row.depth as f32 * 14.))
             .gap(px(6.))
-            // A folder's chevron, then its icon; a file's icon under the folders' (#95).
+            // A folder's chevron, then its icon; a file's icon under the folders' (#95). The
+            // chevron alone folds; the row opens the folder's page (#97).
             .child(match row.folder {
-                Some(open) => icons::icon(if open { "chevron" } else { "chevron-right" })
-                    .size(px(12.))
-                    .text_color(theme::faint())
-                    .into_any_element(),
+                Some(open) => {
+                    let fold = row.path.clone();
+                    div()
+                        .id(SharedString::from(format!("tree-fold-{}", row.path)))
+                        .flex_none()
+                        .child(
+                            icons::icon(if open { "chevron" } else { "chevron-right" })
+                                .size(px(12.))
+                                .text_color(theme::faint()),
+                        )
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            if !this.code.open.remove(&fold) {
+                                this.code.open.insert(fold.clone());
+                            }
+                            cx.notify();
+                        }))
+                        .into_any_element()
+                }
                 None => div().w(px(12.)).flex_none().into_any_element(),
             })
             .child(match row.folder {
@@ -381,22 +461,28 @@ impl Workspace {
                     .when(preview, |s| s.italic())
                     .child(row.name.clone()),
             )
-            // A right click: Reveal in Finder, Copy path, Open in.
+            .children(noted.then(|| {
+                div()
+                    .flex_none()
+                    .size(px(7.))
+                    .mr(px(4.))
+                    .rounded_full()
+                    .bg(theme::agent())
+            }))
+            // A right click: Reveal in Finder, Copy path, Open in; a folder's, a note for the agent.
             .on_mouse_down(
                 gpui::MouseButton::Right,
                 cx.listener({
-                    let path = row.path.clone();
+                    let (path, folder) = (row.path.clone(), row.folder.is_some());
                     move |this, e: &gpui::MouseDownEvent, _, cx| {
-                        this.tree_context(path.clone(), e.position, cx)
+                        this.tree_context(path.clone(), folder, e.position, cx)
                     }
                 }),
             )
             .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                 if row.folder.is_some() {
-                    if !this.code.open.remove(&path) {
-                        this.code.open.insert(path.clone());
-                    }
-                    return cx.notify();
+                    this.close_drawer(cx);
+                    return this.open_folder_page(path.clone(), cx);
                 }
                 // A second click keeps it as a tab; picked in the drawer, it goes (#80).
                 this.close_drawer(cx);
@@ -409,6 +495,7 @@ impl Workspace {
     fn tree_context(
         &mut self,
         path: String,
+        folder: bool,
         at: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
@@ -426,6 +513,12 @@ impl Workspace {
                 format!("Open in {}", app.name()),
                 Act::OpenPathWith(full, app),
             )]);
+        }
+        if folder {
+            groups.insert(
+                0,
+                vec![Entry::new("Note for your agent…", Act::FolderNote(path)).key("C")],
+            );
         }
         self.open_menu(at, groups, cx);
     }
@@ -597,6 +690,194 @@ impl Workspace {
                         this.open_file_view(open.clone(), cx)
                     }))
             }))
+    }
+
+    /// A folder's page (#97, Design: notes on folders, B): its notes for your agent and the
+    /// composer, its folders and files, its README.
+    fn render_dir_page(&self, path: &str, cx: &mut Context<Self>) -> AnyElement {
+        let this = cx.entity().downgrade();
+        let prefix = format!("{path}/");
+        let mut folders = std::collections::BTreeSet::new();
+        let mut here = Vec::new();
+        let mut count = 0;
+        for f in self
+            .code
+            .files
+            .iter()
+            .filter_map(|f| f.strip_prefix(&prefix))
+        {
+            count += 1;
+            match f.split_once('/') {
+                Some((dir, _)) => {
+                    folders.insert(dir.to_owned());
+                }
+                None => here.push(f.to_owned()),
+            }
+        }
+        let notes: Vec<u64> = self
+            .comments
+            .iter()
+            .filter(|c| c.path == prefix && !c.archived)
+            .map(|c| c.id)
+            .collect();
+        let writing = self.folder_compose() == Some(path);
+        let heading = |text: String| {
+            div()
+                .pt(px(14.))
+                .pb(px(6.))
+                .text_size(px(11.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme::muted())
+                .child(text.to_uppercase())
+        };
+        let entry = |id: SharedString, name: String, folder: bool, to: String| {
+            super::row(id, false)
+                .h(px(28.))
+                .gap_2()
+                .child(if folder {
+                    icons::folder_icon(&to, 16.)
+                } else {
+                    icons::file_icon(&to, 16.)
+                })
+                .child(div().flex_1().min_w_0().truncate().child(name))
+                .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                    if folder {
+                        this.open_folder_page(to.clone(), cx)
+                    } else {
+                        this.open_code_file(to.clone(), e.click_count() < 2, cx)
+                    }
+                }))
+        };
+        let rows: Vec<AnyElement> = folders
+            .iter()
+            .map(|d| {
+                entry(
+                    SharedString::from(format!("dir-entry-{path}/{d}")),
+                    d.clone(),
+                    true,
+                    format!("{path}/{d}"),
+                )
+                .into_any_element()
+            })
+            .chain(here.iter().map(|f| {
+                entry(
+                    SharedString::from(format!("dir-entry-{path}/{f}")),
+                    f.clone(),
+                    false,
+                    format!("{path}/{f}"),
+                )
+                .into_any_element()
+            }))
+            .collect();
+        let readme = self
+            .code
+            .folder_readme
+            .as_ref()
+            .filter(|(d, _)| d == path)
+            .and_then(|(_, r)| r.clone())
+            .map(|(file, text)| {
+                let md = file.ends_with(".md") || file.ends_with(".markdown");
+                let selecting = Some(self.selecting(this.clone()));
+                div()
+                    .child(heading(file.rsplit('/').next().unwrap_or(&file).to_owned()))
+                    .child(markdown::body(
+                        &text,
+                        md,
+                        format!("folder-readme-{path}"),
+                        None,
+                        selecting,
+                    ))
+            });
+        island()
+            .flex_1()
+            .min_w_0()
+            .bg(theme::editor())
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(36.))
+                    .px(px(14.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .border_b_1()
+                    .border_color(theme::island_border())
+                    .text_size(px(12.))
+                    .child(icons::folder_icon(path, 14.))
+                    .child(
+                        div()
+                            .font_family(theme::CODE_FONT)
+                            .text_color(theme::muted())
+                            .child(prefix.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_color(theme::faint())
+                            .child(super::plural(count, "file")),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .text_color(theme::faint())
+                            .child("c writes a note for your agent"),
+                    ),
+            )
+            .child(
+                div()
+                    .id(SharedString::from(format!("dir-page-{path}")))
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px(px(24.))
+                    .pb(px(18.))
+                    .text_size(px(13.))
+                    .child(
+                        div()
+                            .max_w(px(820.))
+                            .child(heading(match notes.len() {
+                                0 => "For your agent".to_owned(),
+                                n => format!("For your agent · {n}"),
+                            }))
+                            .children(
+                                notes
+                                    .iter()
+                                    .map(|&id| self.render_thread(id, 0., this.clone())),
+                            )
+                            .children(writing.then(|| self.render_composer(0., this.clone())))
+                            .children((notes.is_empty() && !writing).then(|| {
+                                let folder = path.to_owned();
+                                div()
+                                    .id("dir-note-start")
+                                    .h(px(30.))
+                                    .px(px(10.))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .rounded(px(super::ROW_RADIUS))
+                                    .border_1()
+                                    .border_color(theme::island_border())
+                                    .text_size(px(12.))
+                                    .text_color(theme::muted())
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                                    .child(
+                                        icons::icon("bot").size(px(14.)).text_color(theme::agent()),
+                                    )
+                                    .child(
+                                        "A note for your agent on this folder and everything in it",
+                                    )
+                                    .child(div().flex_1())
+                                    .child(keys::caps("C", keys::On::Plain))
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        this.start_folder_comment(&folder, cx)
+                                    }))
+                            }))
+                            .child(heading(format!("In it · {}", folders.len() + here.len())))
+                            .children(rows)
+                            .children(readme),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// The folder page at Code's root: its README rendered, else Go to a file and the files

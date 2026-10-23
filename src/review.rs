@@ -215,6 +215,11 @@ impl Comment {
         }
     }
 
+    /// A note on a whole folder (#97): its path ends with a slash, it has no line.
+    pub fn is_folder(&self) -> bool {
+        self.path.ends_with('/')
+    }
+
     /// The commented code as it was: the lines above, then the line.
     pub fn quoted(&self) -> String {
         let mut lines: Vec<&str> = self.above.iter().map(String::as_str).collect();
@@ -275,6 +280,15 @@ pub fn export(repo: &str, comments: &[(Comment, Place)]) -> String {
         "# Review of {repo}\n\nAddress each comment below. Each names a file and line, quotes the line as the reviewer saw it, and says what to change.\n"
     );
     for (comment, place) in comments {
+        if comment.is_folder() {
+            out.push_str(&format!(
+                "\n## {} (the folder and everything in it)\n\n{}\n\n_Written at {}._\n",
+                comment.path,
+                comment.body.trim(),
+                comment.at
+            ));
+            continue;
+        }
         let at = match place {
             Place::Line(n) => comment.at_line(*n),
             Place::Outdated => format!("{} (the line has changed since)", comment.path),

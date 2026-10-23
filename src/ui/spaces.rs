@@ -198,9 +198,13 @@ impl Workspace {
         let here = self.space() == Some(space);
         if space == Space::Code {
             return match self.page_of(Space::Code) {
-                Some(Page::File(path)) => vec![OpenRow {
+                Some(Page::File(path) | Page::Folder(path)) => vec![OpenRow {
                     item: None,
-                    icon: "file",
+                    icon: if matches!(self.page_of(Space::Code), Some(Page::Folder(_))) {
+                        "folder"
+                    } else {
+                        "file"
+                    },
                     label: path.rsplit('/').next().unwrap_or(path).to_owned(),
                     mono: false,
                     tip: path.clone(),
@@ -553,6 +557,7 @@ impl Workspace {
                         })
                         // Code's file by its own icon (#95).
                         .child(match open.item {
+                            None if open.icon == "folder" => icons::folder_icon(&open.tip, 14.),
                             None => icons::file_icon(&open.tip, 14.),
                             Some(_) => icons::icon(open.icon)
                                 .size(px(14.))

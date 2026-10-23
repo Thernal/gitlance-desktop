@@ -19,6 +19,9 @@ use gpui::{Context, ListOffset};
 pub enum Page {
     /// A file read in Code.
     File(String),
+    /// A folder of the project in Code, by its path: its notes for the agent, its files, its
+    /// README (#97).
+    Folder(String),
     /// A branch, by its refname: off the main line its Commits · Changes (#74), the main line its
     /// commits with one of them shown.
     Branch(String),
@@ -45,7 +48,7 @@ pub enum Page {
 impl Page {
     pub fn space(&self) -> Space {
         match self {
-            Page::File(_) => Space::Code,
+            Page::File(_) | Page::Folder(_) => Space::Code,
             Page::Branch(_)
             | Page::BranchCommit(..)
             | Page::BranchCommits(..)
@@ -69,6 +72,7 @@ impl Page {
             | Page::RequestCommits(iid, ..)
             | Page::RequestVersions(iid, ..) => Some(Page::Request(*iid)),
             Page::File(_)
+            | Page::Folder(_)
             | Page::Branch(_)
             | Page::WorkingTree
             | Page::Compare(..)
@@ -87,7 +91,7 @@ impl Page {
             | Page::RequestCommit(iid, _)
             | Page::RequestCommits(iid, ..)
             | Page::RequestVersions(iid, ..) => Some(Item::Request(*iid)),
-            Page::File(_) | Page::WorkingTree | Page::Compare(..) => None,
+            Page::File(_) | Page::Folder(_) | Page::WorkingTree | Page::Compare(..) => None,
         }
     }
 
@@ -95,6 +99,7 @@ impl Page {
     fn key(&self) -> String {
         match self {
             Page::File(path) => format!("file:{path}"),
+            Page::Folder(path) => format!("folder:{path}"),
             Page::Branch(refname) => format!("branch:{refname}"),
             Page::BranchCommit(refname, id) => format!("branch-commit:{id}:{refname}"),
             Page::BranchCommits(refname, a, b) => format!("branch-commits:{a}:{b}:{refname}"),
@@ -114,6 +119,7 @@ impl Page {
         let mut next = || parts.next();
         Some(match kind {
             "file" => Page::File(rest.to_owned()),
+            "folder" => Page::Folder(rest.to_owned()),
             "branch" => Page::Branch(rest.to_owned()),
             "branch-commit" => {
                 let (id, refname) = rest.split_once(':')?;
@@ -712,10 +718,12 @@ impl Workspace {
     fn load_page(&mut self, page: Page, cx: &mut Context<Self>) {
         let loaded = self.loaded_page();
         if page.space() == Space::Code {
-            if let Page::File(path) = page
-                && self.file_view.as_ref().map(|v| &v.path) != Some(&path)
-            {
-                self.open_file_view(path, cx);
+            match page {
+                Page::File(path) if self.file_view.as_ref().map(|v| &v.path) != Some(&path) => {
+                    self.open_file_view(path, cx)
+                }
+                Page::Folder(path) => self.read_folder_readme(&path, cx),
+                _ => {}
             }
             return;
         }
@@ -729,7 +737,7 @@ impl Workspace {
             self.restore_scroll = opened.as_ref().and_then(|o| o.place.clone());
         }
         match page.clone() {
-            Page::File(_) => {}
+            Page::File(_) | Page::Folder(_) => {}
             Page::Branch(refname) if same_item && self.branch_tabbed(&refname) => {
                 self.run_branch_compare(cx)
             }
@@ -1213,6 +1221,7 @@ mod tests {
         let id = Oid::from_str("0123456789012345678901234567890123456789").unwrap();
         let pages = [
             Page::File("src/a b.rs".into()),
+            Page::Folder("core/money".into()),
             Page::Branch("refs/heads/feature/x".into()),
             Page::BranchCommit("refs/heads/feature/x".into(), id),
             Page::Versions("refs/remotes/origin/x".into(), 1, 3),

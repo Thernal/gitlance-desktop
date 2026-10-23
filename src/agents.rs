@@ -517,6 +517,29 @@ pub fn brief(root: &Path, comments: &[&Comment]) -> String {
         comments.len()
     );
     for c in comments {
+        // A note on a whole folder: no line, no code (#97).
+        if c.is_folder() {
+            let gone = !root.join(&c.path).is_dir();
+            out.push_str(&format!(
+                "\n## Comment {} — {} ({})\n\n{}\n",
+                c.id,
+                c.path,
+                if gone {
+                    "a folder that is gone since"
+                } else {
+                    "the folder and everything in it"
+                },
+                c.body.trim()
+            ));
+            for r in &c.replies {
+                out.push_str(&format!("\n> Your earlier answer: {}\n", r.body));
+            }
+            if let Some(a) = &c.answer {
+                let form = c.replies.last().and_then(|r| r.form.as_ref());
+                out.push_str(&format!("\nThe reviewer answered:\n{}\n", a.words(form)));
+            }
+            continue;
+        }
         let at = if c.old {
             format!("{} (a removed line)", c.path)
         } else {
@@ -562,6 +585,24 @@ mod tests {
             beat: if listening { now() } else { now() - 3600 },
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_folders_note_reaches_the_agent_as_the_folder_and_all_in_it() {
+        let note = review::Comment {
+            id: 4,
+            path: "src/".into(),
+            body: "Use Money everywhere here.".into(),
+            ..Default::default()
+        };
+        let here = std::env::temp_dir();
+        std::fs::create_dir_all(here.join("src")).ok();
+        let text = brief(&here, &[&note]);
+        assert!(text.contains("## Comment 4 — src/ (the folder and everything in it)"));
+        assert!(text.contains("Use Money everywhere here."));
+        assert!(!text.contains("```"));
+        let gone = brief(Path::new("/no/such/root"), &[&note]);
+        assert!(gone.contains("src/ (a folder that is gone since)"));
     }
 
     #[test]

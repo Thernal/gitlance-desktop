@@ -506,6 +506,47 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A note for the agent on folder `path` of Code (#97): kept on the path with a slash and no
+    /// line, written on the folder's page.
+    pub(super) fn start_folder_comment(&mut self, path: &str, cx: &mut Context<Self>) {
+        let at = match &self.code.rev {
+            Some((_, id)) => super::format::short(*id),
+            None => "working tree".to_owned(),
+        };
+        self.compose = Some(Compose {
+            path: format!("{path}/"),
+            old: false,
+            first: None,
+            line: 0,
+            code: String::new(),
+            edit: TextEdit::default(),
+            at,
+            target: Target::Agent,
+            error: None,
+            posting: false,
+            preview: false,
+            pick: 0,
+            closed: None,
+            page: None,
+            file: Some(self.code.at()),
+        });
+        self.reset_field_edit();
+        cx.notify();
+    }
+
+    /// The folder a note for the agent is being written on (#97).
+    pub(super) fn folder_compose(&self) -> Option<&str> {
+        let c = self.compose.as_ref().filter(|c| c.file.is_some())?;
+        c.path.strip_suffix('/')
+    }
+
+    /// Whether folder `path` has a note for the agent not yet resolved or put away (#97).
+    pub(super) fn folder_note_waits(&self, path: &str) -> bool {
+        self.comments.iter().any(|c| {
+            c.path.strip_suffix('/') == Some(path) && !c.archived && c.state != State::Resolved
+        })
+    }
+
     /// The composer written on Code's file: its path and line.
     pub(super) fn file_compose(&self) -> Option<(&str, u32)> {
         let c = self.compose.as_ref().filter(|c| c.file.is_some())?;
@@ -1262,6 +1303,14 @@ impl Workspace {
     /// `c`: on the lines selected in the diff, the composer at once; else a marker appears on the
     /// diff, typing a line number moves it, ↵ opens the comment there.
     pub(super) fn open_goline(&mut self, cx: &mut Context<Self>) {
+        // On a folder's page in Code: a note for the agent on the folder (#97).
+        if let Some(super::nav::Page::Folder(path)) = self.nav_page().cloned()
+            && self.nav.space == super::spaces::Space::Code
+            && !self.settings_open
+            && self.compose.is_none()
+        {
+            return self.start_folder_comment(&path, cx);
+        }
         // On a file read in Code: the number of the line to write a note on (#75).
         if self.code_file_shown() && !self.settings_open && self.compose.is_none() {
             self.reset_field_edit();
@@ -2605,6 +2654,10 @@ impl Workspace {
         else {
             return;
         };
+        // A folder's note: the folder's page, where it is written (#97).
+        if let Some(folder) = path.strip_suffix('/') {
+            return self.open_folder_page(folder.to_owned(), cx);
+        }
         self.jump = Some(id);
         if self.current_path().as_ref() == Some(&path) {
             self.apply_jump(cx);

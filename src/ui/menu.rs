@@ -50,6 +50,8 @@ pub enum Act {
     OpenWith(super::open_in::App),
     /// A file or folder of Code's tree in this app (its right click).
     OpenPathWith(std::path::PathBuf, super::open_in::App),
+    /// A note for the agent on a folder of Code's tree (its right click, #97).
+    FolderNote(String),
     AlwaysOpen(String),
     EditorSettings,
 }
@@ -168,6 +170,10 @@ impl Workspace {
             Act::CodeRevision(rev) => self.set_code_revision(rev, cx),
             Act::OpenWith(app) => self.open_with_app(app),
             Act::OpenPathWith(path, app) => self.open_path_with(&path, app),
+            Act::FolderNote(path) => {
+                self.open_folder_page(path.clone(), cx);
+                self.start_folder_comment(&path, cx);
+            }
             Act::AlwaysOpen(ext) => self.always_open(ext),
             Act::EditorSettings => self.open_settings(cx),
             // Need the window: `run_act_in` runs them.
