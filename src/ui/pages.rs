@@ -51,24 +51,28 @@ impl Workspace {
             .flex_col()
             // One bar over every page; zen has its own line instead.
             .children(self.render_page_bar(cx).map(|bar| {
-                div()
-                    .flex_none()
-                    .flex()
-                    .flex_col()
-                    .child(bar)
-                    .child(div().h(px(gap())))
+                self.zen_strip(
+                    "bar-zen",
+                    self.zen.is_none(),
+                    44. + gap(),
+                    div().flex().flex_col().child(bar).child(div().h(px(gap()))),
+                )
             }))
             .children(
                 self.diff
                     .as_ref()
-                    .filter(|_| self.zen.is_some())
+                    .filter(|_| self.zen.is_some() || self.motion.recent("zen"))
                     .map(|diff| {
-                        div()
-                            .flex_none()
-                            .flex()
-                            .flex_col()
-                            .child(self.render_zen_head(diff))
-                            .child(div().h(px(gap())))
+                        self.zen_strip(
+                            "zen-head",
+                            self.zen.is_some(),
+                            36. + gap(),
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(self.render_zen_head(diff))
+                                .child(div().h(px(gap()))),
+                        )
                     }),
             )
             .child(body)
@@ -81,7 +85,7 @@ impl Workspace {
         let identity = self
             .diff
             .as_ref()
-            .filter(|_| self.zen.is_none())
+            .filter(|_| self.zen.is_none() || self.motion.recent("zen"))
             .map(|diff| {
                 if let Some(head) = self.render_create_header(cx) {
                     head
@@ -127,13 +131,19 @@ impl Workspace {
                     .min_h_0()
                     .flex()
                     .flex_col()
+                    // Zen folds it up as it does the bar (the most a commit's header is tall,
+                    // its message open or not).
                     .children(identity.map(|identity| {
-                        div()
-                            .flex_none()
-                            .flex()
-                            .flex_col()
-                            .child(identity)
-                            .child(div().h(px(gap())))
+                        self.zen_strip(
+                            "identity-zen",
+                            self.zen.is_none(),
+                            if self.body_expanded { 320. } else { 110. },
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(identity)
+                                .child(div().h(px(gap()))),
+                        )
                     }))
                     .child(self.render_diff(cx))
                     .children(self.render_zen_keys()),

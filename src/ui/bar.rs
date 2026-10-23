@@ -36,7 +36,8 @@ impl Crumb {
 impl Workspace {
     /// The bar of the page on screen; None in zen, which has its own line.
     pub(super) fn render_page_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.zen.is_some() {
+        // Zen takes it away, folding it up as it does the sides.
+        if self.zen.is_some() && !self.motion.recent("zen") {
             return None;
         }
         let space = self.nav.space;

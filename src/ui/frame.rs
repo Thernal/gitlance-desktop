@@ -7,7 +7,7 @@ use hover::Hover;
 impl Workspace {
     /// Zen's line at the foot of the diff: the keys of a review, from the keyboard alone.
     pub(super) fn render_zen_keys(&self) -> Option<impl IntoElement + use<>> {
-        self.zen.is_some().then_some(())?;
+        (self.zen.is_some() || self.motion.recent("zen")).then_some(())?;
         // Keys are split by spaces: "[ ]" is two caps.
         let pair = |spec: &'static str, what: &'static str| {
             div()
@@ -35,6 +35,33 @@ impl Workspace {
                 .child(pair("c", "comment"))
                 .child(pair("⌘.", "leave zen")),
         )
+        .map(|keys| self.zen_strip("zen-keys", self.zen.is_some(), 40., keys))
+    }
+
+    /// A strip over or under the page that zen takes away or brings — the page's bar, the item's
+    /// line, zen's own: it folds to nothing and fades as the sides slide (#56, 16; the developer,
+    /// 2026-10-23: the top went at once). `room` is the most it is tall.
+    pub(super) fn zen_strip(
+        &self,
+        id: &'static str,
+        shown: bool,
+        room: f32,
+        strip: impl IntoElement + 'static,
+    ) -> gpui::AnyElement {
+        motion::toward(
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .child(strip),
+            id,
+            shown,
+            self.motion.recent("zen"),
+            motion::BASE,
+            move |s, v| s.max_h(px(room * v)).opacity(v),
+        )
+        .into_any_element()
     }
 
     pub(super) fn size(&mut self, split: Split) -> &mut f32 {
