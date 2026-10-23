@@ -1,14 +1,17 @@
 //! Codex's chats (#18). Codex has no background command that wakes it when it ends, as Claude
-//! Code has, so the app is the watcher for it: on the app's beat, a Codex session open now in the
-//! project — its rollout in `~/.codex/sessions` held open by Codex, as its app-server keeps a
-//! loaded session's file — is written to the agents' bus as a listening chat, one that closed is
-//! taken off it, and the comments sent to one are handed over with `codex queue`, which starts a
-//! turn in that session: the brief Claude Code's watcher points to, answered with the MCP tools
-//! Codex already has.
+//! Code has, so the app is the watcher for it: on the app's beat, the session of the project that
+//! a Codex running in a terminal is on — the one `codex resume <id>` named, else the newest written
+//! in that terminal's folder — is written to the agents' bus as a listening chat, and taken off it
+//! when that Codex quits. Codex says nothing when it closes, and its app-server keeps a session
+//! loaded after the terminal is gone, so the process is the sign (the developer, 2026-10-23: two
+//! sessions quit with ⌃C still listened). The comments sent to one are handed over with
+//! `codex queue`, which starts a turn in that session: the brief Claude Code's watcher points to,
+//! answered with the MCP tools Codex already has.
 
 use crate::agents::{self, Answer, Bus, Chat, Kind};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
@@ -18,6 +21,39 @@ const RECENT: Duration = Duration::from_secs(7 * 24 * 3600);
 
 /// The agent's name on the bus.
 const AGENT: &str = "Codex";
+
+/// `codex`'s commands that are not a session in a terminal (`codex --help`); `resume` and `fork`
+/// are one, and so is a prompt.
+const NOT_A_SESSION: [&str; 28] = [
+    "agents",
+    "exec",
+    "e",
+    "review",
+    "login",
+    "logout",
+    "mcp",
+    "plugin",
+    "app-server",
+    "remote-control",
+    "app",
+    "completion",
+    "update",
+    "doctor",
+    "sandbox",
+    "debug",
+    "apply",
+    "a",
+    "queue",
+    "archive",
+    "delete",
+    "migrate-rollouts",
+    "migrate-nfs-db",
+    "unarchive",
+    "cloud",
+    "exec-server",
+    "features",
+    "help",
+];
 
 /// Codex's own folder: `CODEX_HOME`, else `~/.codex`.
 fn home() -> Option<PathBuf> {
@@ -45,8 +81,9 @@ fn program() -> Option<PathBuf> {
     on_path.into_iter().chain(known).find(|p| p.is_file())
 }
 
-/// The sessions' rollouts written lately: `sessions/<year>/<month>/<day>/rollout-*.jsonl`.
-fn recent_rollouts(home: &Path) -> Vec<PathBuf> {
+/// The sessions' rollouts written lately, `sessions/<year>/<month>/<day>/rollout-*.jsonl`, with
+/// when.
+fn recent_rollouts(home: &Path) -> Vec<(PathBuf, SystemTime)> {
     let now = SystemTime::now();
     let mut out = Vec::new();
     let mut dirs = vec![(home.join("sessions"), 0)];
@@ -63,44 +100,16 @@ fn recent_rollouts(home: &Path) -> Vec<PathBuf> {
                 continue;
             }
             let name = e.file_name().to_string_lossy().into_owned();
-            let fresh = e
-                .metadata()
-                .and_then(|m| m.modified())
-                .is_ok_and(|at| now.duration_since(at).unwrap_or_default() < RECENT);
+            let Ok(at) = e.metadata().and_then(|m| m.modified()) else {
+                continue;
+            };
+            let fresh = now.duration_since(at).unwrap_or_default() < RECENT;
             if fresh && name.starts_with("rollout-") && name.ends_with(".jsonl") {
-                out.push(path);
+                out.push((path, at));
             }
         }
     }
     out
-}
-
-/// Which of `files` a process holds open: Codex keeps a loaded session's rollout open, a closed
-/// one's not. None where `lsof` is missing (Windows).
-fn held_open(files: &[PathBuf]) -> HashSet<PathBuf> {
-    if files.is_empty() {
-        return HashSet::new();
-    }
-    let lsof = ["/usr/sbin/lsof", "/usr/bin/lsof"]
-        .into_iter()
-        .map(Path::new)
-        .find(|p| p.is_file())
-        .unwrap_or(Path::new("lsof"));
-    let Ok(out) = Command::new(lsof)
-        .args(["-F", "n", "--"])
-        .args(files)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-    else {
-        return HashSet::new();
-    };
-    // `p<pid>` then `n<name>` lines; it exits 1 when some file is open nowhere.
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(|l| l.strip_prefix('n'))
-        .map(PathBuf::from)
-        .collect()
 }
 
 /// A rollout's first line: the session's id and the folder it works in.
@@ -114,6 +123,15 @@ fn meta(first: &str) -> Option<(String, PathBuf)> {
         p["id"].as_str()?.to_owned(),
         PathBuf::from(p["cwd"].as_str()?),
     ))
+}
+
+/// The first line of `file` alone: a rollout grows to megabytes.
+fn first_line(file: &Path) -> Option<String> {
+    let mut line = String::new();
+    std::io::BufReader::new(std::fs::File::open(file).ok()?)
+        .read_line(&mut line)
+        .ok()?;
+    Some(line)
 }
 
 /// The sessions' names (`session_index.jsonl`, the newest line of an id wins).
@@ -130,43 +148,140 @@ fn names(index: &str) -> HashMap<String, String> {
         .collect()
 }
 
-/// Codex's sessions open now in project `project` (its main working tree) or a worktree of it,
-/// as chats that listen.
+/// A session id: 36 characters, hex in five groups.
+fn is_id(word: &str) -> bool {
+    word.len() == 36
+        && word.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
+/// A command line, when it is Codex in a terminal: the session it resumes, when it names one.
+fn session_of(command: &str) -> Option<Option<String>> {
+    let mut words = command.split_whitespace();
+    if Path::new(words.next()?).file_name()? != "codex" {
+        return None;
+    }
+    let rest: Vec<&str> = words.collect();
+    match rest.iter().find(|w| !w.starts_with('-')) {
+        Some(w) if NOT_A_SESSION.contains(w) => None,
+        Some(&"resume") => Some(rest.iter().find(|w| is_id(w)).map(|w| (*w).to_owned())),
+        _ => Some(None),
+    }
+}
+
+/// The Codex sessions running in terminals now: each one's folder, and the session it resumed
+/// when it named one. None where `ps` and `lsof` are missing (Windows).
+fn terminals() -> Vec<(PathBuf, Option<String>)> {
+    let Ok(out) = Command::new("/bin/ps")
+        .args(["-axo", "pid=,command="])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    let running: Vec<(String, Option<String>)> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let (pid, command) = l.trim_start().split_once(' ')?;
+            Some((pid.to_owned(), session_of(command.trim())?))
+        })
+        .collect();
+    if running.is_empty() {
+        return Vec::new();
+    }
+    // Their folders, in one look: `p<pid>` then `n<folder>` lines.
+    let lsof = ["/usr/sbin/lsof", "/usr/bin/lsof"]
+        .into_iter()
+        .map(Path::new)
+        .find(|p| p.is_file())
+        .unwrap_or(Path::new("lsof"));
+    let pids: Vec<&str> = running.iter().map(|(p, _)| p.as_str()).collect();
+    let Ok(out) = Command::new(lsof)
+        .args(["-a", "-d", "cwd", "-F", "pn", "-p", &pids.join(",")])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    let mut folders = HashMap::new();
+    let mut pid = "";
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        if let Some(p) = line.strip_prefix('p') {
+            pid = p;
+        } else if let Some(folder) = line.strip_prefix('n') {
+            folders.insert(pid.to_owned(), PathBuf::from(folder));
+        }
+    }
+    running
+        .into_iter()
+        .filter_map(|(pid, thread)| Some((folders.get(&pid)?.clone(), thread)))
+        .collect()
+}
+
+/// Codex's sessions in project `project` (its main working tree) or a worktree of it that a
+/// Codex in a terminal is on now, as chats that listen.
 pub fn chats(project: &Path) -> Vec<Chat> {
     let Some(home) = home() else {
         return Vec::new();
     };
-    let rollouts = recent_rollouts(&home);
-    let open = held_open(&rollouts);
+    let mut terminals = terminals();
+    if terminals.is_empty() {
+        return Vec::new();
+    }
+    let mut repos: HashMap<PathBuf, Option<crate::git::Repo>> = HashMap::new();
+    let mut in_project = |cwd: &Path| {
+        repos
+            .entry(cwd.to_owned())
+            .or_insert_with(|| crate::git::Repo::open(cwd).ok())
+            .as_ref()
+            .is_some_and(|r| r.main_root() == project)
+    };
+    // The project's sessions, the newest written first.
+    let mut sessions: Vec<(SystemTime, String, PathBuf)> = recent_rollouts(&home)
+        .into_iter()
+        .filter_map(|(file, at)| {
+            let (id, cwd) = meta(&first_line(&file)?)?;
+            Some((at, id, cwd))
+        })
+        .filter(|(_, _, cwd)| in_project(cwd))
+        .collect();
+    sessions.sort_by(|a, b| b.0.cmp(&a.0));
+    // One that resumed a session by name takes it first; the others the newest in their folder.
+    terminals.sort_by_key(|(_, thread)| thread.is_none());
+    let mut on: Vec<(String, PathBuf)> = Vec::new();
+    for (folder, thread) in &terminals {
+        let free = |id: &String| !on.iter().any(|(o, _)| o == id);
+        let pick = match thread {
+            Some(id) => sessions.iter().find(|(_, s, _)| s == id && free(s)),
+            None => sessions.iter().find(|(_, s, cwd)| cwd == folder && free(s)),
+        };
+        if let Some((_, id, cwd)) = pick {
+            on.push((id.clone(), cwd.clone()));
+        }
+    }
     let names =
         names(&std::fs::read_to_string(home.join("session_index.jsonl")).unwrap_or_default());
-    let mut chats = Vec::new();
-    for file in rollouts.iter().filter(|f| open.contains(*f)) {
-        let Some((session, cwd)) = std::fs::read_to_string(file)
-            .ok()
-            .and_then(|t| t.lines().next().and_then(meta))
-        else {
-            continue;
-        };
-        let Ok(repo) = crate::git::Repo::open(&cwd) else {
-            continue;
-        };
-        if repo.main_root() != project {
-            continue;
-        }
-        chats.push(Chat {
-            title: names.get(&session).cloned().unwrap_or_default(),
-            session,
-            agent: AGENT.to_owned(),
-            repo: repo.root(),
-            project: project.to_owned(),
-            branch: repo.head_branch().unwrap_or_default(),
-            pid: 0,
-            watcher: 0,
-            beat: agents::now(),
-        });
-    }
-    chats
+    on.into_iter()
+        .filter_map(|(session, cwd)| {
+            let repo = crate::git::Repo::open(&cwd).ok()?;
+            Some(Chat {
+                title: names.get(&session).cloned().unwrap_or_default(),
+                session,
+                agent: AGENT.to_owned(),
+                repo: repo.root(),
+                project: project.to_owned(),
+                branch: repo.head_branch().unwrap_or_default(),
+                pid: 0,
+                watcher: 0,
+                beat: agents::now(),
+            })
+        })
+        .collect()
 }
 
 /// One beat for project `project`: its open Codex sessions listen, the closed ones go, and what
@@ -256,6 +371,36 @@ mod tests {
     }
 
     #[test]
+    fn a_codex_in_a_terminal_is_told_from_its_other_commands() {
+        let id = "01a16951-bcaa-77f1-82d4-6c3f73f7d8b8";
+        let bin = "/Users/k/.codex/packages/standalone/releases/0.164.0/bin/codex";
+        assert_eq!(session_of(bin), Some(None));
+        assert_eq!(
+            session_of(&format!("{bin} -m gpt-5 fix the build")),
+            Some(None)
+        );
+        assert_eq!(
+            session_of(&format!("codex resume {id}")),
+            Some(Some(id.to_owned()))
+        );
+        assert_eq!(session_of("codex resume --last"), Some(None));
+        assert_eq!(session_of("codex fork"), Some(None));
+        // The app-server, a queue the app runs, a non-interactive run, another program.
+        assert_eq!(
+            session_of(&format!("{bin} app-server --listen unix://")),
+            None
+        );
+        assert_eq!(
+            session_of(&format!("codex queue --thread {id} --message hi")),
+            None
+        );
+        assert_eq!(session_of("codex exec do it"), None);
+        assert_eq!(session_of("/x/codex-code-mode-host"), None);
+        assert_eq!(session_of("/bin/zsh -c codex"), None);
+        assert!(is_id(id) && !is_id("01a16951") && !is_id(&id.replace('-', "x")));
+    }
+
+    #[test]
     fn the_newest_name_of_a_session_wins() {
         let index = "{\"id\":\"a\",\"thread_name\":\"First\"}\n\
                      {\"id\":\"b\",\"thread_name\":\"Other\"}\n\
@@ -274,7 +419,7 @@ mod tests {
         std::fs::write(day.join("rollout-2026-10-23T19-12-06-x.jsonl"), "{}").unwrap();
         std::fs::write(day.join("notes.txt"), "").unwrap();
         std::fs::write(home.join("sessions/rollout-misplaced.jsonl"), "").unwrap();
-        let found = recent_rollouts(&home);
+        let found: Vec<PathBuf> = recent_rollouts(&home).into_iter().map(|(f, _)| f).collect();
         assert_eq!(found, [day.join("rollout-2026-10-23T19-12-06-x.jsonl")]);
         std::fs::remove_dir_all(home).ok();
     }
