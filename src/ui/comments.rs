@@ -1102,8 +1102,15 @@ impl Workspace {
         }
     }
 
+    /// The request the open composer can post to: none for a note on a file or folder in Code,
+    /// which is the agent's only, whatever request's diff is loaded behind it (#130).
+    fn compose_request(&self) -> Option<u64> {
+        self.request_target()
+            .filter(|_| self.compose.as_ref().is_some_and(|c| c.file.is_none()))
+    }
+
     fn toggle_target(&mut self, cx: &mut Context<Self>) {
-        let request = self.request_target();
+        let request = self.compose_request();
         if let Some(compose) = self.compose.as_mut()
             && !compose.posting
         {
@@ -2199,7 +2206,7 @@ impl Workspace {
     /// The new comment's input: the one input component (variant D) with who sees it on its edge.
     pub(super) fn compose_box(&self, this: WeakEntity<Self>) -> Option<gpui::Div> {
         let compose = self.compose.as_ref()?;
-        let request = self.request_target();
+        let request = self.compose_request();
         let source = match compose.target {
             Target::Agent
             | Target::Edit(Change::Agent(_))
