@@ -688,6 +688,13 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                         this.start_theme_edit(id, cx);
                         continue;
                     }
+                    // A token of the editor open, by its row: `theme-token:3`.
+                    if let Some(row) = name.trim().strip_prefix("theme-token:")
+                        && let Ok(row) = row.parse()
+                    {
+                        this.pick_token(row, cx);
+                        continue;
+                    }
                     // The editor's extends ▾ open.
                     if name.trim() == "theme-bases" {
                         this.open_theme_bases(Point::new(px(560.), px(118.)), cx);

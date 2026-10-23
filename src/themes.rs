@@ -563,6 +563,42 @@ pub fn hex(c: u32) -> String {
     }
 }
 
+/// `c` as hue (0–360), saturation, value and alpha (0–1): the colour picker's terms.
+pub fn to_hsva(c: u32) -> [f32; 4] {
+    let ch = |shift: u32| ((c >> shift) & 0xff) as f32 / 255.;
+    let (r, g, b, a) = (ch(24), ch(16), ch(8), ch(0));
+    let max = r.max(g).max(b);
+    let d = max - r.min(g).min(b);
+    let h = if d == 0. {
+        0.
+    } else if max == r {
+        60. * ((g - b) / d).rem_euclid(6.)
+    } else if max == g {
+        60. * ((b - r) / d + 2.)
+    } else {
+        60. * ((r - g) / d + 4.)
+    };
+    let s = if max == 0. { 0. } else { d / max };
+    [h, s, max, a]
+}
+
+/// The colour of hue, saturation, value and alpha.
+pub fn from_hsva([h, s, v, a]: [f32; 4]) -> u32 {
+    let c = v * s;
+    let at = h.rem_euclid(360.) / 60.;
+    let x = c * (1. - (at % 2. - 1.).abs());
+    let (r, g, b) = match at as u32 {
+        0 => (c, x, 0.),
+        1 => (x, c, 0.),
+        2 => (0., c, x),
+        3 => (0., x, c),
+        4 => (x, 0., c),
+        _ => (c, 0., x),
+    };
+    let byte = |f: f32| ((f + v - c).clamp(0., 1.) * 255.).round() as u32;
+    byte(r) << 24 | byte(g) << 16 | byte(b) << 8 | (a.clamp(0., 1.) * 255.).round() as u32
+}
+
 fn luminance(c: u32) -> f32 {
     let ch = |shift: u32| {
         let v = ((c >> shift) & 0xff) as f32 / 255.;
@@ -626,6 +662,19 @@ pub fn raise(theme: &Theme, ink: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn colours_go_to_the_pickers_terms_and_back() {
+        for c in [
+            0xff0000ff, 0x61afefff, 0x282c34ff, 0x00000000, 0xffffff80, 0x98c37940,
+        ] {
+            assert_eq!(from_hsva(to_hsva(c)), c, "{c:08x}");
+        }
+        let [h, s, v, a] = to_hsva(0x00ff00ff);
+        assert_eq!((h, s, v, a), (120., 1., 1., 1.));
+        // A grey has no hue: any gives it back.
+        assert_eq!(from_hsva([200., 0., 0.5, 1.]), 0x808080ff);
+    }
 
     #[test]
     fn every_built_in_reads_at_four_and_a_half_to_one() {

@@ -25,6 +25,9 @@ pub struct ThemeEdit {
     from: Option<String>,
     /// The token whose value is open.
     pub selected: Option<usize>,
+    /// Its colour as the picker holds it: hue, saturation, value, alpha — kept apart from the
+    /// value, so a grey keeps the hue it was dragged to.
+    hsva: [f32; 4],
     /// The last save's outcome, said beside Save.
     said: Option<Result<String, String>>,
 }
@@ -954,6 +957,7 @@ impl Workspace {
             base,
             from,
             selected: None,
+            hsva: [0., 0., 0., 1.],
             said: None,
         });
         cx.notify();
@@ -1066,13 +1070,11 @@ impl Workspace {
         edit.theme.extends = Some(base.id.clone());
         edit.base = base;
         edit.said = None;
-        if let Some(i) = edit.selected {
-            self.theme_value = themes::hex(value(&edit.theme, i));
-        }
+        self.show_value();
         cx.notify();
     }
 
-    fn pick_token(&mut self, i: usize, cx: &mut Context<Self>) {
+    pub(super) fn pick_token(&mut self, i: usize, cx: &mut Context<Self>) {
         let Some(edit) = &mut self.theme_edit else {
             return;
         };
@@ -1082,8 +1084,34 @@ impl Workspace {
             return cx.notify();
         }
         edit.selected = Some(i);
-        self.theme_value = themes::hex(value(&edit.theme, i));
+        self.show_value();
         self.start_field(Field::ThemeValue, cx);
+    }
+
+    /// The selected token's value into the hex field and the picker, after it changed elsewhere.
+    fn show_value(&mut self) {
+        let Some(edit) = &mut self.theme_edit else {
+            return;
+        };
+        if let Some(i) = edit.selected {
+            let c = value(&edit.theme, i);
+            self.theme_value = themes::hex(c);
+            edit.hsva = themes::to_hsva(c);
+        }
+    }
+
+    /// The picker moved: the token takes its colour, the hex field follows.
+    fn pick_color(&mut self, hsva: [f32; 4], cx: &mut Context<Self>) {
+        let Some(edit) = &mut self.theme_edit else {
+            return;
+        };
+        let Some(i) = edit.selected else {
+            return;
+        };
+        edit.hsva = hsva;
+        let c = themes::from_hsva(hsva);
+        self.theme_value = themes::hex(c);
+        self.set_token(i, c, cx);
     }
 
     /// Token `i` of the theme being edited becomes `color`, drawn at once.
@@ -1124,8 +1152,8 @@ impl Workspace {
                 edit.theme.own_roles.retain(|&o| o != r);
             }
         }
-        self.theme_value = themes::hex(value(&edit.theme, i));
         edit.said = None;
+        self.show_value();
         cx.notify();
     }
 
@@ -1135,6 +1163,9 @@ impl Workspace {
             return;
         };
         if let Some(color) = themes::parse_hex(&self.theme_value) {
+            if let Some(edit) = &mut self.theme_edit {
+                edit.hsva = themes::to_hsva(color);
+            }
             self.set_token(i, color, cx);
         }
     }
@@ -1153,13 +1184,7 @@ impl Workspace {
         for (i, color) in low {
             self.set_token(i, color, cx);
         }
-        if let Some(i) = self.theme_edit.as_ref().and_then(|e| e.selected) {
-            self.theme_value = self
-                .theme_edit
-                .as_ref()
-                .map(|e| themes::hex(value(&e.theme, i)))
-                .unwrap_or_default();
-        }
+        self.show_value();
     }
 
     /// Writes the theme to its file in the themes folder and draws with it (Save, ⌘S).
@@ -1213,9 +1238,7 @@ impl Workspace {
         };
         edit.theme = edit.start.clone();
         edit.said = None;
-        if let Some(i) = edit.selected {
-            self.theme_value = themes::hex(value(&edit.theme, i));
-        }
+        self.show_value();
         cx.notify();
     }
 
@@ -1263,8 +1286,15 @@ impl Workspace {
                     .rounded(px(ROW_RADIUS))
                     .text_size(px(12.))
                     .cursor_pointer()
+                    // The token being edited is framed in the focus colour, its panel under it.
+                    .border_1()
+                    .border_color(if selected {
+                        theme::focus()
+                    } else {
+                        gpui::transparent_black().into()
+                    })
                     .when(selected, |s| s.bg(theme::selected()))
-                    .hover(|s| s.bg(theme::hover()))
+                    .when(!selected, |s| s.hover(|s| s.bg(theme::hover())))
                     .child(
                         div()
                             .size(px(18.))
@@ -1314,10 +1344,14 @@ impl Workspace {
                     .into_any_element(),
             );
             if selected {
-                // The token's panel opens under it (#56, 14).
+                // The token's panel opens under it (#56, 14). Not shrunk: in the scrolling
+                // column it was squeezed to nothing, and the token looked as if nothing opened.
                 list.push(
                     super::motion::appear(
-                        div().overflow_hidden().child(self.render_token_open(i, cx)),
+                        div()
+                            .flex_none()
+                            .overflow_hidden()
+                            .child(self.render_token_open(i, cx)),
                         ("token-open", i),
                         super::motion::BASE,
                         |panel, v| panel.max_h(px(260. * v)).opacity(v),
@@ -1522,6 +1556,7 @@ impl Workspace {
             .flex_col()
             .gap(px(8.))
             .text_size(px(12.))
+            .child(self.color_picker(edit.hsva, cx))
             .child(
                 div()
                     .flex()
@@ -1596,8 +1631,8 @@ impl Workspace {
                                     return;
                                 };
                                 let c = themes::raise(&edit.theme, value(&edit.theme, i));
-                                this.theme_value = themes::hex(c);
                                 this.set_token(i, c, cx);
+                                this.show_value();
                             },
                         ))
                     }))
@@ -1611,4 +1646,194 @@ impl Workspace {
             )
             .into_any_element()
     }
+
+    /// The picker over the hex field: a square of the hue, saturation across and value down, and
+    /// the hue and the alpha as strips beside it. A press sets it, a drag follows the pointer
+    /// even past the edge.
+    fn color_picker(&self, [h, s, v, a]: [f32; 4], cx: &mut Context<Self>) -> AnyElement {
+        use gpui::{linear_color_stop as stop, linear_gradient};
+        let solid = |hsva| rgba(themes::from_hsva(hsva));
+        let white = rgba(0xffffffff);
+        // A ring or a bar over a strip, where it stands.
+        let bar = |y: f32| {
+            div()
+                .absolute()
+                .left(px(-2.))
+                .top(px(y * PICK_H - 3.))
+                .w(px(STRIP + 4.))
+                .h(px(6.))
+                .rounded(px(3.))
+                .border_2()
+                .border_color(white)
+                .shadow_sm()
+        };
+        let square = self
+            .picker_area(Pick::Square, SQUARE, cx)
+            .rounded(px(4.))
+            .bg(solid([h, 1., 1., 1.]))
+            .child(
+                div()
+                    .absolute()
+                    .size_full()
+                    .rounded(px(4.))
+                    .bg(linear_gradient(
+                        90.,
+                        stop(white, 0.),
+                        stop(rgba(0xffffff00), 1.),
+                    )),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .size_full()
+                    .rounded(px(4.))
+                    .bg(linear_gradient(
+                        180.,
+                        stop(rgba(0x00000000), 0.),
+                        stop(rgba(0x000000ff), 1.),
+                    )),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(px(s * SQUARE - 6.))
+                    .top(px((1. - v) * PICK_H - 6.))
+                    .size(px(12.))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(white)
+                    .shadow_sm(),
+            );
+        let hue = self
+            .picker_area(Pick::Hue, STRIP, cx)
+            .flex()
+            .flex_col()
+            .children((0..6).map(|k| {
+                let k = k as f32;
+                div()
+                    .flex_1()
+                    .w_full()
+                    .when(k == 0., |d| d.rounded_t(px(3.)))
+                    .when(k == 5., |d| d.rounded_b(px(3.)))
+                    .bg(linear_gradient(
+                        180.,
+                        stop(solid([k * 60., 1., 1., 1.]), 0.),
+                        stop(solid([(k + 1.) * 60., 1., 1., 1.]), 1.),
+                    ))
+            }))
+            .child(bar(h / 360.));
+        // Over squares, so what shows through is seen.
+        let alpha = self
+            .picker_area(Pick::Alpha, STRIP, cx)
+            .rounded(px(3.))
+            .bg(white)
+            .child(
+                div()
+                    .absolute()
+                    .size_full()
+                    .rounded(px(3.))
+                    .bg(gpui::checkerboard(rgba(0xc8c8c8ff), 6.)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .size_full()
+                    .rounded(px(3.))
+                    .bg(linear_gradient(
+                        180.,
+                        stop(solid([h, s, v, 1.]), 0.),
+                        stop(solid([h, s, v, 0.]), 1.),
+                    )),
+            )
+            .child(bar(1. - a));
+        div()
+            .flex()
+            .gap(px(10.))
+            .child(square)
+            .child(hue)
+            .child(alpha)
+            .into_any_element()
+    }
+
+    /// One of the picker's areas: a press there, or a drag from it, sets what it holds.
+    fn picker_area(&self, which: Pick, w: f32, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+        use gpui::{Bounds, DragMoveEvent, MouseButton, MouseDownEvent, Pixels};
+        let area: std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>> = Default::default();
+        let found = area.clone();
+        div()
+            .id(("color-pick", which as usize))
+            .relative()
+            .flex_none()
+            .w(px(w))
+            .h(px(PICK_H))
+            .cursor_crosshair()
+            .child(
+                gpui::canvas(move |b, _, _| found.set(Some(b)), |_, _, _, _| {})
+                    .absolute()
+                    .size_full(),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                    if let Some(b) = area.get() {
+                        this.pick_at(which, fraction(b, e.position), cx);
+                    }
+                }),
+            )
+            .on_drag(PickDrag(which), |_, _, _, cx| {
+                cx.new(|_| super::hover::NoTip)
+            })
+            .on_drag_move(
+                cx.listener(move |this, e: &DragMoveEvent<PickDrag>, _, cx| {
+                    if e.drag(cx).0 == which {
+                        this.pick_at(which, fraction(e.bounds, e.event.position), cx);
+                    }
+                }),
+            )
+    }
+
+    /// The pointer at `(x, y)` (0–1 across and down) in area `which`.
+    fn pick_at(&mut self, which: Pick, (x, y): (f32, f32), cx: &mut Context<Self>) {
+        let Some(edit) = &self.theme_edit else {
+            return;
+        };
+        let [h, s, v, a] = edit.hsva;
+        let hsva = match which {
+            Pick::Square => [h, x, 1. - y, a],
+            Pick::Hue => [y * 360., s, v, a],
+            Pick::Alpha => [h, s, v, 1. - y],
+        };
+        self.pick_color(hsva, cx);
+    }
+}
+
+/// The colour picker's square, its height, and its strips' width.
+const SQUARE: f32 = 200.;
+const PICK_H: f32 = 120.;
+const STRIP: f32 = 14.;
+
+/// The picker's areas.
+#[derive(Clone, Copy, PartialEq)]
+enum Pick {
+    Square,
+    Hue,
+    Alpha,
+}
+
+/// A drag in the picker, by the area it started in.
+struct PickDrag(Pick);
+
+/// Where `p` is in `b`: 0–1 across and down, held at the edges.
+fn fraction(b: gpui::Bounds<gpui::Pixels>, p: gpui::Point<gpui::Pixels>) -> (f32, f32) {
+    let f = |p: gpui::Pixels, o: gpui::Pixels, l: gpui::Pixels| {
+        if l > px(0.) {
+            ((p - o) / l).clamp(0., 1.)
+        } else {
+            0.
+        }
+    };
+    (
+        f(p.x, b.origin.x, b.size.width),
+        f(p.y, b.origin.y, b.size.height),
+    )
 }
