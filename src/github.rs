@@ -228,7 +228,12 @@ fn send(remote: &WebRemote, url: &str, method: &str, body: Option<&Value>) -> Re
             .unwrap_or_else(|| body.chars().take(160).collect())
     };
     match code.trim() {
-        "200" | "201" => Ok(serde_json::from_str(body).unwrap_or(Value::Null)),
+        "200" | "201" => {
+            let value = serde_json::from_str(body).unwrap_or(Value::Null);
+            // The people in it, for their pictures.
+            crate::avatars::harvest(&value);
+            Ok(value)
+        }
         "204" => Ok(Value::Null),
         "401" => bail!("GitHub refused the token"),
         "403" => bail!("GitHub refused it: {}", message()),

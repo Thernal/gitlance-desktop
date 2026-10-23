@@ -69,7 +69,12 @@ impl Workspace {
     }
 
     /// A new tab of this window, after the current event (the shell reads this workspace).
-    fn open_in_new_tab(&mut self, path: PathBuf, then: Option<Target>, cx: &mut Context<Self>) {
+    pub(super) fn open_in_new_tab(
+        &mut self,
+        path: PathBuf,
+        then: Option<Target>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(shell) = self.shell.as_ref().and_then(gpui::WeakEntity::upgrade) else {
             return self.open_here(path, then, cx);
         };

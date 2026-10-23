@@ -155,6 +155,15 @@ pub fn state(resolved: bool) -> Div {
 
 /// A round avatar with the name's first letter, coloured by the name.
 pub fn avatar(name: &str, me: bool, size: f32) -> Div {
+    // Their picture once it is in (#89).
+    if let Some(picture) = crate::avatars::picture(name) {
+        return div()
+            .size(px(size))
+            .flex_none()
+            .rounded_full()
+            .overflow_hidden()
+            .child(gpui::img(picture).size(px(size)).rounded_full());
+    }
     const HUES: [u32; 6] = [0x56b6c2, 0x98c379, 0xc678dd, 0xe5c07b, 0xe06c75, 0xd19a66];
     let color = if me {
         theme::accent()

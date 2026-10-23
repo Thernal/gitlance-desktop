@@ -1036,9 +1036,11 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &FocusDiffZone, _, cx| this.set_zone(zones::Zone::Diff, cx)),
             )
-            .on_action(cx.listener(|this, _: &NewTab, window, cx| {
-                this.with_shell(window, cx, |s, window, cx| s.new_tab(window, cx))
-            }))
+            .on_action(
+                cx.listener(|this, _: &NewTab, _, cx| {
+                    this.open_palette(palette::Kind::Projects, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &CloseItem, _, cx| this.close_shown(cx)))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 this.with_shell(window, cx, |s, window, cx| {

@@ -271,6 +271,7 @@ pub fn list(remote: &WebRemote) -> Result<Vec<Mr>> {
             "merge_requests?state=opened&order_by=updated_at&per_page=100",
         )?,
     };
+    crate::avatars::harvest(&value);
     Ok(parse_mrs(&value))
 }
 
@@ -867,7 +868,12 @@ fn send(
     let text = String::from_utf8_lossy(&out.stdout);
     let (body, code) = text.rsplit_once('\n').unwrap_or((&text, ""));
     match code.trim() {
-        "200" | "201" => Ok(serde_json::from_str(body)?),
+        "200" | "201" => {
+            let value: Value = serde_json::from_str(body)?;
+            // The people in it, for their pictures.
+            crate::avatars::harvest(&value);
+            Ok(value)
+        }
         "204" => Ok(Value::Null),
         "401" | "403" => bail!("GitLab refused the token"),
         "404" => bail!("GitLab does not know this project (or the token cannot see it)"),

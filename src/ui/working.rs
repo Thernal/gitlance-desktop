@@ -78,8 +78,16 @@ impl Workspace {
                         Err(_) => return,
                     }
                 }
-                // The agents' answers ride on the same beat.
-                if this.update(cx, |this, cx| this.poll_agents(cx)).is_err() {
+                // The agents' answers ride on the same beat, and pictures that came in.
+                if this
+                    .update(cx, |this, cx| {
+                        this.poll_agents(cx);
+                        if crate::avatars::take_fresh() {
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
                     return;
                 }
                 cx.background_executor()

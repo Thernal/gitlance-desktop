@@ -125,11 +125,6 @@ impl Shell {
         window.focus(&focus, cx);
     }
 
-    pub(super) fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let ws = cx.new(|cx| Workspace::new(None, false, window, cx));
-        self.attach(ws, window, cx);
-    }
-
     /// The tab that has `path` open, as the tabs last said (a workspace may be mid-update).
     pub(super) fn tab_of(&self, path: &std::path::Path) -> Option<usize> {
         let same = |root: &std::path::Path| {
@@ -414,8 +409,8 @@ impl Workspace {
                         .tooltip_show_delay(super::hover::LONG)
                         .tooltip(|_, cx| cx.new(|_| super::Tip("Open a repository  ⌘T")).into())
                         .child("+")
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.with_shell(window, cx, |s, window, cx| s.new_tab(window, cx))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.open_palette(super::palette::Kind::Projects, cx)
                         })),
                 )
                 .into_any_element(),

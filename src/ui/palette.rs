@@ -101,6 +101,10 @@ pub enum Kind {
     Head((String, Oid)),
     /// The themes (#12 B): ↑↓ tries each on the whole window, ↵ keeps, esc goes back.
     Theme,
+    /// Open a repository (⌘T, the rail's +): the ones opened before, filtered as you type, a path
+    /// typed, and Browse for the system's picker (the developer, 2026-10-23: not a new tab's
+    /// welcome page, which had no way back).
+    Projects,
 }
 
 #[derive(Clone, Copy)]
@@ -271,6 +275,8 @@ enum Pick {
     Command(Cmd),
     Ref(String, Oid),
     Theme(String),
+    /// A repository to open in a tab of its own, or go to when one has it.
+    Project(std::path::PathBuf),
 }
 
 #[derive(Clone)]
@@ -296,6 +302,66 @@ pub struct Palette {
     open_only: bool,
     items: Vec<Item>,
     refs: Vec<NamedRef>,
+}
+
+/// Open a repository's list: a folder typed as a path, the ones opened before ranked by the
+/// typed words (the one on screen marked), and Browse.
+fn project_items(
+    query: &str,
+    recent: &[std::path::PathBuf],
+    here: Option<&std::path::Path>,
+) -> Vec<Item> {
+    let mut items = Vec::new();
+    let typed = query.trim();
+    let expanded = match typed.strip_prefix('~') {
+        Some(rest) => std::env::home_dir().map(|h| h.join(rest.trim_start_matches('/'))),
+        None => Some(std::path::PathBuf::from(typed)),
+    };
+    if typed.starts_with(['/', '~'])
+        && let Some(path) = expanded.filter(|p| p.is_dir())
+    {
+        items.push(Item {
+            group: "Folder",
+            label: path.display().to_string(),
+            detail: String::new(),
+            key: "↵",
+            pick: Pick::Project(path),
+        });
+    }
+    let named: Vec<(String, &std::path::PathBuf)> = recent
+        .iter()
+        .map(|p| {
+            let name = p.file_name().map_or_else(
+                || p.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+            (name, p)
+        })
+        .collect();
+    let ranked: Vec<&(String, &std::path::PathBuf)> = if typed.is_empty() {
+        named.iter().collect()
+    } else {
+        crate::rank::rank(named.iter(), typed, |(name, _)| name.as_str())
+    };
+    items.extend(ranked.into_iter().map(|(name, path)| Item {
+        group: "Opened before",
+        label: name.clone(),
+        detail: if here == Some(path.as_path()) {
+            "on screen".to_owned()
+        } else {
+            super::format::home_relative(path)
+        },
+        key: "",
+        pick: Pick::Project((*path).clone()),
+    }));
+    items.push(Item {
+        group: "On disk",
+        label: "Browse…".to_owned(),
+        detail: String::new(),
+        key: "⌘O",
+        pick: Pick::Command(Cmd::Open),
+    });
+    items
 }
 
 /// A file's name, which leads, and its folder, which follows it fainter — as IDEs list files.
@@ -374,7 +440,8 @@ impl Workspace {
                 | Kind::Structure
                 | Kind::Bookmarks
                 | Kind::Switch
-                | Kind::Theme,
+                | Kind::Theme
+                | Kind::Projects,
                 _,
             )
             | (_, None) => Vec::new(),
@@ -590,6 +657,9 @@ impl Workspace {
 
     fn palette_items(&self, p: &Palette) -> Vec<Item> {
         let query = p.query.trim_start();
+        if matches!(p.kind, Kind::Projects) {
+            return project_items(query, &crate::storage::recent(), self.root.as_deref());
+        }
         if matches!(p.kind, Kind::Theme) {
             let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
             let current = theme::choice().window;
@@ -1093,6 +1163,14 @@ impl Workspace {
                 choice.window = id;
                 self.choose_theme(choice, cx);
             }
+            // A tab of its own, as + means; one that has it already comes on screen.
+            Pick::Project(path) => {
+                self.palette = None;
+                match self.root {
+                    None => self.request_open(path, None, cx),
+                    Some(_) => self.open_in_new_tab(path, None, cx),
+                }
+            }
         }
         cx.notify();
     }
@@ -1156,6 +1234,7 @@ impl Workspace {
             Kind::Base => "Compare — pick the base: a branch, a tag or a commit",
             Kind::Head(_) => "Compare — pick what to compare with it",
             Kind::Theme => "Theme — ↑↓ tries it on the whole window, ↵ keeps, esc goes back",
+            Kind::Projects => "Open a repository — type to filter, or a path",
         };
         let title = match &p.kind {
             Kind::Search(_)
@@ -1164,6 +1243,7 @@ impl Workspace {
             | Kind::Bookmarks
             | Kind::Switch
             | Kind::Theme => None,
+            Kind::Projects => Some("Open a repository".to_owned()),
             Kind::Base => Some("Compare · step 1 of 2".to_owned()),
             Kind::Head((name, _)) => Some(format!("Compare · {name} … ?")),
         };
@@ -1184,8 +1264,11 @@ impl Workspace {
                 );
             }
             let selected = ix == p.at;
-            // A file: its name, then its folder right after it, cut first.
-            let file = matches!(item.pick, Pick::File(_) | Pick::RepoFile(_));
+            // A file or a repository: its name, then its folder right after it, cut first.
+            let file = matches!(
+                item.pick,
+                Pick::File(_) | Pick::RepoFile(_) | Pick::Project(_)
+            );
             rows.push(
                 super::row(("palette-item", ix), selected)
                     .h(px(28.))
@@ -1232,6 +1315,7 @@ impl Workspace {
                 .text_color(theme::muted())
                 .child(match &p.kind {
                     Kind::Recent => "Nothing opened yet.",
+                    Kind::Projects => "None by that name. Browse… finds it on disk.",
                     Kind::Bookmarks => "No bookmarks yet: click a line and press F3.",
                     Kind::Structure => "No function or type of this file is changed (or the language is not known).",
                     Kind::Search(_) if p.query.is_empty() => "Type to search.",

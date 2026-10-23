@@ -235,8 +235,8 @@ impl Workspace {
                             })
                             .into()
                         })
-                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                            this.with_shell(window, cx, |s, window, cx| s.new_tab(window, cx))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.open_palette(super::palette::Kind::Projects, cx)
                         })),
                 ),
         )

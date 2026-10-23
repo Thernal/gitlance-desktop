@@ -56,8 +56,14 @@ impl Workspace {
     fn people(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = Vec::new();
         let mut add = |login: &str, name: &str| {
-            if !login.is_empty() && !out.iter().any(|(l, _)| l == login) {
-                out.push((login.to_owned(), name.to_owned()));
+            if login.is_empty() {
+                return;
+            }
+            match out.iter_mut().find(|(l, _)| l == login) {
+                // Known by login only (a reviewer): a name seen later fills it in.
+                Some((_, known)) if known.is_empty() => *known = name.to_owned(),
+                Some(_) => {}
+                None => out.push((login.to_owned(), name.to_owned())),
             }
         };
         if let Some(m) = self
@@ -113,7 +119,11 @@ impl Workspace {
                 let mut people: Vec<(String, String)> = self
                     .people()
                     .into_iter()
-                    .filter(|(l, n)| l.to_lowercase().contains(&q) || n.to_lowercase().contains(&q))
+                    // By username or name, as typed or by the starts of its words ("ko" is not
+                    // enough, "kok" finds Kestrel Okafor).
+                    .filter(|(l, n)| {
+                        crate::rank::word_matches(&q, l) || crate::rank::word_matches(&q, n)
+                    })
                     .collect();
                 // Who starts with what is typed comes first; otherwise the request's order stays.
                 people.sort_by_key(|(l, n)| {
@@ -189,6 +199,14 @@ impl Workspace {
         true
     }
 
+    /// The username of the person called `name`, as the request and the project know them.
+    pub(super) fn login_of(&self, name: &str) -> Option<String> {
+        self.people()
+            .into_iter()
+            .find(|(l, n)| n == name || l == name)
+            .map(|(l, _)| l)
+    }
+
     /// The list under the field, `pick` selected.
     pub(super) fn render_completion(&self, choices: &[Choice], pick: usize) -> gpui::Div {
         div()
@@ -202,6 +220,40 @@ impl Workspace {
             .flex()
             .flex_col()
             .children(choices.iter().enumerate().map(|(i, c)| {
+                // A person: the face, the name with the username under it.
+                if c.detail.starts_with('@') {
+                    let faint = c.detail.ends_with("not notified");
+                    return div()
+                        .h(px(40.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .rounded(px(ROW_RADIUS))
+                        .when(i == pick, |s| s.bg(theme::selected()))
+                        .child(super::discussion::avatar(&c.label, false, 22.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .when(faint, |s| s.text_color(theme::faint()))
+                                        .child(c.label.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(11.))
+                                        .text_color(theme::faint())
+                                        .child(c.detail.clone()),
+                                ),
+                        );
+                }
                 div()
                     .h(px(26.))
                     .px(px(8.))

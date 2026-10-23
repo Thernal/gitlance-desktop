@@ -313,7 +313,8 @@ impl Workspace {
                         } else {
                             ("reviewing", theme::muted())
                         };
-                        person(r, Some(state)).into_any_element()
+                        let login = self.login_of(&r);
+                        person(r, login, Some(state)).into_any_element()
                     }),
                 )
                 .into_any_element(),
@@ -325,7 +326,7 @@ impl Workspace {
                     "Assignees",
                     d.assignees
                         .iter()
-                        .map(|a| person(a.clone(), None).into_any_element()),
+                        .map(|a| person(a.clone(), self.login_of(a), None).into_any_element()),
                 )
                 .into_any_element(),
             );
@@ -805,13 +806,25 @@ fn block(title: &str, rows: impl IntoIterator<Item = AnyElement>) -> Div {
         .children(rows)
 }
 
-fn person(name: String, state: Option<(&'static str, Rgba)>) -> Div {
+/// Someone in a list: the face, the name with the username under it (the developer,
+/// 2026-10-23), and where they stand.
+fn person(name: String, login: Option<String>, state: Option<(&'static str, Rgba)>) -> Div {
+    let login = login.filter(|l| *l != name);
     div()
         .flex()
         .items_center()
         .gap(px(6.))
-        .child(super::discussion::avatar(&name, false, 18.))
-        .child(name)
+        .child(super::discussion::avatar(
+            &name,
+            false,
+            if login.is_some() { 24. } else { 18. },
+        ))
+        .child(div().flex().flex_col().child(name).children(login.map(|l| {
+            div()
+                .text_size(px(11.))
+                .text_color(theme::faint())
+                .child(format!("@{l}"))
+        })))
         .children(state.map(|(word, color)| div().text_color(color).child(word)))
 }
 
