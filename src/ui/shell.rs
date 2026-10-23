@@ -26,6 +26,9 @@ pub type TabModel = Rc<RefCell<Vec<TabInfo>>>;
 pub struct Shell {
     tabs: Vec<Entity<Workspace>>,
     active: usize,
+    /// Each tab's "on screen", shared with its workspace: one behind another tab polls its
+    /// repository seldom.
+    shown: std::collections::HashMap<gpui::EntityId, std::rc::Rc<std::cell::Cell<bool>>>,
     closed: Vec<PathBuf>,
     model: TabModel,
     /// The session as last written, so it is written again only when it changes.
@@ -54,6 +57,7 @@ impl Shell {
         let mut shell = Self {
             tabs: Vec::new(),
             active: 0,
+            shown: Default::default(),
             closed: Vec::new(),
             model,
             saved: String::new(),
@@ -82,15 +86,28 @@ impl Shell {
     fn attach(&mut self, ws: Entity<Workspace>, window: &mut Window, cx: &mut Context<Self>) {
         let weak = cx.weak_entity();
         let model = self.model.clone();
-        ws.update(cx, |w, _| {
+        let shown = ws.update(cx, |w, _| {
             w.shell = Some(weak);
             w.tabs = model;
+            w.on_screen.clone()
         });
+        self.shown.insert(ws.entity_id(), shown);
         cx.observe(&ws, |_, _, cx| cx.notify()).detach();
         self.tabs.push(ws);
         self.active = self.tabs.len() - 1;
         self.focus_active(window, cx);
+        self.mark_shown();
         cx.notify();
+    }
+
+    /// Tells each tab whether it is the one on screen (no workspace is touched: one may be
+    /// mid-update).
+    fn mark_shown(&self) {
+        for (ix, tab) in self.tabs.iter().enumerate() {
+            if let Some(shown) = self.shown.get(&tab.entity_id()) {
+                shown.set(ix == self.active);
+            }
+        }
     }
 
     pub(super) fn active_ix(&self) -> usize {
@@ -129,6 +146,7 @@ impl Shell {
         if ix < self.tabs.len() && ix != self.active {
             self.active = ix;
             self.focus_active(window, cx);
+            self.mark_shown();
             cx.notify();
         }
     }
@@ -154,10 +172,12 @@ impl Shell {
         // The tab being closed may be mid-update (a click inside it): only its path is read.
         let root = self.tabs[ix].read(cx).root.clone();
         self.closed.extend(root);
-        self.tabs.remove(ix);
+        let gone = self.tabs.remove(ix);
+        self.shown.remove(&gone.entity_id());
         if self.active > ix || self.active >= self.tabs.len() {
             self.active = self.active.saturating_sub(1);
         }
+        self.mark_shown();
         self.focus_active(window, cx);
         cx.notify();
     }

@@ -8,6 +8,7 @@ mod codeowners;
 mod editor;
 mod emoji;
 mod files;
+mod fswatch;
 mod generated;
 mod git;
 mod github;

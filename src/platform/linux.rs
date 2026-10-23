@@ -63,6 +63,8 @@ pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io
     Err(std::io::Error::other("no terminal found"))
 }
 
+pub const WATCHES_TREES: bool = false;
+
 pub const NAMES_APPS: bool = false;
 
 /// The desktop does not say which apps open a file here: the default only (#78).

@@ -85,6 +85,8 @@ pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io
     }
 }
 
+pub const WATCHES_TREES: bool = true;
+
 pub const NAMES_APPS: bool = true;
 
 /// The apps Launch Services says open `file`, the default first (#78).

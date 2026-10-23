@@ -98,6 +98,11 @@ pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io
 /// default app", what `open_with` without one starts (#78).
 pub const NAMES_APPS: bool = os::NAMES_APPS;
 
+/// Whether a whole working tree can be watched for changes cheaply: one stream on macOS
+/// (FSEvents) and Windows; Linux's inotify needs a watch per folder, too many in a large tree,
+/// so there git is asked on a slower beat instead (#87).
+pub const WATCHES_TREES: bool = os::WATCHES_TREES;
+
 /// The apps that can open `file`, by name and where they are, the system's default first (#78);
 /// none where the system does not say.
 pub fn apps_for(file: &std::path::Path) -> Vec<(String, PathBuf)> {

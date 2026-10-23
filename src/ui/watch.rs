@@ -93,10 +93,20 @@ impl Watch {
 
 impl Workspace {
     /// Starts the polling loop for the life of the window.
-    pub(super) fn start_watching(cx: &mut Context<Self>) {
+    pub(super) fn start_watching(
+        shown: std::rc::Rc<std::cell::Cell<bool>>,
+        cx: &mut Context<Self>,
+    ) {
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(POLL).await;
+                // A tab behind another looks seldom (#87).
+                if !shown.get() {
+                    cx.background_executor().timer(POLL * 6).await;
+                    if !shown.get() {
+                        continue;
+                    }
+                }
                 let Ok(job) = this.update(cx, |this, _| this.watch_job()) else {
                     return;
                 };

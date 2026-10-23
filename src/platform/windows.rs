@@ -64,6 +64,8 @@ pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io
         .map(|_| ())
 }
 
+pub const WATCHES_TREES: bool = true;
+
 pub const NAMES_APPS: bool = false;
 
 /// Windows is not asked which apps open a file: the default only (#78).

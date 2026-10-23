@@ -1235,6 +1235,8 @@ struct WorkingState {
     hash: u64,
     only_unstaged: bool,
     task: Option<gpui::Task<()>>,
+    /// What the file system says changed, so the poll asks git only then (#87).
+    changes: Option<Rc<crate::fswatch::Changes>>,
 }
 
 /// What the version comparison shows: the files that changed, or the commits paired up.
@@ -1551,6 +1553,8 @@ pub struct Workspace {
     widths: room::Widths,
     /// What a narrow window folded, for the session (#80).
     narrowed: narrow::Narrowed,
+    /// Whether this is the tab on screen: one behind another polls its repository seldom.
+    on_screen: Rc<Shared<bool>>,
     /// Advance of one code character, measured on the first render.
     char_width: f32,
     commit_scroll: UniformListScrollHandle,
@@ -1740,6 +1744,7 @@ impl Workspace {
             body_width: Rc::new(Shared::new(0.)),
             widths: Default::default(),
             narrowed: Default::default(),
+            on_screen: Rc::new(Shared::new(true)),
             char_width: 0.,
             commit_scroll: UniformListScrollHandle::new(),
             file_scroll: UniformListScrollHandle::new(),
@@ -1751,7 +1756,7 @@ impl Workspace {
         if let Some(path) = start {
             this.open_repo(path, None, cx);
         }
-        Self::start_watching(cx);
+        Self::start_watching(this.on_screen.clone(), cx);
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.window_activated(cx);
