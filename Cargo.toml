@@ -1,6 +1,6 @@
 [package]
 name = "gitlance"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 description = "Review commits and force-pushed branch versions on macOS, without an IDE and without worktrees."
 license = "MIT"
