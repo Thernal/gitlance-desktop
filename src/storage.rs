@@ -109,6 +109,9 @@ pub struct Layout {
     pub tool: String,
     /// Its width.
     pub tool_width: f32,
+    /// The menu's spaces in the order dragged to, by name (`inbox,code,branches,requests`);
+    /// empty, the first order.
+    pub spaces: String,
 }
 
 impl Default for Layout {
@@ -123,6 +126,7 @@ impl Default for Layout {
             fold_places: false,
             tool: String::new(),
             tool_width: 320.,
+            spaces: String::new(),
         }
     }
 }
@@ -146,6 +150,7 @@ impl Layout {
                 "fold_commits" => layout.fold_commits = value == "true",
                 "fold_places" => layout.fold_places = value == "true",
                 "tool" => layout.tool = value.to_owned(),
+                "spaces" => layout.spaces = value.to_owned(),
                 // Before the tool windows: the comments drawer, now Discussions.
                 "comments_open" if value == "true" => layout.tool = "discussions".to_owned(),
                 _ => {}
@@ -174,7 +179,8 @@ impl std::fmt::Display for Layout {
         writeln!(f, "fold_commits={}", self.fold_commits)?;
         writeln!(f, "fold_places={}", self.fold_places)?;
         writeln!(f, "tool={}", self.tool)?;
-        writeln!(f, "tool_width={}", self.tool_width)
+        writeln!(f, "tool_width={}", self.tool_width)?;
+        writeln!(f, "spaces={}", self.spaces)
     }
 }
 
@@ -563,6 +569,7 @@ mod tests {
             fold_places: true,
             tool: "agents".into(),
             tool_width: 300.,
+            spaces: "code,inbox".into(),
         };
         assert_eq!(Layout::parse(&layout.to_string()), layout);
         assert_eq!(Layout::parse("comments_open=true\n").tool, "discussions");

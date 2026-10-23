@@ -68,6 +68,10 @@ impl Code {
     }
 }
 
+/// One of Code's tabs being dragged: its path.
+#[derive(Clone)]
+pub struct DragCodeTab(pub String);
+
 impl Workspace {
     /// Reads the project's files at Code's revision, once per revision (and again with `force`).
     pub(super) fn read_code_files(&mut self, force: bool, cx: &mut Context<Self>) {
@@ -134,6 +138,20 @@ impl Workspace {
             }
         }
         self.open_file_view(path, cx);
+    }
+
+    /// Tab `from` dragged onto tab `to`: it takes that place.
+    fn move_code_tab(&mut self, from: &str, to: &str, cx: &mut Context<Self>) {
+        let tabs = &mut self.code.tabs;
+        let (Some(a), Some(b)) = (
+            tabs.iter().position(|t| t == from),
+            tabs.iter().position(|t| t == to),
+        ) else {
+            return;
+        };
+        let moved = tabs.remove(a);
+        tabs.insert(b, moved);
+        cx.notify();
     }
 
     /// ⌘W in Code: the file on screen closes, its neighbour shows, else the folder page.
@@ -525,8 +543,20 @@ impl Workspace {
                 let on = shown.as_ref() == Some(&path);
                 let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
                 let (open, close) = (path.clone(), path.clone());
+                let (drag, drop) = (path.clone(), path.clone());
+                let label = name.clone();
                 div()
                     .id(SharedString::from(format!("code-tab-{path}")))
+                    // A kept tab dragged onto another takes its place.
+                    .drag_over::<DragCodeTab>(|s, _, _, _| s.bg(theme::selected()))
+                    .when(!preview, |s| {
+                        s.on_drag(DragCodeTab(drag), move |_, _, _, cx| {
+                            cx.new(|_| super::spaces::DragLabel(label.clone()))
+                        })
+                    })
+                    .on_drop(cx.listener(move |this, dragged: &DragCodeTab, _, cx| {
+                        this.move_code_tab(&dragged.0, &drop, cx)
+                    }))
                     .h(px(30.))
                     .px(px(10.))
                     .flex()

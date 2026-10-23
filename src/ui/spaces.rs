@@ -69,6 +69,49 @@ impl Space {
             Space::Requests => "space-requests",
         }
     }
+
+    /// As `layout.txt` keeps the menu's order.
+    fn name(self) -> &'static str {
+        self.id().trim_start_matches("space-")
+    }
+}
+
+/// The menu's spaces in the order `kept` names them (dragged there), any it leaves out after
+/// them in their first order.
+pub fn ordered(kept: &str) -> Vec<Space> {
+    let mut out: Vec<Space> = kept
+        .split(',')
+        .filter_map(|n| Space::ALL.into_iter().find(|s| s.name() == n.trim()))
+        .collect();
+    out.dedup();
+    for s in Space::ALL {
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// A space being dragged in the menu.
+#[derive(Clone, Copy)]
+pub struct DragSpace(pub Space);
+
+/// What follows the pointer while a space or a tab is dragged: its name.
+pub struct DragLabel(pub String);
+
+impl Render for DragLabel {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(px(10.))
+            .py(px(4.))
+            .rounded(px(super::ROW_RADIUS))
+            .bg(theme::selected())
+            .border_1()
+            .border_color(theme::island_border())
+            .text_size(px(13.))
+            .text_color(theme::text())
+            .child(self.0.clone())
+    }
 }
 
 /// What a project lacks for a space.
@@ -229,6 +272,22 @@ impl Workspace {
             .collect()
     }
 
+    /// `from` dragged onto `to` in the menu: it takes `to`'s place, kept in `layout.txt`.
+    fn move_space(&mut self, from: Space, to: Space, cx: &mut Context<Self>) {
+        let mut order = ordered(&self.layout.spaces);
+        let (Some(a), Some(b)) = (
+            order.iter().position(|s| *s == from),
+            order.iter().position(|s| *s == to),
+        ) else {
+            return;
+        };
+        let moved = order.remove(a);
+        order.insert(b, moved);
+        self.layout.spaces = order.iter().map(|s| s.name()).collect::<Vec<_>>().join(",");
+        self.layout.save();
+        cx.notify();
+    }
+
     /// A space's row or ⌃⌘1…4: the page it was left on, its root when it is already on screen.
     /// One the project lacks a token for opens the connect panel; one it lacks a remote or git
     /// for does nothing.
@@ -248,6 +307,7 @@ impl Workspace {
             return None;
         }
         let folded = self.menu_folded();
+        let spaces = ordered(&self.layout.spaces);
         // Folding or unfolding: the names fade while the menu narrows or widens, and the icons
         // stay where they are (#56, 2).
         let moving = self.motion.recent("places-fold");
@@ -397,6 +457,14 @@ impl Workspace {
                 })
                 .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
+                // Dragged onto another space, it takes that place in the menu (kept).
+                .drag_over::<DragSpace>(|s, _, _, _| s.bg(theme::selected()))
+                .on_drag(DragSpace(space), move |_, _, _, cx| {
+                    cx.new(|_| DragLabel(super::words::say(label).into_owned()))
+                })
+                .on_drop(cx.listener(move |this, dragged: &DragSpace, _, cx| {
+                    this.move_space(dragged.0, space, cx)
+                }))
                 // A double click folds or opens what is open under it, as its chevron does.
                 .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                     if e.click_count() == 2 && !this.open_rows(space).is_empty() {
@@ -643,11 +711,11 @@ impl Workspace {
                 .into_any_element();
                 let mut rows = vec![project];
                 if active {
-                    rows.extend(Space::ALL.map(&row));
+                    rows.extend(spaces.iter().copied().map(&row));
                 }
                 rows
             }))
-            .when(!nested, |s| s.children(Space::ALL.map(&row)))
+            .when(!nested, |s| s.children(spaces.iter().copied().map(&row)))
             // A narrow window's side panel, folded into this column (#80).
             .children(self.render_panel_icons(cx));
         // Folding to icons narrows it (#56, 2); zen slides it away (16).
@@ -667,5 +735,20 @@ impl Workspace {
             super::motion::BASE,
             |menu, v| menu.max_w(px(OPEN * v)).opacity(v),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_menus_order_is_kept_by_name_and_fills_in() {
+        assert_eq!(ordered(""), Space::ALL.to_vec());
+        assert_eq!(
+            ordered("requests,inbox"),
+            [Space::Requests, Space::Inbox, Space::Code, Space::Branches]
+        );
+        assert_eq!(ordered("nonsense,code,code").first(), Some(&Space::Code));
     }
 }

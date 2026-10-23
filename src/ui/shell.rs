@@ -339,7 +339,7 @@ impl Workspace {
                                 .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
                         })
                         .child(super::rail::project_mark(&mark, hue, 18.))
-                        .child(super::hover::cut(("tab-title", ix), tab.title).flex_1())
+                        .child(super::hover::cut(("tab-title", ix), tab.title.clone()).flex_1())
                         .children((!tab.active && tab.unread > 0).then(|| {
                             div()
                                 .flex_none()
@@ -387,6 +387,20 @@ impl Workspace {
                                     })
                                 })),
                         )
+                        // Dragged onto another tab, it takes that place, as on the rail.
+                        .drag_over::<super::rail::DragProject>(|s, _, _, _| s.bg(theme::selected()))
+                        .on_drag(super::rail::DragProject(ix), {
+                            let title = tab.title.clone();
+                            move |_, _, _, cx| cx.new(|_| super::spaces::DragLabel(title.clone()))
+                        })
+                        .on_drop(cx.listener(
+                            move |this, dragged: &super::rail::DragProject, window, cx| {
+                                let from = dragged.0;
+                                this.with_shell(window, cx, move |s, _, cx| {
+                                    s.move_tab(from, ix, cx)
+                                });
+                            },
+                        ))
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                             this.with_shell(window, cx, move |s, window, cx| {
                                 s.select(ix, window, cx)
