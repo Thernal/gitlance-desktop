@@ -606,15 +606,12 @@ pub fn is_change(row: &Row) -> bool {
 }
 
 /// The rows whose text contains any of `words` (case-insensitive), for stepping through matches.
-pub fn matching_rows(data: &FileData, rows: &[Row], words: &[String]) -> Vec<usize> {
-    if words.is_empty() {
+pub fn matching_rows(data: &FileData, rows: &[Row], terms: &crate::search::Terms) -> Vec<usize> {
+    if terms.is_empty() {
         return Vec::new();
     }
     let hit = |old: bool, cell: Option<Cell>| {
-        cell.is_some_and(|cell| {
-            let text = data.side(old).line(cell.line).0.to_lowercase();
-            words.iter().any(|w| text.contains(w.as_str()))
-        })
+        cell.is_some_and(|cell| terms.hits(data.side(old).line(cell.line).0))
     };
     rows.iter()
         .enumerate()
@@ -924,9 +921,15 @@ mod tests {
         };
         let data = FileData::build(&file, DiffMode::Lines);
         let rows = layout(&data, &ViewOptions::default(), &HashSet::new());
-        assert_eq!(matching_rows(&data, &rows, &["new".into()]), [0]);
-        assert!(matching_rows(&data, &rows, &["zzz".into()]).is_empty());
-        assert!(matching_rows(&data, &rows, &[]).is_empty());
+        use crate::search::Terms;
+        assert_eq!(matching_rows(&data, &rows, &Terms::text("new")), [0]);
+        assert!(matching_rows(&data, &rows, &Terms::text("zzz")).is_empty());
+        assert!(matching_rows(&data, &rows, &Terms::default()).is_empty());
+        // As a regular expression.
+        assert_eq!(
+            matching_rows(&data, &rows, &Terms::regex("^hello (old|new)$").unwrap()),
+            [0]
+        );
     }
 
     #[test]

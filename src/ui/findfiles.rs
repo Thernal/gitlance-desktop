@@ -28,6 +28,9 @@ pub struct FindFiles {
     at: usize,
     case: bool,
     word: bool,
+    /// The query is a regular expression (`.*`, ⌥R, #113); what is wrong with it, when it is.
+    regex: bool,
+    error: Option<String>,
     hits: Vec<Hit>,
     files_with_hits: usize,
     capped: bool,
@@ -75,6 +78,8 @@ impl Workspace {
             at: 0,
             case: false,
             word: false,
+            regex: false,
+            error: None,
             hits: Vec::new(),
             files_with_hits: 0,
             capped: false,
@@ -95,6 +100,31 @@ impl Workspace {
             return;
         };
         let (query, case, word) = (f.query.clone(), f.case, f.word);
+        // As a regular expression: the case and whole-word toggles go into it.
+        let pattern = (f.regex && !query.is_empty()).then(|| {
+            let source = if word {
+                format!(r"\b(?:{query})\b")
+            } else {
+                query.clone()
+            };
+            regex::RegexBuilder::new(&source)
+                .case_insensitive(!case)
+                .build()
+                .map_err(|e| match e {
+                    regex::Error::Syntax(s) => s.lines().last().unwrap_or("").trim().to_owned(),
+                    other => other.to_string(),
+                })
+        });
+        let error = pattern.as_ref().and_then(|p| p.as_ref().err().cloned());
+        let pattern = pattern.and_then(Result::ok);
+        let find = |text: &str| match &pattern {
+            Some(re) => re
+                .find_iter(text)
+                .find(|m| !m.is_empty())
+                .map(|m| m.range()),
+            None if error.is_some() => None,
+            None => find_in(text, &query, case, word),
+        };
         let mut hits = Vec::new();
         let mut files_with_hits = 0;
         let mut capped = false;
@@ -125,7 +155,7 @@ impl Workspace {
                         else {
                             continue;
                         };
-                        if let Some(range) = find_in(text, &query, case, word) {
+                        if let Some(range) = find(text) {
                             if hits.len() >= MAX_HITS {
                                 capped = true;
                                 break 'files;
@@ -147,6 +177,7 @@ impl Workspace {
         }
         if let Some(f) = &mut self.ffind {
             f.at = f.at.min(hits.len().saturating_sub(1));
+            f.error = error;
             f.hits = hits;
             f.files_with_hits = files_with_hits;
             f.capped = capped;
@@ -158,11 +189,11 @@ impl Workspace {
         let Some(f) = self.ffind.as_mut() else {
             return;
         };
-        if key.modifiers.alt && matches!(key.key.as_str(), "c" | "w") {
-            if key.key == "c" {
-                f.case = !f.case;
-            } else {
-                f.word = !f.word;
+        if key.modifiers.alt && matches!(key.key.as_str(), "c" | "w" | "r") {
+            match key.key.as_str() {
+                "c" => f.case = !f.case,
+                "w" => f.word = !f.word,
+                _ => f.regex = !f.regex,
             }
             self.refresh_ffind();
             return cx.notify();
@@ -400,6 +431,16 @@ impl Workspace {
                                             cx.notify();
                                         }),
                                     ),
+                                )
+                                .child(
+                                    toggle("ffind-regex", ".*", f.regex, "Regular expression  ⌥R")
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                            if let Some(f) = this.ffind.as_mut() {
+                                                f.regex = !f.regex;
+                                            }
+                                            this.refresh_ffind();
+                                            cx.notify();
+                                        })),
                                 ),
                         )
                         .child(
@@ -407,8 +448,15 @@ impl Workspace {
                                 .px(px(14.))
                                 .pb(px(4.))
                                 .text_size(px(12.))
-                                .text_color(theme::muted())
-                                .child(summary),
+                                .text_color(if f.error.is_some() {
+                                    theme::removed()
+                                } else {
+                                    theme::muted()
+                                })
+                                .child(match &f.error {
+                                    Some(error) => format!("Not a regular expression: {error}"),
+                                    None => summary,
+                                }),
                         )
                         .child(
                             div()

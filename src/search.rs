@@ -96,6 +96,68 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+/// What a find bar looks for in a line (#113): its text as typed, ignoring case, or — `.*` on —
+/// a regular expression, ignoring case unless it says `(?-i)`.
+#[derive(Clone, Debug, Default)]
+pub struct Terms {
+    text: Option<String>,
+    regex: Option<regex::Regex>,
+}
+
+impl Terms {
+    /// `text` as typed; nothing for an empty one.
+    pub fn text(text: &str) -> Terms {
+        Terms {
+            text: (!text.is_empty()).then(|| text.to_lowercase()),
+            regex: None,
+        }
+    }
+
+    /// `pattern` as a regular expression; what is wrong with it when it is none.
+    pub fn regex(pattern: &str) -> Result<Terms, String> {
+        if pattern.is_empty() {
+            return Ok(Terms::default());
+        }
+        regex::RegexBuilder::new(pattern)
+            .case_insensitive(true)
+            .build()
+            .map(|re| Terms {
+                text: None,
+                regex: Some(re),
+            })
+            .map_err(|e| match e {
+                regex::Error::Syntax(s) => s.lines().last().unwrap_or("").trim().to_owned(),
+                other => other.to_string(),
+            })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.text.is_none() && self.regex.is_none()
+    }
+
+    /// Where it is in `hay`, as byte ranges, sorted and merged; an empty match is none.
+    pub fn ranges(&self, hay: &str) -> Vec<std::ops::Range<usize>> {
+        match (&self.text, &self.regex) {
+            (_, Some(re)) => re
+                .find_iter(hay)
+                .filter(|m| !m.is_empty())
+                .map(|m| m.range())
+                .collect(),
+            (Some(text), None) => highlights(hay, std::slice::from_ref(text)),
+            (None, None) => Vec::new(),
+        }
+    }
+
+    /// Whether it is in `hay`.
+    pub fn hits(&self, hay: &str) -> bool {
+        match (&self.text, &self.regex) {
+            (_, Some(re)) => re.find_iter(hay).any(|m| !m.is_empty()),
+            (Some(text), None) => hay.to_lowercase().contains(text.as_str()),
+            (None, None) => false,
+        }
+    }
+}
+
 /// Case-insensitive byte ranges of `words` in `text`, sorted and merged.
 pub fn highlights(text: &str, words: &[String]) -> Vec<std::ops::Range<usize>> {
     // ASCII lowercasing keeps every byte offset, whatever else the text holds.
@@ -130,6 +192,20 @@ mod tests {
             email: format!("{author}@example.com"),
             time,
         }
+    }
+
+    #[test]
+    fn a_find_bar_looks_for_text_or_a_regular_expression() {
+        let text = Terms::text("Money");
+        assert_eq!(text.ranges("let money = Money(1)"), [4..9, 12..17]);
+        let re = Terms::regex(r"fun \w+\(").unwrap();
+        assert_eq!(re.ranges("  fun round(mode)"), vec![2..12]);
+        assert!(re.hits("FUN plus(other)"));
+        assert!(!re.hits("val x = 1"));
+        // Nothing found by an empty match, and a broken pattern says why.
+        assert!(Terms::regex("x*").unwrap().ranges("abc").is_empty());
+        assert!(Terms::regex("(").is_err());
+        assert!(Terms::regex("").unwrap().is_empty());
     }
 
     #[test]

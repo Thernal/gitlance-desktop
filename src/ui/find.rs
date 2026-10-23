@@ -336,6 +336,10 @@ impl Workspace {
             return;
         }
         if let Some(mut text) = self.dfind.clone() {
+            // ⌥R: the text as a regular expression, or as typed again (#113).
+            if key.modifiers.alt && key.key == "r" {
+                return self.toggle_dfind_regex(cx);
+            }
             match input::edit(&mut text, &mut self.field_edit, key, cx) {
                 Edit::Changed => self.set_dfind(text, cx),
                 Edit::Selected => cx.notify(),
@@ -376,6 +380,13 @@ impl Workspace {
         cx.notify();
     }
 
+    /// `.*` in ⌘F's bar: its text read as a regular expression, or as typed.
+    pub(super) fn toggle_dfind_regex(&mut self, cx: &mut Context<Self>) {
+        self.dfind_regex = !self.dfind_regex;
+        let text = self.dfind.clone().unwrap_or_default();
+        self.set_dfind(text, cx);
+    }
+
     pub(super) fn close_dfind(&mut self, cx: &mut Context<Self>) {
         self.dfind = None;
         self.dterms = Arc::default();
@@ -384,11 +395,13 @@ impl Workspace {
     }
 
     pub(super) fn set_dfind(&mut self, text: String, cx: &mut Context<Self>) {
-        self.dterms = if text.is_empty() {
-            Arc::default()
+        let terms = if self.dfind_regex {
+            search::Terms::regex(&text)
         } else {
-            Arc::from(vec![text.to_lowercase()])
+            Ok(search::Terms::text(&text))
         };
+        self.dfind_error = terms.as_ref().err().cloned();
+        self.dterms = Arc::new(terms.unwrap_or_default());
         self.dfind = Some(text);
         self.match_at = 0;
         self.recompute_matches();
@@ -407,7 +420,9 @@ impl Workspace {
     /// The find bar above the diff: the text, "2 of 4 lines", previous, next, close.
     pub(super) fn render_dfind(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let text = self.dfind.clone()?;
-        let count = if self.dterms.is_empty() {
+        let count = if let Some(error) = &self.dfind_error {
+            format!("Not a regular expression: {error}")
+        } else if self.dterms.is_empty() {
             String::new()
         } else if let Some(count) = self.stack_match_count() {
             count
@@ -448,12 +463,22 @@ impl Workspace {
                                 .size(px(14.))
                                 .text_color(theme::faint()),
                         )
-                        .child(self.field_text(&text, true, "Find in this diff", cx)),
+                        .child(self.field_text(&text, true, "Find in this diff", cx))
+                        .child({
+                            use super::hover::Hover;
+                            chip("dfind-regex", ".*", self.dfind_regex)
+                                .tip("Regular expression  ⌥R")
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                    this.toggle_dfind_regex(cx)
+                                }))
+                        }),
                 )
                 .child(
                     div()
+                        .min_w_0()
+                        .truncate()
                         .text_size(px(12.))
-                        .text_color(if count == "No matches" {
+                        .text_color(if count == "No matches" || self.dfind_error.is_some() {
                             theme::removed()
                         } else {
                             theme::muted()

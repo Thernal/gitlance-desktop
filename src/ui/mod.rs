@@ -1552,7 +1552,10 @@ pub struct Workspace {
     selecting: bool,
     /// The find bar's text over the open diff, and what it looks for.
     dfind: Option<String>,
-    dterms: Arc<[String]>,
+    dterms: Arc<crate::search::Terms>,
+    /// ⌘F's `.*`: the text is a regular expression (#113); what is wrong with it, when it is.
+    dfind_regex: bool,
+    dfind_error: Option<String>,
     /// Rows where a change begins, and the one stepped to (F7).
     changes: Vec<usize>,
     change_at: Option<usize>,
@@ -1771,6 +1774,8 @@ impl Workspace {
             selecting: false,
             dfind: None,
             dterms: Arc::default(),
+            dfind_regex: false,
+            dfind_error: None,
             changes: Vec::new(),
             change_at: None,
             body_expanded: false,

@@ -5,7 +5,6 @@ use super::rows::{self, Cell, FileData, Row, Side};
 use super::select::Sel;
 use super::{DIFF_ROW, ROW_RADIUS, theme};
 use crate::git::LineKind;
-use crate::search;
 use crate::storage::MarkStyle;
 use gpui::{
     AnyElement, App, FontStyle, HighlightStyle, MouseButton, Pixels, Point, Rgba, SharedString,
@@ -28,7 +27,7 @@ pub struct RowStyle<'a> {
     /// How changed words are drawn.
     pub marks: MarkStyle,
     /// Words the commit search is looking for; highlighted wherever they appear.
-    pub terms: &'a [String],
+    pub terms: &'a crate::search::Terms,
     /// This row is the one the find bar is on: its matches are drawn solid, not tinted.
     pub strong: bool,
     /// The selected text.
@@ -371,7 +370,7 @@ fn code(
     events: OnEvents,
 ) -> impl IntoElement + use<> {
     let (text, spans, marks) = side.line(cell.line);
-    let found = search::highlights(text, style.terms);
+    let found = style.terms.ranges(text);
     let picked = style
         .sel
         .filter(|s| s.old == old)
