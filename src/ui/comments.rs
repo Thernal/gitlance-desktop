@@ -511,6 +511,15 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Whether the field being written has under 560 px (Design, 2026-10-21, C · icons below a
+    /// width): its secondary buttons keep only their icon, named in the tooltip, the keycaps go,
+    /// the primary keeps its label. Its own width decides, wherever it is — the diff, a file in
+    /// Code, a folder's page —, or the narrow diff's.
+    pub(super) fn compose_narrow(&self) -> bool {
+        let width = self.widths.width("composer");
+        self.tight || (width > 0. && width < 560.)
+    }
+
     /// A note for the agent on folder `path` of Code (#97): kept on the path with a slash and no
     /// line, written on the folder's page.
     pub(super) fn start_folder_comment(&mut self, path: &str, cx: &mut Context<Self>) {
@@ -1041,7 +1050,7 @@ impl Workspace {
             discussion::button(
                 "edit-save",
                 if compose.posting { "Saving…" } else { "Save" },
-                (!compose.posting && !self.tight).then_some("⌘↵"),
+                (!compose.posting && !self.compose_narrow()).then_some("⌘↵"),
                 Kind::Primary(tone),
             )
             .h(px(28.))
@@ -2156,9 +2165,26 @@ impl Workspace {
             | Target::InboxReply => Source::GitLab,
         };
         let tone = source.color();
-        let (cancel, add, review, audience) =
+        let (cancel, add, review, switch) =
             (this.clone(), this.clone(), this.clone(), this.clone());
         let switchable = request.is_some();
+        let narrow = self.compose_narrow();
+        let audience = match compose.target {
+            Target::Request(iid) => format!("Everyone on !{iid}"),
+            // The chat it will go to, by its page's branch (#77).
+            Target::Agent => match self.route_of(self.page_branch().as_deref()) {
+                Some(chat) if !chat.title.is_empty() => format!("To: {}", chat.title),
+                Some(chat) => format!("To: {}", chat.agent),
+                None => "Your agent".to_owned(),
+            },
+            _ => "Your agent".to_owned(),
+        };
+        // Narrow, who it goes to is its colour's dot, the words in the tooltip.
+        let said: gpui::SharedString = if switchable {
+            format!("{audience} — Tab switches who sees it").into()
+        } else {
+            audience.clone().into()
+        };
         let chip = div()
             .id("compose-audience")
             .h(px(26.))
@@ -2176,23 +2202,14 @@ impl Workspace {
             .text_color(tone)
             .whitespace_nowrap()
             .child(div().size(px(7.)).rounded_full().bg(tone))
-            .child(match compose.target {
-                Target::Request(iid) => format!("Everyone on !{iid}"),
-                // The chat it will go to, by its page's branch (#77).
-                Target::Agent => match self.route_of(self.page_branch().as_deref()) {
-                    Some(chat) if !chat.title.is_empty() => format!("To: {}", chat.title),
-                    Some(chat) => format!("To: {}", chat.agent),
-                    None => "Your agent".to_owned(),
-                },
-                _ => "Your agent".to_owned(),
-            })
+            .when(!narrow, |s| s.child(audience))
+            .tooltip_show_delay(crate::ui::hover::LONG)
+            .tooltip(move |_, cx| cx.new(|_| super::TipOwned(said.clone())).into())
             .when(switchable, |s| {
                 s.cursor_pointer()
                     .child(super::icons::icon("chevron").size(px(12.)).text_color(tone))
-                    .tooltip_show_delay(crate::ui::hover::LONG)
-                    .tooltip(|_, cx| cx.new(|_| super::Tip("Who sees it — Tab switches")).into())
                     .on_click(move |_, _, cx| {
-                        audience.update(cx, |this, cx| this.toggle_target(cx)).ok();
+                        switch.update(cx, |this, cx| this.toggle_target(cx)).ok();
                     })
             });
         let primary = match (&compose.target, compose.posting) {
@@ -2204,15 +2221,24 @@ impl Workspace {
         let drafts = self.agent_drafts().len();
         let (send_all, send_one) = (this.clone(), this.clone());
         let mut tail = vec![
-            discussion::button("compose-cancel", "Cancel", None, Kind::Quiet)
-                .h(px(28.))
-                .px(px(10.))
-                .tooltip_show_delay(crate::ui::hover::LONG)
-                .tooltip(|_, cx| cx.new(|_| super::Tip("Esc")).into())
-                .on_click(move |_, _, cx| {
-                    cancel.update(cx, |this, cx| this.cancel_comment(cx)).ok();
-                })
-                .into_any_element(),
+            // Narrow, Cancel is its × (named in the tooltip).
+            discussion::button(
+                "compose-cancel",
+                if narrow { "×" } else { "Cancel" },
+                None,
+                Kind::Quiet,
+            )
+            .h(px(28.))
+            .px(px(if narrow { 8. } else { 10. }))
+            .tooltip_show_delay(crate::ui::hover::LONG)
+            .tooltip(move |_, cx| {
+                cx.new(|_| super::Tip(if narrow { "Cancel  esc" } else { "Esc" }))
+                    .into()
+            })
+            .on_click(move |_, _, cx| {
+                cancel.update(cx, |this, cx| this.cancel_comment(cx)).ok();
+            })
+            .into_any_element(),
         ];
         if let (Target::Request(iid), false) = (compose.target, compose.posting) {
             tail.push(
@@ -2223,7 +2249,7 @@ impl Workspace {
                     Some("⇧⌘↵"),
                     Some("Pending until you submit the review"),
                     Kind::Plain,
-                    self.tight,
+                    narrow,
                 )
                 .h(px(28.))
                 .px(px(10.))
@@ -2248,7 +2274,7 @@ impl Workspace {
                     Some("⇧⌘↵"),
                     Some("Adds it and sends every draft to your agent's chat"),
                     Kind::Plain,
-                    self.tight,
+                    narrow,
                 )
                 .h(px(28.))
                 .px(px(10.))
@@ -2296,7 +2322,7 @@ impl Workspace {
             discussion::button(
                 "compose-add",
                 primary,
-                (!compose.posting && !self.tight).then_some("⌘↵"),
+                (!compose.posting && !self.compose_narrow()).then_some("⌘↵"),
                 Kind::Primary(tone),
             )
             .h(px(28.))
@@ -2372,7 +2398,7 @@ impl Workspace {
                 } else {
                     "Reply"
                 },
-                (!compose.posting && !self.tight).then_some("⌘↵"),
+                (!compose.posting && !self.compose_narrow()).then_some("⌘↵"),
                 Kind::Primary(tone),
             )
             .h(px(28.))
@@ -2546,6 +2572,7 @@ impl Workspace {
                     .children(tail),
             );
         div()
+            .relative()
             .flex_1()
             .min_w_0()
             .flex()
@@ -2559,6 +2586,8 @@ impl Workspace {
             .text_size(px(13.))
             .line_height(px(20.))
             .text_color(theme::text())
+            // Its own width decides its buttons' (`compose_narrow`).
+            .child(self.widths.measure("composer"))
             .child(text)
             .children(
                 self.compose_completion()
