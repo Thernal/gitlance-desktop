@@ -68,6 +68,34 @@ pub enum Row {
     },
 }
 
+/// The line a row shows, the new side's first: (line, on the old side).
+pub fn line_of(row: &Row) -> Option<(u32, bool)> {
+    match row {
+        Row::Split { right: Some(c), .. } => Some((c.line, false)),
+        Row::Split { left: Some(c), .. } => Some((c.line, true)),
+        Row::Unified {
+            new_line: Some(n), ..
+        } => Some((*n, false)),
+        Row::Unified {
+            old_line: Some(o), ..
+        } => Some((*o, true)),
+        _ => None,
+    }
+}
+
+/// The row of `rows` that shows `line` on its side.
+pub fn row_with(rows: &[Row], (line, old): (u32, bool)) -> Option<usize> {
+    rows.iter().position(|r| match r {
+        Row::Split { left, right } => (if old { left } else { right })
+            .as_ref()
+            .is_some_and(|c| c.line == line),
+        Row::Unified {
+            old_line, new_line, ..
+        } => (if old { *old_line } else { *new_line }) == Some(line),
+        _ => false,
+    })
+}
+
 /// One side's text, split into lines, with its highlighting and changed-token marks.
 pub struct Side {
     text: Arc<str>,
@@ -906,5 +934,61 @@ mod tests {
         let (text, map) = expand_tabs("\tab\tc", 4);
         assert_eq!(text, "    ab  c");
         assert_eq!((map[1], map[3], map[4], map[5]), (4, 6, 8, 9));
+    }
+
+    #[test]
+    fn a_line_is_found_again_in_split_and_unified_rows() {
+        use crate::git::LineKind;
+        let cell = |line, kind| Some(Cell { line, kind });
+        let split = [
+            Row::Gap {
+                segment: 0,
+                count: 3,
+            },
+            Row::Split {
+                left: cell(4, LineKind::Removed),
+                right: cell(4, LineKind::Added),
+            },
+            Row::Split {
+                left: None,
+                right: cell(5, LineKind::Added),
+            },
+        ];
+        let unified = [
+            Row::Unified {
+                cell: Cell {
+                    line: 4,
+                    kind: LineKind::Removed,
+                },
+                old: true,
+                old_line: Some(4),
+                new_line: None,
+            },
+            Row::Unified {
+                cell: Cell {
+                    line: 4,
+                    kind: LineKind::Added,
+                },
+                old: false,
+                old_line: None,
+                new_line: Some(4),
+            },
+            Row::Unified {
+                cell: Cell {
+                    line: 5,
+                    kind: LineKind::Added,
+                },
+                old: false,
+                old_line: None,
+                new_line: Some(5),
+            },
+        ];
+        // The new side's line first: what split shows at the top is found in unified.
+        let top = line_of(&split[2]).unwrap();
+        assert_eq!(top, (5, false));
+        assert_eq!(row_with(&unified, top), Some(2));
+        assert_eq!(line_of(&split[0]), None);
+        assert_eq!(line_of(&unified[0]), Some((4, true)));
+        assert_eq!(row_with(&split, (4, true)), Some(1));
     }
 }

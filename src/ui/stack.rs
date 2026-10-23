@@ -117,6 +117,11 @@ impl Stack {
         self.of_file.get(file).copied().flatten()
     }
 
+    /// How many rows block `b` shows under its header (none while folded).
+    pub fn shown(&self, b: usize) -> usize {
+        self.starts[b + 1] - self.starts[b] - 1
+    }
+
     /// The list index of file `file`'s header.
     pub fn header(&self, file: usize) -> Option<usize> {
         Some(self.starts[self.block_of(file)?])

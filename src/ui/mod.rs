@@ -2354,13 +2354,74 @@ impl Workspace {
         self.recompute_matches();
     }
 
-    /// Every file laid out again: the open one, or all of them in one scroll.
+    /// Every file laid out again: the open one, or all of them in one scroll. The line at the top
+    /// stays there — a narrow window's unified diff and back has other rows above it (the
+    /// developer, 2026-10-23: the place seemed lost).
     fn relayout_all(&mut self) {
+        let anchor = self.scroll_anchor();
         if self.stack.is_some() {
             self.relayout_stack();
         } else {
             self.relayout();
         }
+        if let Some(anchor) = anchor {
+            self.restore_anchor(anchor);
+        }
+    }
+
+    /// What the diff's top shows: the file, the line of the nearest row with one (none on its
+    /// header), and how far into that row it is scrolled.
+    fn scroll_anchor(&self) -> Option<Anchor> {
+        let top = self.diff_list.logical_scroll_top();
+        let (file, rows, inside) = match &self.stack {
+            Some(stack) => {
+                let (b, inside) = stack.locate(top.item_ix);
+                let block = stack.blocks.get(b)?;
+                let rows = if block.file == self.file {
+                    &self.rows
+                } else {
+                    &block.rows
+                };
+                (block.file, rows, inside.checked_sub(1))
+            }
+            None => (self.file, &self.rows, Some(top.item_ix)),
+        };
+        let line = inside.and_then(|at| {
+            rows.get(..=at.min(rows.len().checked_sub(1)?))?
+                .iter()
+                .rev()
+                .find_map(rows::line_of)
+        });
+        Some((file, line, top.offset_in_item))
+    }
+
+    /// Back to what `scroll_anchor` saw, in the rows as they are laid out now.
+    fn restore_anchor(&mut self, (file, line, offset): Anchor) {
+        let item_ix = match &self.stack {
+            Some(stack) => {
+                let (Some(b), Some(header)) = (stack.block_of(file), stack.header(file)) else {
+                    return;
+                };
+                let rows = if file == self.file {
+                    &self.rows
+                } else {
+                    &stack.blocks[b].rows
+                };
+                match line.and_then(|l| rows::row_with(rows, l)) {
+                    Some(at) if at < stack.shown(b) => header + 1 + at,
+                    _ => header,
+                }
+            }
+            None if file == self.file => match line.and_then(|l| rows::row_with(&self.rows, l)) {
+                Some(at) => at,
+                None => return,
+            },
+            None => return,
+        };
+        self.diff_list.scroll_to(gpui::ListOffset {
+            item_ix,
+            offset_in_item: offset,
+        });
     }
 
     /// Shows the hidden lines of an unchanged run in place, keeping the scroll position.
@@ -4238,6 +4299,10 @@ fn stats(file: &FileDiff) -> impl IntoElement + use<> {
             )
         })
 }
+
+/// Where the diff's top is: the file, the line (and whether on the old side) of the nearest row
+/// that has one, how far into that row.
+type Anchor = (usize, Option<(u32, bool)>, gpui::Pixels);
 
 /// A file's change as the colour of its name, beside its icon (the developer, 2026-10-23: a letter
 /// there as well looked odd): added green, deleted red, modified the accent, renamed or copied
