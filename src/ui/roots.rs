@@ -1007,7 +1007,12 @@ impl Workspace {
                             .text_color(theme::faint()),
                     )
                     .on_click(
-                        cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_group(g, cx)),
+                        // A double click folds or opens it once, as one click does.
+                        cx.listener(move |this, e: &ClickEvent, _, cx| {
+                            if e.click_count() < 2 {
+                                this.toggle_group(g, cx)
+                            }
+                        }),
                     )
             })
     }
@@ -1526,8 +1531,10 @@ impl Workspace {
                             ixs.len(),
                             if open { "" } else { " · folded" }
                         ))
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.toggle_remote(name.clone(), cx)
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                            if e.click_count() < 2 {
+                                this.toggle_remote(name.clone(), cx)
+                            }
                         }))
                         .into_any_element(),
                 );

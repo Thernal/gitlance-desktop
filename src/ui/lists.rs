@@ -538,7 +538,14 @@ impl Workspace {
                                 .text_color(theme::faint())
                                 .child(count.to_string()),
                         )
-                        .on_click(cx.listener(move |this, _, _, cx| this.toggle_dir(&target, cx))),
+                        // A double click folds or opens it once, as one click does.
+                        .on_click(cx.listener(
+                            move |this, e: &gpui::ClickEvent, _, cx| {
+                                if e.click_count() < 2 {
+                                    this.toggle_dir(&target, cx)
+                                }
+                            },
+                        )),
                     )
                     .into_any_element()
             }

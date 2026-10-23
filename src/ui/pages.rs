@@ -107,7 +107,7 @@ impl Workspace {
                     .filter(|_| !self.compact())
                     .map(|side| {
                         // It slides in and out at its width (#56, 4, 16).
-                        let room = self.layout.sidebar + 12.;
+                        let room = self.layout.sidebar + super::frame::handle_width();
                         motion::toward(
                             div()
                                 .flex()

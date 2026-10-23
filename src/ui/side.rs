@@ -46,7 +46,7 @@ impl Workspace {
     }
 
     fn after_fold(&mut self, cx: &mut Context<Self>) {
-        self.layout.save();
+        self.save_layout();
         // A folded section gives the keyboard back to the diff.
         let gone = match self.zone {
             Zone::Commits => self.layout.fold_commits,
@@ -88,7 +88,12 @@ impl Workspace {
             .gap(px(6.))
             .when(fold, |s| {
                 s.cursor_pointer().on_click(
-                    cx.listener(move |this, _: &ClickEvent, _, cx| this.fold_section(which, cx)),
+                    // A double click folds or opens it once, as one click does.
+                    cx.listener(move |this, e: &ClickEvent, _, cx| {
+                        if e.click_count() < 2 {
+                            this.fold_section(which, cx)
+                        }
+                    }),
                 )
             })
             // The chevron turns as it folds (#56, 1).

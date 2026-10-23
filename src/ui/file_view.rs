@@ -505,7 +505,11 @@ impl Workspace {
                         .cursor_pointer()
                         .invisible()
                         .group_hover("file-row", |s| s.visible())
-                        .child("+")
+                        .child(
+                            super::icons::icon("plus")
+                                .size(px(13.))
+                                .text_color(theme::base()),
+                        )
                         .on_click(move |_, _, cx| {
                             cx.stop_propagation();
                             plus.update(cx, |ws, cx| ws.start_file_comment(n as u32 + 1, cx))

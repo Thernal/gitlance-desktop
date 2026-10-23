@@ -91,7 +91,7 @@ impl Workspace {
                 Split::Sidebar => Layout::default().sidebar,
                 Split::Tool => Layout::default().tool_width,
             };
-            self.layout.save();
+            self.save_layout();
             cx.notify();
             return;
         }
@@ -129,7 +129,7 @@ impl Workspace {
 
     pub(super) fn end_drag(&mut self, cx: &mut Context<Self>) {
         if self.drag.take().is_some() {
-            self.layout.save();
+            self.save_layout();
             cx.notify();
         }
     }
@@ -152,12 +152,12 @@ impl Workspace {
             .items_center()
             .justify_center();
         let gap = if split.vertical() {
-            gap.h(px(if flat() { 3. } else { GAP }))
+            gap.h(px(handle_width()))
                 .w_full()
                 .cursor(CursorStyle::ResizeUpDown)
                 .child(line.h(px(2.)).w(px(48.)))
         } else {
-            gap.w(px(if flat() { 3. } else { GAP }))
+            gap.w(px(handle_width()))
                 .h_full()
                 .cursor(CursorStyle::ResizeLeftRight)
                 .child(line.w(px(2.)).h(px(48.)))
@@ -1196,6 +1196,12 @@ impl Render for Workspace {
             .children(self.render_shortcuts(cx))
             .children(self.render_palette(cx))
     }
+}
+
+/// How wide a pane's handle is: the gap between islands, a thin line between flat panes. A pane
+/// that slides in and out is its width and its handle, so nothing of it stays at the end.
+pub(super) fn handle_width() -> f32 {
+    if flat() { 3. } else { GAP }
 }
 
 /// The pointer coordinate along the axis `split` resizes.

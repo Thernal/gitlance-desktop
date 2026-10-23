@@ -347,7 +347,7 @@ pub fn icon_button(
         Kind::Primary(_) => theme::base(),
     };
     let glyph = super::icons::icon(icon)
-        .size(px(14.))
+        .size(px(if bare { 15. } else { 14. }))
         .text_color(ink)
         .when(matches!(kind, Kind::Quiet), |s| {
             s.group_hover(GROUP, |s| s.text_color(theme::text()))

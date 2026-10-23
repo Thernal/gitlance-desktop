@@ -2053,7 +2053,11 @@ impl Workspace {
                         .ok();
                 }),
             )
-            .on_click(move |_, _, cx| {
+            // A double click folds or opens it once, as one click does.
+            .on_click(move |e: &gpui::ClickEvent, _, cx| {
+                if e.click_count() > 1 {
+                    return;
+                }
                 fold.update(cx, |this, cx| {
                     this.mark_motion(&format!("agent-thread-{id}"), cx);
                     if !this.toggled_agent.remove(&id) {
@@ -2234,29 +2238,37 @@ impl Workspace {
                         switch.update(cx, |this, cx| this.toggle_target(cx)).ok();
                     })
             });
+        // Narrow, "Add to drafts" is "Add" (named in full in its tooltip): the bar ran out of the
+        // box (the developer, 2026-10-23).
         let primary = match (&compose.target, compose.posting) {
             (_, true) => "Posting…",
+            (Target::Agent, _) if narrow => "Add",
             (Target::Agent, _) => "Add to drafts",
             (_, _) => "Comment",
         };
         // An agent comment's bar (#50 F): Send all beside Add to drafts, Send this only in ▾.
         let drafts = self.agent_drafts().len();
+        let compose_agent = compose.target == Target::Agent;
         let (send_all, send_one) = (this.clone(), this.clone());
         let mut tail = vec![
-            // Narrow, Cancel is its × (named in the tooltip).
-            discussion::button(
-                "compose-cancel",
-                if narrow { "×" } else { "Cancel" },
-                None,
-                Kind::Quiet,
-            )
+            // Narrow, Cancel is its × icon, named in the tooltip.
+            if narrow {
+                discussion::icon_button(
+                    "compose-cancel",
+                    "x",
+                    "Cancel",
+                    Some("esc"),
+                    None,
+                    Kind::Quiet,
+                    true,
+                )
+            } else {
+                discussion::button("compose-cancel", "Cancel", None, Kind::Quiet)
+                    .tooltip_show_delay(crate::ui::hover::LONG)
+                    .tooltip(|_, cx| cx.new(|_| super::Tip("Esc")).into())
+            }
             .h(px(28.))
-            .px(px(if narrow { 8. } else { 10. }))
-            .tooltip_show_delay(crate::ui::hover::LONG)
-            .tooltip(move |_, cx| {
-                cx.new(|_| super::Tip(if narrow { "Cancel  esc" } else { "Esc" }))
-                    .into()
-            })
+            .px(px(if narrow { 6. } else { 10. }))
             .on_click(move |_, _, cx| {
                 cancel.update(cx, |this, cx| this.cancel_comment(cx)).ok();
             })
@@ -2309,46 +2321,61 @@ impl Workspace {
             );
             // ▾: Send this only, the chat it goes to, Copy as markdown (#50 F).
             tail.push(
-                discussion::button("compose-more", "▾", None, Kind::Quiet)
-                    .h(px(28.))
-                    .px(px(8.))
-                    .tooltip_show_delay(crate::ui::hover::LONG)
-                    .tooltip(|_, cx| {
-                        cx.new(|_| super::Tip("Send this only, choose the chat, copy"))
-                            .into()
-                    })
-                    .on_click(move |event, _, cx| {
-                        let at = event.position();
-                        send_one
-                            .update(cx, |this, cx| {
-                                use super::menu::{Act, Entry};
-                                this.open_menu(
-                                    at,
+                discussion::icon_button(
+                    "compose-more",
+                    "chevron",
+                    "Send this only, choose the chat, copy",
+                    None,
+                    None,
+                    Kind::Quiet,
+                    true,
+                )
+                .h(px(28.))
+                .px(px(6.))
+                .on_click(move |event, _, cx| {
+                    let at = event.position();
+                    send_one
+                        .update(cx, |this, cx| {
+                            use super::menu::{Act, Entry};
+                            this.open_menu(
+                                at,
+                                vec![
                                     vec![
-                                        vec![
-                                            Entry::new("Send this only", Act::AgentSendOnly)
-                                                .key("⌥⌘↵"),
-                                            Entry::new("Choose the chat…", Act::AgentChooseChat),
-                                        ],
-                                        vec![Entry::new("Copy as markdown", Act::AgentCopy)],
+                                        Entry::new("Send this only", Act::AgentSendOnly).key("⌥⌘↵"),
+                                        Entry::new("Choose the chat…", Act::AgentChooseChat),
                                     ],
-                                    cx,
-                                )
-                            })
-                            .ok();
-                    })
-                    .into_any_element(),
+                                    vec![Entry::new("Copy as markdown", Act::AgentCopy)],
+                                ],
+                                cx,
+                            )
+                        })
+                        .ok();
+                })
+                .into_any_element(),
             );
         }
         tail.push(
             discussion::button(
                 "compose-add",
                 primary,
-                (!compose.posting && !self.compose_narrow()).then_some("⌘↵"),
+                (!compose.posting && !narrow).then_some("⌘↵"),
                 Kind::Primary(tone),
             )
             .h(px(28.))
             .px(px(10.))
+            .when(narrow && !compose.posting, |s| {
+                s.tooltip_show_delay(crate::ui::hover::LONG)
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| {
+                            super::Tip(if compose_agent {
+                                "Add to drafts  ⌘↵"
+                            } else {
+                                "Comment  ⌘↵"
+                            })
+                        })
+                        .into()
+                    })
+            })
             .on_click(move |_, _, cx| {
                 add.update(cx, |this, cx| this.add_comment(cx)).ok();
             })

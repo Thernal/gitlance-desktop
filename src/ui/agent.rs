@@ -1131,7 +1131,10 @@ impl Workspace {
                 } else {
                     "Fewer ▴".to_owned()
                 })
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                .on_click(cx.listener(|this, e: &ClickEvent, _, cx| {
+                    if e.click_count() > 1 {
+                        return;
+                    }
                     this.mark_motion("chats-more", cx);
                     this.agents_all_chats = !this.agents_all_chats;
                     cx.notify();

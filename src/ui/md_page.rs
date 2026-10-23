@@ -827,7 +827,10 @@ impl BlockCtx {
                                     .text_color(theme::accent()),
                             )
                             .child(count.to_string())
-                            .on_click(move |_: &ClickEvent, _, cx| {
+                            .on_click(move |e: &ClickEvent, _, cx| {
+                                if e.click_count() > 1 {
+                                    return;
+                                }
                                 show.update(cx, |this, cx| {
                                     this.toggle_page_notes(ix, old, first, cx)
                                 })
@@ -848,7 +851,7 @@ impl BlockCtx {
                             .text_color(theme::muted())
                             .cursor_pointer()
                             .hover(|s| s.text_color(theme::text()))
-                            .child("+")
+                            .child(super::icons::icon("plus").size(px(14.)))
                             .on_click(move |_: &ClickEvent, _, cx| {
                                 write
                                     .update(cx, |this, cx| {

@@ -313,7 +313,7 @@ fn gutter(
                     .id(("comment-mark", u64::from(line) * 2 + u64::from(old)))
                     .absolute()
                     .left(px(2.))
-                    .top(px(1.))
+                    .top(px(((style.row - 18.) / 2.).max(0.)))
                     .h(px(18.))
                     .px(px(3.))
                     .flex()
@@ -333,7 +333,12 @@ fn gutter(
                         .size(px(13.))
                         .text_color(tone),
                     )
-                    .on_click(move |_, _, cx| (events.toggle)(old, line, cx)),
+                    // A double click opens or folds its notes once, as one click does.
+                    .on_click(move |e: &gpui::ClickEvent, _, cx| {
+                        if e.click_count() < 2 {
+                            (events.toggle)(old, line, cx)
+                        }
+                    }),
             )
         }))
         .children(comment.and_then(|(old, line, events)| {
@@ -345,7 +350,9 @@ fn gutter(
                     .id(("comment-plus", u64::from(line) * 2 + u64::from(old)))
                     .absolute()
                     .left(px(3.))
-                    .top(px(1.))
+                    // Centred in its row whatever the code's size; the + an icon, as a glyph
+                    // sat low in its box (the developer, 2026-10-23).
+                    .top(px(((style.row - 18.) / 2.).max(0.)))
                     .size(px(18.))
                     .flex()
                     .items_center()
@@ -356,7 +363,11 @@ fn gutter(
                     .cursor_pointer()
                     .invisible()
                     .group_hover("diff-row", |s| s.visible())
-                    .child("+")
+                    .child(
+                        super::icons::icon("plus")
+                            .size(px(13.))
+                            .text_color(theme::base()),
+                    )
                     .on_click(move |_, _, cx| (events.comment)(old, line, cx)),
             )
         }))

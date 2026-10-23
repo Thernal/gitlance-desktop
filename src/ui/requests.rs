@@ -916,7 +916,11 @@ impl Workspace {
                 };
                 move |_, cx| cx.new(|_| super::TipOwned(said.clone())).into()
             })
-            .on_click(move |_, _, cx| {
+            // A double click folds or opens it once, as one click does.
+            .on_click(move |e: &ClickEvent, _, cx| {
+                if e.click_count() > 1 {
+                    return;
+                }
                 fold.update(cx, |this, cx| {
                     this.thread_at = Some(ix);
                     this.set_thread_open(ix, !open, cx)

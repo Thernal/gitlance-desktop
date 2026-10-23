@@ -289,7 +289,7 @@ impl Workspace {
         let moved = order.remove(a);
         order.insert(b, moved);
         self.layout.spaces = order.iter().map(|s| s.name()).collect::<Vec<_>>().join(",");
-        self.layout.save();
+        self.save_layout();
         cx.notify();
     }
 
@@ -368,8 +368,10 @@ impl Workspace {
                             .into()
                     })
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.toggle_open_items(space, cx)
+                    .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                        if e.click_count() < 2 {
+                            this.toggle_open_items(space, cx)
+                        }
                     }))
             });
             let line = div()
@@ -494,6 +496,7 @@ impl Workspace {
             let why = missing.filter(|_| !folded).map(|m| {
                 div()
                     .flex_none()
+                    .pt(px(2.))
                     .pl(px(if nested { 55. } else { 37. }))
                     .pr(px(8.))
                     .pb(px(6.))
@@ -614,18 +617,23 @@ impl Workspace {
                         .into_any_element()
                 })
                 .collect::<Vec<_>>();
-            // What is open under it folds away and back in size and alpha (#110).
+            // What is open under it folds away and back in size and alpha (#110), the space
+            // above it inside, so none is left at the end.
             let opens = self.folding(
                 format!("{id}-opens"),
                 &format!("opens-{id}"),
                 shows,
-                div().flex().flex_col().gap(px(2.)).children(opens),
+                div()
+                    .pt(px(2.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .children(opens),
             );
             div()
                 .flex_none()
                 .flex()
                 .flex_col()
-                .gap(px(2.))
                 .child(line)
                 .children(why)
                 .children(opens)

@@ -108,7 +108,7 @@ impl Workspace {
         }
         if self.layout.tool != name {
             self.layout.tool = name.to_owned();
-            self.layout.save();
+            self.save_layout();
         }
         if tool == Some(Tool::Agents) {
             self.refresh_chats();
@@ -296,7 +296,12 @@ impl Workspace {
             }));
         // A narrow window has no room beside the diff: the window floats over its right edge.
         let over = self.tool_floats();
-        let room = self.layout.tool_width + 12.;
+        let room = self.layout.tool_width
+            + if over {
+                0.
+            } else {
+                super::frame::handle_width()
+            };
         let pane = div()
             .flex_none()
             .flex()

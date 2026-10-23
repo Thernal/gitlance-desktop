@@ -974,7 +974,11 @@ impl Workspace {
                             })
                     })),
             )
-            .on_click(move |_: &ClickEvent, _, cx| {
+            // A double click folds or opens it once, as one click does.
+            .on_click(move |e: &ClickEvent, _, cx| {
+                if e.click_count() > 1 {
+                    return;
+                }
                 fold.update(cx, |this, cx| {
                     this.activate_file(ix, cx);
                     this.flip_fold(ix, cx);

@@ -3036,7 +3036,7 @@ impl Workspace {
             return self.toggle_drawer(None, cx);
         }
         self.layout.show_sidebar = !self.layout.show_sidebar;
-        self.layout.save();
+        self.save_layout();
         self.mark_motion("side", cx);
         cx.notify();
     }
@@ -3064,6 +3064,18 @@ impl Workspace {
         self.go_space(spaces::Space::Requests, cx);
     }
 
+    /// Keeps the panels in `layout.txt` as they are outside zen: zen hides the side panel and folds
+    /// Changes only for a while, and saving that started the next launch with them hidden when the
+    /// app was quit in zen (the developer, 2026-10-23).
+    pub(super) fn save_layout(&self) {
+        let mut layout = self.layout.clone();
+        if let Some((sidebar, files)) = self.zen {
+            layout.show_sidebar = sidebar;
+            layout.show_files = files;
+        }
+        layout.save();
+    }
+
     /// ⌘.: zen — the diff alone, without the rail, with a line of the keys that move a review on;
     /// pressed again, the islands come back as they were.
     fn focus_diff(&mut self, _: &FocusDiff, _: &mut Window, cx: &mut Context<Self>) {
@@ -3082,7 +3094,7 @@ impl Workspace {
                 self.layout.show_files = false;
             }
         }
-        self.layout.save();
+        self.save_layout();
         // The panels slide out and back in (#56, 16).
         self.mark_motion("side", cx);
         self.mark_motion("zen", cx);
@@ -3718,7 +3730,10 @@ impl Workspace {
                                     } else {
                                         "Message ▾"
                                     })
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                                    .on_click(cx.listener(|this, e: &ClickEvent, _, cx| {
+                                        if e.click_count() > 1 {
+                                            return;
+                                        }
                                         this.body_expanded = !this.body_expanded;
                                         cx.notify();
                                     }))

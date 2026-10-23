@@ -71,7 +71,7 @@ impl Workspace {
             self.narrowed.menu = Some(!self.menu_folded());
         } else {
             self.layout.fold_places = !self.layout.fold_places;
-            self.layout.save();
+            self.save_layout();
         }
         cx.notify();
     }

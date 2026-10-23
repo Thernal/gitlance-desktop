@@ -30,6 +30,9 @@ pub struct Code {
     task: Option<Task<()>>,
     /// The folders open in the tree.
     open: HashSet<String>,
+    /// The folder a click on its row just unfolded: the same double click's second click leaves
+    /// it open rather than folding it again.
+    unfolded_now: Option<String>,
     /// The files kept open as tabs, in order; `preview` is the one the next click replaces.
     pub tabs: Vec<String>,
     pub preview: Option<String>,
@@ -281,18 +284,20 @@ impl Workspace {
             .flex_1()
             .min_h_0()
             .flex()
-            .gap(px(super::gap()))
-            // It slides and fades in and out with ⌘J, as the side panel does.
+            // It slides and fades in and out with ⌘J, as the side panel does: with its handle,
+            // so no gap is left to vanish at the end (the developer, 2026-10-23); the handle
+            // resizes it as it does the side panel.
             .children(
                 (!self.compact() && (self.layout.show_sidebar || self.motion.recent("side"))).then(
                     || {
-                        let room = self.layout.sidebar + super::gap();
+                        let room = self.layout.sidebar + super::frame::handle_width();
                         super::motion::toward(
                             div()
                                 .flex()
                                 .flex_none()
                                 .overflow_hidden()
-                                .child(self.render_code_tree(cx)),
+                                .child(self.render_code_tree(cx))
+                                .child(self.handle(super::Split::Sidebar, cx)),
                             "code-tree-pane",
                             self.layout.show_sidebar,
                             self.motion.recent("side"),
@@ -444,8 +449,12 @@ impl Workspace {
                                 .size(px(12.))
                                 .text_color(theme::faint()),
                         )
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        // A double click folds or opens it once, as one click does.
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                             cx.stop_propagation();
+                            if e.click_count() > 1 {
+                                return;
+                            }
                             if !this.code.open.remove(&fold) {
                                 this.code.open.insert(fold.clone());
                                 this.tree_opening(&fold, cx);
@@ -487,8 +496,19 @@ impl Workspace {
                 }),
             )
             .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                // A folder: one click its page, unfolded; a double click folds one that was
+                // open already (the developer, 2026-10-23: everything that folds folds so).
                 if row.folder.is_some() {
                     this.close_drawer(cx);
+                    if e.click_count() > 1 {
+                        if this.code.unfolded_now.take().as_deref() != Some(path.as_str()) {
+                            this.code.open.remove(&path);
+                            cx.notify();
+                        }
+                        return;
+                    }
+                    this.code.unfolded_now =
+                        (!this.code.open.contains(&path)).then(|| path.clone());
                     return this.open_folder_page(path.clone(), cx);
                 }
                 // A second click keeps it as a tab; picked in the drawer, it goes (#80).

@@ -58,6 +58,17 @@ fn bezier(a: (f32, f32), b: (f32, f32), t: f32) -> f32 {
     at(a.1, b.1, (lo + hi) / 2.)
 }
 
+/// What of a spring's way is cut at each end, so it arrives: within 2 % of its target, by 0.23 of
+/// `BASE`'s spring — before a mark runs out (`Marks::recent`) and a pane on its way out is dropped.
+const TAIL: f32 = 0.02;
+
+/// Where a fold is drawn when its spring is at `v`: 0 and 1 exactly once it is within `TAIL` of
+/// them. Its spring alone was 0.7 % short when the pane was dropped — a step of a few pixels at
+/// the end (the developer, 2026-10-23).
+pub fn settle(v: f32) -> f32 {
+    ((v - TAIL) / (1. - 2. * TAIL)).clamp(0., 1.)
+}
+
 /// A critically damped spring within 4 % of its target after `duration`: x(t) = (1 + ωt)·e^(−ωt).
 pub fn spring(duration: Duration) -> SpringConfig {
     let w = 5.0 / duration.as_secs_f32();
@@ -80,7 +91,7 @@ pub fn toward<E: IntoElement + 'static>(
     if entering {
         spring = spring.from(1. - target);
     }
-    element.with_spring(id, spring, move |e, v| draw(e, v.clamp(0., 1.)))
+    element.with_spring(id, spring, move |e, v| draw(e, settle(v)))
 }
 
 /// `element` on its way to `value` (a share, a position); `draw` gets where it is.
@@ -269,6 +280,28 @@ mod tests {
         assert!(later.position > midway.position);
         let end = config.step(midway, 1., BASE.as_secs_f32() * 2.);
         assert!((end.position - 1.).abs() < 0.02, "{}", end.position);
+    }
+
+    #[test]
+    fn a_fold_is_at_its_end_before_its_mark_runs_out() {
+        // Dropped at the mark's end, a pane on its way out must already be nothing (and one on
+        // its way in all there): no step at the end.
+        let config = spring(BASE);
+        let end = BASE + Duration::from_millis(60);
+        for (from, to) in [(1., 0.), (0., 1.)] {
+            let at = config.step(
+                gpui::SpringState {
+                    position: from,
+                    velocity: 0.,
+                },
+                to,
+                end.as_secs_f32(),
+            );
+            assert_eq!(settle(at.position), to, "{}", at.position);
+        }
+        // Midway it still moves, and the cut makes no jump at the start.
+        assert!(settle(0.5) > 0.49 && settle(0.5) < 0.51);
+        assert_eq!(settle(0.), 0.);
     }
 
     #[test]
