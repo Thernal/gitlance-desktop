@@ -109,6 +109,8 @@ pub struct Layout {
     pub tool: String,
     /// Its width.
     pub tool_width: f32,
+    /// The width of the Inbox's, Branches' and Merge requests' list beside its preview.
+    pub list: f32,
     /// The menu's spaces in the order dragged to, by name (`inbox,code,branches,requests`);
     /// empty, the first order.
     pub spaces: String,
@@ -126,6 +128,7 @@ impl Default for Layout {
             fold_places: false,
             tool: String::new(),
             tool_width: 320.,
+            list: 460.,
             spaces: String::new(),
         }
     }
@@ -162,6 +165,7 @@ impl Layout {
                 "sidebar" => layout.sidebar = value,
                 "branches" => layout.branches = value,
                 "tool_width" => layout.tool_width = value,
+                "list" => layout.list = value,
                 _ => {}
             }
         }
@@ -180,6 +184,7 @@ impl std::fmt::Display for Layout {
         writeln!(f, "fold_places={}", self.fold_places)?;
         writeln!(f, "tool={}", self.tool)?;
         writeln!(f, "tool_width={}", self.tool_width)?;
+        writeln!(f, "list={}", self.list)?;
         writeln!(f, "spaces={}", self.spaces)
     }
 }
@@ -569,6 +574,7 @@ mod tests {
             fold_places: true,
             tool: "agents".into(),
             tool_width: 300.,
+            list: 380.,
             spaces: "code,inbox".into(),
         };
         assert_eq!(Layout::parse(&layout.to_string()), layout);

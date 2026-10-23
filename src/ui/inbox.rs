@@ -387,7 +387,7 @@ impl Workspace {
                 .gap(px(super::gap()))
                 .child(
                     island()
-                        .w(px(self.layout.sidebar.max(360.)))
+                        .w(px(self.layout.list))
                         .flex_none()
                         .p(px(16.))
                         .child(super::roots::skeleton(6)),
@@ -526,13 +526,12 @@ impl Workspace {
             .flex_1()
             .min_h_0()
             .flex()
-            .gap(px(super::gap()))
             .child(
                 if self.compact() {
                     island().flex_1().min_w_0()
                 } else {
                     island()
-                        .w(px(super::roots::list_width(self.layout.sidebar.max(360.))))
+                        .w(px(super::roots::list_width(self.layout.list)))
                         .flex_none()
                 }
                 .relative()
@@ -548,6 +547,9 @@ impl Workspace {
                 ),
             )
             // Narrow, the list is the page and a notice opens where it points (#80).
+            // Its handle widens or narrows the list, kept for every list page (the developer,
+            // 2026-10-23); a double click sets it back.
+            .children((!self.compact()).then(|| self.handle(super::Split::List, cx)))
             .children((!self.compact()).then(|| {
                 island()
                     .flex_1()

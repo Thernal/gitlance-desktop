@@ -199,6 +199,10 @@ pub struct Reply {
     pub form: Option<Form>,
     /// Seconds since the epoch.
     pub at: i64,
+    /// The reviewer's answer to its form, kept when the agent asked again: an earlier question
+    /// still shows what was picked (the developer, 2026-10-23: its options went).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered: Option<Answered>,
 }
 
 impl Comment {

@@ -364,6 +364,85 @@ impl Workspace {
         }
     }
 
+    /// Under an earlier question of the agent's: its form as it was, what was picked marked, and
+    /// the answer in words — or that none was given before it asked again. Only the last question
+    /// is answered here (the developer, 2026-10-23: an earlier one's options went).
+    pub(super) fn render_form_record(
+        &self,
+        form: &crate::review::Form,
+        answered: Option<&crate::review::Answered>,
+    ) -> gpui::AnyElement {
+        use crate::review::FormKind;
+        let choices = form.choices();
+        let picks = answered.map(|a| a.picks.clone()).unwrap_or_default();
+        // An order answered is shown in its new order, numbered.
+        let rows: Vec<(String, bool, Option<usize>)> = match form.kind {
+            FormKind::Order if !picks.is_empty() => picks
+                .iter()
+                .enumerate()
+                .filter_map(|(n, &i)| Some((choices.get(i)?.label.clone(), true, Some(n + 1))))
+                .collect(),
+            _ => choices
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (c.label.clone(), picks.contains(&i), None))
+                .collect(),
+        };
+        let many = form.kind.many();
+        let said = answered
+            .map(|a| a.words(Some(form)))
+            .filter(|w| !w.trim().is_empty());
+        div()
+            .ml(px(52.))
+            .mr(px(12.))
+            .mb(px(8.))
+            .px(px(10.))
+            .py(px(6.))
+            .flex()
+            .flex_col()
+            .gap(px(3.))
+            .rounded(px(ROW_RADIUS))
+            .border_1()
+            .border_color(theme::island_border())
+            .text_size(px(12.))
+            .children(rows.into_iter().map(|(label, on, nth)| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .text_color(if on { theme::text() } else { theme::faint() })
+                    .child(match nth {
+                        Some(n) => div()
+                            .w(px(14.))
+                            .flex_none()
+                            .text_size(px(11.))
+                            .child(n.to_string()),
+                        None => div()
+                            .size(px(10.))
+                            .flex_none()
+                            .rounded(px(if many { 2. } else { 5. }))
+                            .border_1()
+                            .border_color(if on { theme::agent() } else { theme::faint() })
+                            .when(on, |s| s.bg(theme::agent())),
+                    })
+                    .child(div().min_w_0().truncate().child(label))
+            }))
+            .child(
+                div()
+                    .pt(px(2.))
+                    .text_size(px(11.))
+                    .text_color(if said.is_some() {
+                        theme::muted()
+                    } else {
+                        theme::faint()
+                    })
+                    .child(
+                        said.unwrap_or_else(|| "Not answered — the agent asked again".to_owned()),
+                    ),
+            )
+            .into_any_element()
+    }
+
     /// Under the agent's question: its form, answered with clicks; the foot sends (#10 C).
     pub(super) fn render_agent_form(
         &self,

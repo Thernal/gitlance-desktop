@@ -816,7 +816,7 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             });
                             if let Some(line) = line {
                                 use crate::review::{
-                                    Form, FormKind, FormOption, Reply, Sent, State,
+                                    Answered, Form, FormKind, FormOption, Reply, Sent, State,
                                 };
                                 let step = |l: &str, on: bool| FormOption {
                                     label: l.into(),
@@ -837,7 +837,26 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                                         batch: "b".into(),
                                         delivered: true,
                                     }),
-                                    replies: vec![Reply {
+                                    // An earlier question, answered, before the one asked now.
+                                    replies: vec![
+                                        Reply {
+                                            uid: "r0".into(),
+                                            body: "Retry from the toast, or from the form?".into(),
+                                            form: Some(Form {
+                                                kind: FormKind::One,
+                                                options: vec![
+                                                    step("From the toast", false),
+                                                    step("From the form", false),
+                                                ],
+                                            }),
+                                            at: 0,
+                                            answered: Some(Answered {
+                                                picks: vec![0],
+                                                note: "Keep the toast short.".into(),
+                                                ..Default::default()
+                                            }),
+                                        },
+                                        Reply {
                                         uid: "r".into(),
                                         body: "That touches three places. Which should I do?"
                                             .into(),
@@ -854,7 +873,9 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                                             ],
                                         }),
                                         at: 0,
-                                    }],
+                                        answered: None,
+                                    },
+                                    ],
                                     ..Default::default()
                                 });
                                 this.refresh_rows();
@@ -1325,6 +1346,8 @@ enum Split {
     Sidebar,
     /// The tool window's left edge: dragging left widens it.
     Tool,
+    /// The list of the Inbox, Branches and Merge requests beside its preview.
+    List,
 }
 
 impl Split {
@@ -1336,6 +1359,7 @@ impl Split {
         match self {
             Split::Sidebar => (220., 720.),
             Split::Tool => (260., 640.),
+            Split::List => (300., 900.),
         }
     }
 }
@@ -1630,6 +1654,8 @@ pub struct Workspace {
     widths: room::Widths,
     /// What folds, its open height (#110, `folding`).
     heights: room::Heights,
+    /// What each fold was last drawn as (`Workspace::folding`).
+    folds: motion::Folds,
     /// The tree folder opened last, and a count of openings: its rows fade in (`tree_row`).
     tree_opened: Option<(String, usize)>,
     /// What a narrow window folded, for the session (#80).
@@ -1842,6 +1868,7 @@ impl Workspace {
             body_width: Rc::new(Shared::new(0.)),
             widths: Default::default(),
             heights: Default::default(),
+            folds: Default::default(),
             tree_opened: None,
             narrowed: Default::default(),
             compose_aside: false,

@@ -124,6 +124,27 @@ impl Marks {
     }
 }
 
+/// What each fold was last drawn as, and when one last shut: a fold already shut is not drawn
+/// shutting again when a mark it shares with others is set (the developer, 2026-10-23: a click on
+/// one agent comment folded the others again, shut as they were).
+#[derive(Default)]
+pub struct Folds(std::cell::RefCell<HashMap<String, (bool, Option<Instant>)>>);
+
+impl Folds {
+    /// Fold `key` drawn `open` now: whether it is on its way shut, open a moment ago.
+    fn shutting(&self, key: &str, open: bool) -> bool {
+        let mut folds = self.0.borrow_mut();
+        let (was, shut) = folds.entry(key.to_owned()).or_insert((open, None));
+        if *was && !open {
+            *shut = Some(Instant::now());
+        } else if open {
+            *shut = None;
+        }
+        *was = open;
+        shut.is_some_and(|at| at.elapsed() < BASE + Duration::from_millis(80))
+    }
+}
+
 /// `element` coming in: `draw` gets 0 at its first frame, 1 after `duration`, on the curve.
 pub fn appear<E: IntoElement + 'static>(
     element: E,
@@ -205,11 +226,13 @@ impl super::Workspace {
         content: impl IntoElement + 'static,
     ) -> Option<gpui::AnyElement> {
         use gpui::{div, prelude::*};
-        let moving = self.motion.recent(moving);
-        if !open && !moving {
+        let key: String = key.into();
+        // Shut, it is drawn only on its way there; open, it comes in while its mark is fresh.
+        let shutting = self.folds.shutting(&key, open);
+        if !open && !shutting {
             return None;
         }
-        let key: String = key.into();
+        let moving = self.motion.recent(moving);
         let height = self.heights.get(&key);
         let inner = div()
             .relative()
@@ -302,6 +325,19 @@ mod tests {
         // Midway it still moves, and the cut makes no jump at the start.
         assert!(settle(0.5) > 0.49 && settle(0.5) < 0.51);
         assert_eq!(settle(0.), 0.);
+    }
+
+    #[test]
+    fn a_fold_shut_before_is_not_shut_again() {
+        let folds = Folds::default();
+        // Shut from the start: never on its way shut.
+        assert!(!folds.shutting("a", false));
+        // Open, then shut: on its way for the motion's time, then not.
+        assert!(!folds.shutting("b", true));
+        assert!(folds.shutting("b", false));
+        assert!(folds.shutting("b", false));
+        folds.0.borrow_mut().get_mut("b").unwrap().1 = Some(Instant::now() - BASE * 2);
+        assert!(!folds.shutting("b", false));
     }
 
     #[test]

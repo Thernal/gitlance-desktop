@@ -76,6 +76,7 @@ impl Workspace {
         match split {
             Split::Sidebar => &mut self.layout.sidebar,
             Split::Tool => &mut self.layout.tool_width,
+            Split::List => &mut self.layout.list,
         }
     }
 
@@ -90,6 +91,7 @@ impl Workspace {
             *self.size(split) = match split {
                 Split::Sidebar => Layout::default().sidebar,
                 Split::Tool => Layout::default().tool_width,
+                Split::List => Layout::default().list,
             };
             self.save_layout();
             cx.notify();
@@ -140,6 +142,7 @@ impl Workspace {
         let group = match split {
             Split::Sidebar => "split-sidebar",
             Split::Tool => "split-tool",
+            Split::List => "split-list",
         };
         let line = div()
             .rounded_full()

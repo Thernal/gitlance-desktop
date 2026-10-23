@@ -313,13 +313,19 @@ pub fn apply(comments: &mut [Comment], answers: &[Answer]) -> bool {
                     continue;
                 }
                 if !answer.body.trim().is_empty() {
+                    // A new question: the last answer was to the one before, and stays with it.
+                    if answer.kind == Kind::Reply
+                        && let Some(asked) = c.replies.last_mut().filter(|r| r.form.is_some())
+                    {
+                        asked.answered = c.answer.take();
+                    }
                     c.replies.push(Reply {
                         uid: answer.uid.clone(),
                         body: answer.body.trim().to_owned(),
                         form: answer.form.clone(),
                         at: answer.at,
+                        answered: None,
                     });
-                    // A new question: the last answer was to the one before.
                     if answer.kind == Kind::Reply {
                         c.answer = None;
                     }
@@ -771,6 +777,44 @@ mod tests {
         assert!(apply(&mut comments, std::slice::from_ref(&delivered)));
         assert!(waiting(&comments, "s1").is_empty());
         assert!(!apply(&mut comments, &[delivered]));
+    }
+
+    #[test]
+    fn a_question_asked_again_keeps_the_answer_it_had() {
+        use crate::review::{Answered, Form, FormKind, FormOption};
+        let mut comments = vec![comment(1)];
+        let form = Form {
+            kind: FormKind::One,
+            options: ["a", "b"]
+                .map(|l| FormOption {
+                    label: l.into(),
+                    ..Default::default()
+                })
+                .to_vec(),
+        };
+        let ask = |batch: String, uid: &str| Answer {
+            uid: uid.into(),
+            id: 1,
+            batch,
+            kind: Kind::Reply,
+            body: "Which?".into(),
+            form: Some(form.clone()),
+            at: 5,
+        };
+        let first = send(&mut comments, &[1], "s1", "");
+        apply(&mut comments, &[ask(first, "u1")]);
+        let picked = Answered {
+            picks: vec![1],
+            ..Default::default()
+        };
+        comments[0].answer = Some(picked.clone());
+        let second = send(&mut comments, &[1], "s1", "");
+        apply(&mut comments, &[ask(second, "u2")]);
+        let c = &comments[0];
+        assert_eq!(c.replies.len(), 2);
+        assert_eq!(c.replies[0].answered, Some(picked));
+        assert_eq!(c.replies[1].answered, None);
+        assert_eq!(c.answer, None);
     }
 
     #[test]

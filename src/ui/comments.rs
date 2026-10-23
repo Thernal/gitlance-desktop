@@ -2090,23 +2090,43 @@ impl Workspace {
                 .then(|| edit_button(("edit-agent", id), None, self.tight, change, editing)),
             None,
         );
+        // The last question is answered under it while the comment is open; an earlier one, or
+        // the last once it is done, shows its form as it was answered.
+        let last = comment.replies.len().saturating_sub(1);
+        let asking_now = comment.open();
         let replies = comment.replies.iter().enumerate().map(|(ix, reply)| {
-            discussion::note(
-                "Agent",
-                false,
-                Some("agent"),
-                super::format::ago(reply.at),
-                markdown::body(
-                    &reply.body,
-                    self.settings.rich_comments,
-                    format!("md-agent-{id}-{ix}"),
+            let record = reply
+                .form
+                .as_ref()
+                .filter(|_| ix != last || !asking_now)
+                .map(|form| {
+                    let answered = if ix == last {
+                        comment.answer.as_ref().or(reply.answered.as_ref())
+                    } else {
+                        reply.answered.as_ref()
+                    };
+                    self.render_form_record(form, answered)
+                });
+            div()
+                .flex()
+                .flex_col()
+                .child(discussion::note(
+                    "Agent",
+                    false,
+                    Some("agent"),
+                    super::format::ago(reply.at),
+                    markdown::body(
+                        &reply.body,
+                        self.settings.rich_comments,
+                        format!("md-agent-{id}-{ix}"),
+                        None,
+                        Some(selecting.clone()),
+                    ),
+                    ix + 1 == comment.replies.len(),
                     None,
-                    Some(selecting.clone()),
-                ),
-                ix + 1 == comment.replies.len(),
-                None,
-                None,
-            )
+                    None,
+                ))
+                .children(record)
         });
         // The agent asked with a form: answered here, the pick going to the drafts (#10 C).
         let form = self.render_agent_form(id, asking.clone());
@@ -2567,15 +2587,14 @@ impl Workspace {
         };
         let preview = compose.preview;
         let toggle = this.clone();
-        // In a narrow diff the buttons wrap under the helpers instead of running out of the box.
-        let edge = div()
+        // Two groups, each kept whole: who sees it and the writing helpers on the left, the
+        // buttons on the right. Narrow, the buttons go under the helpers and stay on the right,
+        // where a box's buttons are (the developer, 2026-10-23: they wrapped to the left).
+        let helpers = div()
             .flex()
-            .flex_wrap()
+            .flex_none()
             .items_center()
             .gap(px(2.))
-            .px(px(6.))
-            .pt(px(4.))
-            .pb(px(6.))
             .children(lead.map(|lead| {
                 div()
                     .flex()
@@ -2612,10 +2631,20 @@ impl Workspace {
                     .on_click(move |_, _, cx| {
                         toggle.update(cx, |this, cx| this.toggle_preview(cx)).ok();
                     }),
-            )
-            .child(div().flex_1())
+            );
+        let edge = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_x(px(8.))
+            .gap_y(px(6.))
+            .px(px(6.))
+            .pt(px(4.))
+            .pb(px(6.))
+            .child(helpers)
             .child(
                 div()
+                    .ml_auto()
                     .flex()
                     .flex_none()
                     .items_center()

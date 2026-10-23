@@ -19,20 +19,18 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 /// The width of a root's list.
-const LIST: f32 = 460.;
-
 impl Workspace {
     /// A root's list: beside its preview at its width, or narrow the whole page (#80).
     pub(super) fn root_list(&self) -> Div {
         if self.compact() {
             island().flex_1().min_w_0()
         } else {
-            island().w(px(list_width(LIST))).flex_none()
+            island().w(px(list_width(self.layout.list))).flex_none()
         }
     }
 }
 
-/// A root's list's width: `LIST`, or a snapshot's `GITLANCE_SNAPSHOT_LIST` to see its rows
+/// A root's list's width: the layout's, or a snapshot's `GITLANCE_SNAPSHOT_LIST` to see its rows
 /// narrow (#79).
 pub(super) fn list_width(width: f32) -> f32 {
     #[cfg(feature = "snapshot")]
@@ -618,7 +616,7 @@ impl Workspace {
                 .gap(px(super::gap()))
                 .child(
                     island()
-                        .w(px(list_width(LIST)))
+                        .w(px(list_width(self.layout.list)))
                         .flex_none()
                         .p(px(16.))
                         .child(skeleton(7)),
@@ -769,7 +767,6 @@ impl Workspace {
                 .flex_1()
                 .min_h_0()
                 .flex()
-                .gap(px(super::gap()))
                 .child(
                     self.root_list()
                         .border_color(self.zone_border(super::zones::Zone::Branches))
@@ -795,6 +792,9 @@ impl Workspace {
                                 .children(held),
                         ),
                 )
+                // Its handle widens or narrows the list, kept for every list page (the developer,
+                // 2026-10-23); a double click sets it back.
+                .children((!self.compact()).then(|| self.handle(super::Split::List, cx)))
                 .children((!self.compact()).then(|| {
                     island().flex_1().min_w_0().bg(theme::editor()).child(
                         div()
@@ -1578,7 +1578,6 @@ impl Workspace {
             .flex_1()
             .min_h_0()
             .flex()
-            .gap(px(super::gap()))
             .child(
                 self.root_list()
                     .relative()
@@ -1594,6 +1593,9 @@ impl Workspace {
                             .children(list),
                     ),
             )
+            // Its handle widens or narrows the list, kept for every list page (the developer,
+            // 2026-10-23); a double click sets it back.
+            .children((!self.compact()).then(|| self.handle(super::Split::List, cx)))
             .children((!self.compact()).then(|| {
                 island().flex_1().min_w_0().bg(theme::editor()).child(
                     div()
