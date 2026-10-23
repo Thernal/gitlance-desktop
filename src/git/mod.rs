@@ -658,6 +658,21 @@ impl Repo {
         Ok(WorkingTree { files, tags })
     }
 
+    /// The paths changed in the working tree or the index, new ones too (not ignored): what is
+    /// being edited there (#117).
+    pub fn dirty_paths(&self) -> Result<Vec<String>> {
+        let statuses = self.inner.statuses(Some(
+            git2::StatusOptions::new()
+                .include_untracked(true)
+                .recurse_untracked_dirs(true)
+                .include_ignored(false),
+        ))?;
+        Ok(statuses
+            .iter()
+            .filter_map(|e| e.path().ok().map(str::to_owned))
+            .collect())
+    }
+
     /// How many paths changed in the working tree and a fingerprint of them (their status, size and
     /// modification time), to notice an edit without diffing; `(0, 0)` for a bare repository.
     pub fn working_summary(&self) -> Result<(usize, u64)> {

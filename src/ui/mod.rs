@@ -1416,6 +1416,11 @@ pub struct Workspace {
     chat_routes: std::collections::HashMap<String, String>,
     /// The chats were read once: from then on their coming and going is said in a toast.
     chats_known: bool,
+    /// What each chat working in a worktree of its own has changed there, by session (#117), and
+    /// the polls until it is read again.
+    chat_edits: std::collections::HashMap<String, std::collections::HashSet<String>>,
+    chat_edits_in: u32,
+    chat_edits_task: Option<Task<()>>,
     /// The Inbox place is shown, and which of its notifications it lists.
     inbox: bool,
     inbox_view: inbox::InboxView,
@@ -1680,6 +1685,9 @@ impl Workspace {
             confirm_note: None,
             chat_routes: Default::default(),
             chats_known: false,
+            chat_edits: Default::default(),
+            chat_edits_in: 0,
+            chat_edits_task: None,
             inbox: false,
             inbox_view: Default::default(),
             hover_note: None,

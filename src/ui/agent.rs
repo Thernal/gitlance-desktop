@@ -149,20 +149,34 @@ impl Workspace {
             .any(|c| c.session == session && c.listening())
     }
 
-    /// Another chat than the page's is changing file `path`: a note of its on the file was taken
-    /// and not answered yet (#77). Its name, letter and hue.
+    /// Another chat than the page's is changing file `path` (#77). One in a worktree of its own:
+    /// the file is changed there (#117: what it really edits). One in this working tree, where
+    /// whose edit is whose cannot be told: a note of its on the file was taken and not answered
+    /// yet. Its name, letter and hue.
     pub(super) fn changing(&self, path: &str) -> Option<(String, char, gpui::Rgba)> {
         let alive = |session: &str| self.chat_listens(session);
         let page = self
             .route_of(self.page_branch().as_deref())
             .map(|c| c.session.clone());
-        let session = self
-            .comments
+        let edited = self
+            .agent_chats
             .iter()
-            .filter(|c| c.path == path && !c.archived && kind_of(c, &alive) == Kind::Working)
-            .filter_map(|c| c.sent.as_ref())
-            .map(|s| s.session.clone())
-            .find(|s| Some(s) != page.as_ref())?;
+            .filter(|c| Some(&c.session) != page.as_ref())
+            .find(|c| {
+                self.chat_edits
+                    .get(&c.session)
+                    .is_some_and(|paths| paths.contains(path))
+            })
+            .map(|c| c.session.clone());
+        let session = edited.or_else(|| {
+            self.comments
+                .iter()
+                .filter(|c| c.path == path && !c.archived && kind_of(c, &alive) == Kind::Working)
+                .filter_map(|c| c.sent.as_ref())
+                .map(|s| s.session.clone())
+                .filter(|s| !self.chat_edits.contains_key(s))
+                .find(|s| Some(s) != page.as_ref())
+        })?;
         let chat = self.agent_chats.iter().find(|c| c.session == session)?;
         let (letter, hue) = self.chat_mark(&session);
         let name = if chat.title.is_empty() {
@@ -901,6 +915,58 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Every fifth poll (10 s): what each chat in a worktree of its own has changed there, read in
+    /// the background (#117). A chat in this working tree is left out: its edits are not its own
+    /// to tell.
+    fn read_chat_edits(&mut self, cx: &mut Context<Self>) {
+        if self.chat_edits_in > 0 {
+            self.chat_edits_in -= 1;
+            return;
+        }
+        self.chat_edits_in = 4;
+        let Some(here) = self.root.clone() else {
+            return;
+        };
+        let same =
+            |a: &std::path::Path, b: &std::path::Path| match (a.canonicalize(), b.canonicalize()) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => a.components().eq(b.components()),
+            };
+        let away: Vec<(String, std::path::PathBuf)> = self
+            .agent_chats
+            .iter()
+            .filter(|c| !c.repo.as_os_str().is_empty() && !same(&c.repo, &here))
+            .map(|c| (c.session.clone(), c.repo.clone()))
+            .collect();
+        if away.is_empty() {
+            if !self.chat_edits.is_empty() {
+                self.chat_edits.clear();
+                cx.notify();
+            }
+            return;
+        }
+        self.chat_edits_task = Some(cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    away.into_iter()
+                        .filter_map(|(session, repo)| {
+                            let paths = crate::git::Repo::open(&repo).ok()?.dirty_paths().ok()?;
+                            Some((session, paths.into_iter().collect()))
+                        })
+                        .collect::<std::collections::HashMap<_, _>>()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.chat_edits != read {
+                    this.chat_edits = read;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
     /// Takes in what the agents answered since the last look (from the 2-second poll).
     pub(super) fn poll_agents(&mut self, cx: &mut Context<Self>) {
         // The chats are read on every beat: the stripe shows who listens, a toast who comes and
@@ -914,6 +980,7 @@ impl Workspace {
             cx.notify();
         }
         self.chats_known = true;
+        self.read_chat_edits(cx);
         let (Some(root), Some(bus)) = (self.project.clone().or(self.root.clone()), Self::bus())
         else {
             return;
