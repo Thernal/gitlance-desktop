@@ -79,23 +79,31 @@ fn tools() -> Value {
     ])
 }
 
-/// The repository the agent works in, named as the app names it (`git::Repo::root`).
-fn repo() -> Result<PathBuf, String> {
+/// The folder the agent works in and its project, named as the app names them
+/// (`git::Repo::root`, `main_root`): a worktree's notes are its main working tree's, its lines its
+/// own (#77).
+fn repo() -> Result<(PathBuf, PathBuf), String> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     crate::git::Repo::open(&cwd)
-        .map(|r| r.root())
+        .map(|r| (r.root(), r.main_root()))
         .map_err(|_| format!("{} is not in a git repository", cwd.display()))
 }
 
 fn call(bus: &Bus, name: &str, args: &Value) -> Result<String, String> {
-    let root = repo()?;
+    let (here, root) = repo()?;
     let comments = bus.comments(&root);
+    // A chat's own notes, and those sent to no chat in particular (#77).
+    let me = agents::whoami().map(|(_, session, ..)| session);
     let open: Vec<_> = comments
         .iter()
         .filter(|c| c.state == crate::review::State::Sent)
+        .filter(|c| {
+            let to = c.sent.as_ref().map_or("", |s| s.session.as_str());
+            me.as_deref().is_none_or(|me| to.is_empty() || to == me)
+        })
         .collect();
     if name == "list_comments" {
-        return Ok(agents::brief(&root, &open));
+        return Ok(agents::brief(&here, &open));
     }
     let id = args["id"].as_u64().ok_or("id is missing")?;
     let comment = open

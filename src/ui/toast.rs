@@ -16,6 +16,8 @@ struct Toast {
     text: SharedString,
     /// The draft it deleted: Undo puts it back (#76).
     undo: Option<crate::review::Comment>,
+    /// News, not an error: no alert mark (#77).
+    info: bool,
     /// Dismissed: drawn on its way out until it is removed (#56, 8).
     leaving: bool,
     /// Dismisses it when `SHOWN` is up; dropping it (✕, the same text again) cancels that.
@@ -38,7 +40,12 @@ impl Workspace {
 
     /// Shows `text`; the same text already showing starts over at the bottom instead.
     fn toast(&mut self, text: SharedString, cx: &mut Context<Self>) {
-        self.toast_with(text, None, cx);
+        self.toast_with(text, None, false, cx);
+    }
+
+    /// News that is not an error: a chat began or stopped listening (#77).
+    pub(super) fn toast_info(&mut self, text: SharedString, cx: &mut Context<Self>) {
+        self.toast_with(text, None, true, cx);
     }
 
     /// "Draft deleted · Money.kt:23" with Undo, which puts `comment` back.
@@ -49,7 +56,7 @@ impl Workspace {
     ) {
         let name = comment.path.rsplit('/').next().unwrap_or(&comment.path);
         let text = format!("Draft deleted · {name}:{}", comment.line).into();
-        self.toast_with(text, Some(comment), cx);
+        self.toast_with(text, Some(comment), true, cx);
         cx.notify();
     }
 
@@ -57,6 +64,7 @@ impl Workspace {
         &mut self,
         text: SharedString,
         undo: Option<crate::review::Comment>,
+        info: bool,
         cx: &mut Context<Self>,
     ) {
         self.toasts.list.retain(|t| t.text != text);
@@ -70,6 +78,7 @@ impl Workspace {
             id,
             text,
             undo,
+            info,
             leaving: false,
             _timer: timer,
         });
@@ -128,6 +137,7 @@ impl Workspace {
             let id = t.id;
             let leaving = t.leaving;
             let undo = t.undo.is_some();
+            let info = t.info;
             let toast = div()
                 .id(("toast", id as usize))
                 .occlude()
@@ -145,7 +155,7 @@ impl Workspace {
                 .shadow_lg()
                 .text_size(px(13.))
                 .line_height(px(19.))
-                .children((!undo).then(|| {
+                .children((!info).then(|| {
                     icons::icon("alert")
                         .size(px(16.))
                         .mt(px(2.))

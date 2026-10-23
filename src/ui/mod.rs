@@ -1305,6 +1305,9 @@ pub struct Workspace {
     code: code::Code,
     /// The project is a plain folder, not a git repository: Code is all it has (#75).
     plain: bool,
+    /// The project's main working tree: where its notes for the agents are kept, whatever
+    /// worktree is open (#77).
+    project: Option<PathBuf>,
     versions: Vec<Version>,
     commits: Vec<CommitInfo>,
     selection: Selection,
@@ -1333,6 +1336,10 @@ pub struct Workspace {
     agents_archived: bool,
     /// One's own public note asked about before it is deleted (#76).
     confirm_note: Option<u64>,
+    /// The chat picked with Change… for a branch's notes ("" for any branch), by session (#77).
+    chat_routes: std::collections::HashMap<String, String>,
+    /// The chats were read once: from then on their coming and going is said in a toast.
+    chats_known: bool,
     /// The Inbox place is shown, and which of its notifications it lists.
     inbox: bool,
     inbox_view: inbox::InboxView,
@@ -1570,6 +1577,8 @@ impl Workspace {
             agent_row: None,
             agents_archived: false,
             confirm_note: None,
+            chat_routes: Default::default(),
+            chats_known: false,
             inbox: false,
             inbox_view: Default::default(),
             hover_note: None,
@@ -1585,6 +1594,7 @@ impl Workspace {
             branch_page: None,
             code: Default::default(),
             plain: false,
+            project: None,
             versions: Vec::new(),
             commits: Vec::new(),
             selection: Selection::None,
@@ -1742,15 +1752,16 @@ impl Workspace {
                         git_dir,
                         fingerprint,
                         web,
-                        (decor, me),
+                        (decor, me, repo.main_root()),
                     )))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 match loaded {
                     Ok(Err(folder)) => this.open_plain(folder, cx),
-                    Ok(Ok((root, branches, git_dir, fingerprint, web, (decor, me)))) => {
+                    Ok(Ok((root, branches, git_dir, fingerprint, web, (decor, me, project)))) => {
                         this.plain = false;
+                        this.project = Some(project.clone());
                         this.web = web;
                         this.decor = decor;
                         this.me = me.unwrap_or_else(|| "You".to_owned());
@@ -1760,7 +1771,7 @@ impl Workspace {
                         }
                         if this.root.as_ref() != Some(&root) {
                             this.code = Default::default();
-                            this.comments = crate::review::load(&root);
+                            this.comments = crate::review::load(&project);
                             this.answers_stamp = None;
                             this.compose = None;
                         }
@@ -1812,6 +1823,7 @@ impl Workspace {
         self.plain = true;
         self.web = None;
         self.recent = storage::remember(&root);
+        self.project = Some(root.clone());
         if self.root.as_ref() != Some(&root) {
             self.find.reset();
             self.code = Default::default();

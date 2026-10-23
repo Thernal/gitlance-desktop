@@ -25,12 +25,14 @@ pub struct PickChat {
     listening: bool,
 }
 
-/// The "send to which chat?" card.
+/// The "send to which chat?" card; with `route`, which chat a branch's notes go to (#77).
 pub struct AgentPick {
     chats: Vec<PickChat>,
     selected: usize,
     /// The comments it sends.
     ids: Vec<u64>,
+    /// The branch whose route it picks ("" for any); nothing is sent then.
+    route: Option<String>,
 }
 
 impl Workspace {
@@ -63,8 +65,9 @@ impl Workspace {
         let Some(root) = self.root.clone() else {
             return;
         };
+        let project = self.project.clone().unwrap_or_else(|| root.clone());
         let mut chats: Vec<PickChat> = Self::bus()
-            .map(|bus| bus.chats(&root))
+            .map(|bus| bus.chats(&project))
             .unwrap_or_default()
             .into_iter()
             .map(|c| PickChat {
@@ -95,38 +98,173 @@ impl Workspace {
             chats,
             selected: 0,
             ids,
+            route: None,
         });
         cx.notify();
     }
 
-    /// Sends `ids` to the chat they usually go to (#50 F: there is usually one): the last one
-    /// comments went to while it listens, else any that listens; with none, the card asks.
+    /// Change…: the card offers the chats that listen; the one picked takes `branch`'s notes.
+    fn open_route_pick(&mut self, branch: String, cx: &mut Context<Self>) {
+        let now = self.route_of(Some(&branch)).map(|c| c.session.clone());
+        let chats: Vec<PickChat> = self
+            .agent_chats
+            .iter()
+            .filter(|c| c.listening())
+            .map(|c| PickChat {
+                session: c.session.clone(),
+                title: c.title.clone(),
+                agent: c.agent.clone(),
+                listening: true,
+            })
+            .collect();
+        let selected = chats
+            .iter()
+            .position(|c| Some(&c.session) == now.as_ref())
+            .unwrap_or(0);
+        self.agent_pick = Some(AgentPick {
+            chats,
+            selected,
+            ids: Vec::new(),
+            route: Some(branch),
+        });
+        cx.notify();
+    }
+
+    /// Send to … instead: a note its gone chat never took goes to its route now.
+    fn resend(&mut self, id: u64, cx: &mut Context<Self>) {
+        if let Some(c) = self.comments.iter_mut().find(|c| c.id == id) {
+            c.state = State::Draft;
+            c.sent = None;
+        }
+        self.send_agent(vec![id], cx);
+    }
+
+    /// Chat `session` is here and listening: a note sent to it and not taken is not waiting.
+    fn chat_listens(&self, session: &str) -> bool {
+        self.agent_chats
+            .iter()
+            .any(|c| c.session == session && c.listening())
+    }
+
+    /// Another chat than the page's is changing file `path`: a note of its on the file was taken
+    /// and not answered yet (#77). Its name, letter and hue.
+    pub(super) fn changing(&self, path: &str) -> Option<(String, char, gpui::Rgba)> {
+        let alive = |session: &str| self.chat_listens(session);
+        let page = self
+            .route_of(self.page_branch().as_deref())
+            .map(|c| c.session.clone());
+        let session = self
+            .comments
+            .iter()
+            .filter(|c| c.path == path && !c.archived && kind_of(c, &alive) == Kind::Working)
+            .filter_map(|c| c.sent.as_ref())
+            .map(|s| s.session.clone())
+            .find(|s| Some(s) != page.as_ref())?;
+        let chat = self.agent_chats.iter().find(|c| c.session == session)?;
+        let (letter, hue) = self.chat_mark(&session);
+        let name = if chat.title.is_empty() {
+            chat.agent.clone()
+        } else {
+            chat.title.clone()
+        };
+        Some((name, letter, hue))
+    }
+
+    /// A chat's mark (#77): its agent's first letter on a hue of its own — the code palette's,
+    /// never the agent's purple or the public orange — by its place among the chats here.
+    pub(super) fn chat_mark(&self, session: &str) -> (char, gpui::Rgba) {
+        let hues = [
+            theme::accent(),
+            theme::added(),
+            theme::renamed(),
+            theme::removed(),
+        ];
+        let mut sessions: Vec<&str> = self
+            .agent_chats
+            .iter()
+            .map(|c| c.session.as_str())
+            .collect();
+        sessions.sort_unstable();
+        let at = sessions.iter().position(|s| *s == session).unwrap_or(0);
+        let letter = self
+            .agent_chats
+            .iter()
+            .find(|c| c.session == session)
+            .and_then(|c| c.agent.chars().next())
+            .unwrap_or('?');
+        (letter, hues[at % hues.len()])
+    }
+
+    /// Sends each of `ids` to its route (#77): the chat working on the branch it was written on,
+    /// else the project's default; with no chat listening, the card asks.
     pub(super) fn send_agent(&mut self, ids: Vec<u64>, cx: &mut Context<Self>) {
         if ids.is_empty() {
             return;
         }
-        let Some(root) = self.root.clone() else {
-            return;
-        };
-        let chats = Self::bus().map(|b| b.chats(&root)).unwrap_or_default();
-        let last = self
-            .comments
-            .iter()
-            .rev()
-            .filter_map(|c| c.sent.as_ref())
-            .find(|s| !s.session.is_empty())
-            .map(|s| s.session.clone());
-        let chat = chats
-            .iter()
-            .find(|c| Some(&c.session) == last.as_ref() && c.listening())
-            .or_else(|| chats.iter().find(|c| c.listening()));
-        let Some(chat) = chat.cloned() else {
-            return self.open_agent_pick_for(ids, cx);
-        };
-        agents::send(&mut self.comments, &ids, &chat.session, &chat.title);
-        self.save_comments();
-        self.refresh_rows();
-        cx.notify();
+        self.refresh_chats();
+        let mut by_chat: Vec<(agents::Chat, Vec<u64>)> = Vec::new();
+        let mut nowhere = Vec::new();
+        for id in ids {
+            let branch = self
+                .comments
+                .iter()
+                .find(|c| c.id == id)
+                .and_then(|c| c.branch.clone());
+            match self.route_of(branch.as_deref()).cloned() {
+                Some(chat) => match by_chat.iter_mut().find(|(c, _)| c.session == chat.session) {
+                    Some((_, ids)) => ids.push(id),
+                    None => by_chat.push((chat, vec![id])),
+                },
+                None => nowhere.push(id),
+            }
+        }
+        for (chat, ids) in &by_chat {
+            agents::send(&mut self.comments, ids, &chat.session, &chat.title);
+        }
+        if !by_chat.is_empty() {
+            self.save_comments();
+            self.refresh_rows();
+            cx.notify();
+        }
+        if !nowhere.is_empty() {
+            self.open_agent_pick_for(nowhere, cx);
+        }
+    }
+
+    /// The chat a note on `branch` goes to (`agents::route`), with the one picked for it.
+    pub(super) fn route_of(&self, branch: Option<&str>) -> Option<&agents::Chat> {
+        let main = self.project.as_ref().or(self.root.as_ref())?;
+        let chosen = branch
+            .and_then(|b| self.chat_routes.get(b))
+            .or(self.chat_routes.get(""))
+            .map(String::as_str);
+        agents::route(branch, chosen, &self.agent_chats, main)
+    }
+
+    /// The branch of the page on screen, as a note written there keeps it: a request's source
+    /// branch, a branch's own, else the one checked out (#77).
+    pub(super) fn page_branch(&self) -> Option<String> {
+        if let Some(iid) = self.requests.current
+            && let Some(m) = self.requests.list.iter().find(|m| m.iid == iid)
+            && self.nav.space == super::spaces::Space::Requests
+        {
+            return Some(m.source.clone());
+        }
+        let shown = match (
+            self.nav.space,
+            self.branch.and_then(|ix| self.branches.get(ix)),
+        ) {
+            (super::spaces::Space::Branches, Some(b)) => Some(b),
+            _ => self.branches.iter().find(|b| b.is_head),
+        }?;
+        // A remote branch is the branch it tracks there.
+        Some(match shown.kind {
+            crate::git::RefKind::Remote => shown
+                .name
+                .split_once('/')
+                .map_or(shown.name.clone(), |(_, n)| n.to_owned()),
+            _ => shown.name.clone(),
+        })
     }
 
     /// The reviewer's pick on the agent's form for comment `id`: saved to the drafts at once
@@ -717,6 +855,10 @@ impl Workspace {
         let Some(chat) = pick.chats.get(ix).cloned() else {
             return;
         };
+        if let Some(branch) = pick.route {
+            self.chat_routes.insert(branch, chat.session);
+            return cx.notify();
+        }
         let Some(root) = self.root.clone() else {
             return;
         };
@@ -758,10 +900,19 @@ impl Workspace {
 
     /// Takes in what the agents answered since the last look (from the 2-second poll).
     pub(super) fn poll_agents(&mut self, cx: &mut Context<Self>) {
-        if self.tool() == Some(super::tools::Tool::Agents) && self.refresh_chats() {
+        // The chats are read on every beat: the stripe shows who listens, a toast who comes and
+        // goes (#77).
+        let before = self.agent_chats.clone();
+        let known = self.chats_known;
+        if self.refresh_chats() {
+            if known {
+                self.say_chats_changed(&before, cx);
+            }
             cx.notify();
         }
-        let (Some(root), Some(bus)) = (self.root.clone(), Self::bus()) else {
+        self.chats_known = true;
+        let (Some(root), Some(bus)) = (self.project.clone().or(self.root.clone()), Self::bus())
+        else {
             return;
         };
         let stamp = bus.answers_stamp(&root);
@@ -778,13 +929,61 @@ impl Workspace {
 
     /// Reads this repository's chats again for the Agents window; whether they changed.
     pub(super) fn refresh_chats(&mut self) -> bool {
-        let chats = match (self.root.as_ref(), Self::bus()) {
+        let mut chats = match (self.project.as_ref().or(self.root.as_ref()), Self::bus()) {
             (Some(root), Some(bus)) => bus.chats(root),
             _ => Vec::new(),
         };
+        // A chat long gone with nothing of the review on it is not shown (#77).
+        chats.retain(|c| {
+            c.listening()
+                || agents::now() - c.beat < 24 * 3600
+                || self
+                    .comments
+                    .iter()
+                    .any(|n| n.sent.as_ref().is_some_and(|s| s.session == c.session))
+        });
         let changed = chats != self.agent_chats;
         self.agent_chats = chats;
         changed
+    }
+
+    /// A toast for each chat that began listening or went since `before`; one taking notes to work
+    /// on says nothing (#77).
+    fn say_chats_changed(&mut self, before: &[agents::Chat], cx: &mut Context<Self>) {
+        let name = |c: &agents::Chat| {
+            if c.title.is_empty() {
+                c.agent.clone()
+            } else {
+                format!("{} · {}", c.agent, c.title)
+            }
+        };
+        let working = |session: &str| {
+            self.comments.iter().any(|c| {
+                c.state == State::Sent
+                    && c.sent
+                        .as_ref()
+                        .is_some_and(|s| s.session == session && s.delivered)
+            })
+        };
+        let mut said: Vec<String> = Vec::new();
+        for c in &self.agent_chats {
+            let was = before.iter().find(|b| b.session == c.session);
+            match (was.map(agents::Chat::listening), c.listening()) {
+                (None, true) => said.push(format!("{} is listening", name(c))),
+                (Some(true), false) if !working(&c.session) => {
+                    said.push(format!("{} stopped listening", name(c)))
+                }
+                _ => {}
+            }
+        }
+        for b in before {
+            if b.listening() && !self.agent_chats.iter().any(|c| c.session == b.session) {
+                said.push(format!("{} stopped listening", name(b)));
+            }
+        }
+        for text in said {
+            self.toast_info(text.into(), cx);
+        }
     }
 
     /// The Agents tool window: the chats that listen here, then the purple comments by state.
@@ -804,80 +1003,133 @@ impl Workspace {
                 .filter(|c| c.replies.is_empty() || c.answer.is_some())
                 .count()
         };
-        let chats =
-            self.agent_chats.iter().enumerate().map(|(ix, c)| {
-                let busy = if c.listening() {
-                    0
-                } else {
-                    working(&c.session)
-                };
-                div()
-                    .mx(px(6.))
-                    .px(px(8.))
-                    .py(px(6.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().flex_none().size(px(8.)).rounded_full().bg(
-                                if c.listening() {
-                                    theme::added()
-                                } else if busy > 0 {
-                                    theme::agent()
-                                } else {
-                                    theme::faint()
-                                },
-                            ))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(c.agent.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_size(px(11.))
-                                    .text_color(theme::faint())
-                                    .when(busy > 0, |s| s.text_color(theme::agent()))
-                                    .child(if c.listening() {
-                                        "listening".to_owned()
-                                    } else if busy > 0 {
-                                        format!("working · {}", super::plural(busy, "comment"))
-                                    } else {
-                                        "quiet".to_owned()
-                                    }),
-                            ),
-                    )
-                    .children((!c.title.is_empty()).then(|| {
-                        // A long hover: the whole title, where it works, when it was last heard (X59).
-                        let said: gpui::SharedString = format!(
-                            "{}\n{} in {} · last heard {}",
-                            c.title,
-                            c.agent,
-                            super::format::home_relative(&c.repo),
-                            super::hover::full_date(c.beat)
+        // Each chat here, in any worktree: its mark, what it works on, its state and branch (#77).
+        let chats = self.agent_chats.iter().enumerate().map(|(ix, c)| {
+            let busy = if c.listening() {
+                0
+            } else {
+                working(&c.session)
+            };
+            let (letter, hue) = self.chat_mark(&c.session);
+            let state = if c.listening() {
+                "listening".to_owned()
+            } else if busy > 0 {
+                format!("working · {}", super::plural(busy, "comment"))
+            } else {
+                "gone".to_owned()
+            };
+            // A long hover: the whole title, where it works, when it was last heard (X59).
+            let said: gpui::SharedString = format!(
+                "{}\n{} in {} · last heard {}",
+                c.title,
+                c.agent,
+                super::format::home_relative(&c.repo),
+                super::hover::full_date(c.beat)
+            )
+            .into();
+            div()
+                .id(("chat-row", ix))
+                .mx(px(6.))
+                .px(px(8.))
+                .py(px(6.))
+                .flex()
+                .items_start()
+                .gap(px(8.))
+                .tooltip_show_delay(super::hover::LONG)
+                .tooltip(move |_, cx| cx.new(|_| super::TipOwned(said.clone())).into())
+                .child(chat_badge(letter, hue, !c.listening() && busy == 0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(if c.title.is_empty() {
+                                            c.agent.clone()
+                                        } else {
+                                            c.title.clone()
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(px(11.))
+                                        .text_color(if c.listening() {
+                                            theme::added()
+                                        } else if busy > 0 {
+                                            theme::agent()
+                                        } else {
+                                            theme::faint()
+                                        })
+                                        .child(state),
+                                ),
                         )
-                        .into();
-                        div()
-                            .id(("chat-title", ix))
-                            .pl(px(16.))
-                            .truncate()
-                            .text_size(px(12.))
-                            .text_color(theme::muted())
-                            .child(c.title.clone())
-                            .tooltip_show_delay(super::hover::LONG)
-                            .tooltip(move |_, cx| cx.new(|_| super::TipOwned(said.clone())).into())
-                    }))
-            });
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .text_size(px(11.))
+                                .text_color(theme::faint())
+                                .child(c.agent.clone())
+                                .children((!c.branch.is_empty()).then(|| {
+                                    div().font_family(theme::CODE_FONT).child(c.branch.clone())
+                                })),
+                        ),
+                )
+        });
+        // Where a note written here goes, and the way to change it (#77).
+        let branch = self.page_branch();
+        let route = self.route_of(branch.as_deref()).cloned().map(|chat| {
+            let (letter, hue) = self.chat_mark(&chat.session);
+            let on = branch.clone().unwrap_or_default();
+            div()
+                .mx(px(14.))
+                .mt(px(6.))
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(6.))
+                .text_size(px(12.))
+                .text_color(theme::muted())
+                .child(match &branch {
+                    Some(b) => format!("Notes on {b} go to"),
+                    None => "Notes go to".to_owned(),
+                })
+                .child(chat_badge(letter, hue, false))
+                .child(
+                    div()
+                        .text_color(theme::text())
+                        .child(if chat.title.is_empty() {
+                            chat.agent.clone()
+                        } else {
+                            chat.title.clone()
+                        }),
+                )
+                .child(
+                    div()
+                        .id("route-change")
+                        .text_color(theme::accent())
+                        .cursor_pointer()
+                        .child("Change…")
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.open_route_pick(on.clone(), cx)
+                        })),
+                )
+        });
         // One list, newest first, each row its kind as a chip (#76, B1); the filter narrows it.
-        let alive = |session: &str| self.agent_chats.iter().any(|c| c.session == session);
+        let alive = |session: &str| self.chat_listens(session);
         let archived = self.comments.iter().filter(|c| c.archived).count();
         let listed: Vec<&crate::review::Comment> = self
             .listed_agent_ids()
@@ -971,6 +1223,7 @@ impl Workspace {
                 .py(px(6.))
                 .child(group_heading("Chats here".to_owned(), None))
                 .children(chats)
+                .children(route)
                 .children(self.agent_chats.is_empty().then(|| {
                     div()
                         .px(px(14.))
@@ -1048,8 +1301,16 @@ impl Workspace {
         );
         let when = c.replies.last().map(|r| r.at).filter(|&at| at > 0);
         let mut actions: Vec<gpui::AnyElement> = Vec::new();
+        // Where a note its gone chat never took would go now (#77).
+        let instead = self.route_of(c.branch.as_deref()).map(|chat| {
+            if chat.title.is_empty() {
+                chat.agent.clone()
+            } else {
+                chat.title.clone()
+            }
+        });
         let mut action =
-            |label: &'static str, primary: bool, run: fn(&mut Self, u64, &mut Context<Self>)| {
+            |label: String, primary: bool, run: fn(&mut Self, u64, &mut Context<Self>)| {
                 actions.push(
                     row_button(
                         ("agent-act", id as usize * 8 + actions.len()),
@@ -1064,34 +1325,52 @@ impl Workspace {
                 );
             };
         if c.archived {
-            action("Unarchive", false, |this, id, cx| {
+            action("Unarchive".to_owned(), false, |this, id, cx| {
                 this.set_archived(id, false, cx)
             });
         } else {
             match kind {
                 Kind::Draft => {
-                    action("Send", true, |this, id, cx| this.send_agent(vec![id], cx));
-                    action("Edit", false, |this, id, cx| {
+                    action("Send".to_owned(), true, |this, id, cx| {
+                        this.send_agent(vec![id], cx)
+                    });
+                    action("Edit".to_owned(), false, |this, id, cx| {
                         this.start_edit(super::comments::Change::Agent(id), cx)
                     });
-                    action("Delete", false, |this, id, cx| this.delete_draft(id, cx));
+                    action("Delete".to_owned(), false, |this, id, cx| {
+                        this.delete_draft(id, cx)
+                    });
                 }
-                Kind::Asks => action("Answer…", true, |this, id, cx| this.jump_to(id, cx)),
-                Kind::Sent => action("Withdraw", false, |this, id, cx| this.withdraw(id, cx)),
-                Kind::Waiting => action("Back to drafts", false, |this, id, cx| {
+                Kind::Asks => action("Answer…".to_owned(), true, |this, id, cx| {
+                    this.jump_to(id, cx)
+                }),
+                Kind::Sent => action("Withdraw".to_owned(), false, |this, id, cx| {
                     this.withdraw(id, cx)
                 }),
+                // A note a gone chat never took (#77): to the chat its route takes now, or back.
+                Kind::Waiting => {
+                    if let Some(to) = instead {
+                        action(format!("Send to {to} instead"), true, |this, id, cx| {
+                            this.resend(id, cx)
+                        });
+                    }
+                    action("Back to drafts".to_owned(), false, |this, id, cx| {
+                        this.withdraw(id, cx)
+                    });
+                }
                 Kind::Addressed => {
-                    action("Resolve", true, |this, id, cx| {
+                    action("Resolve".to_owned(), true, |this, id, cx| {
                         this.resolve_agent_comment(id, cx)
                     });
-                    action("Archive", false, |this, id, cx| {
+                    action("Archive".to_owned(), false, |this, id, cx| {
                         this.set_archived(id, true, cx)
                     });
                 }
-                Kind::Working | Kind::Resolved => action("Archive", false, |this, id, cx| {
-                    this.set_archived(id, true, cx)
-                }),
+                Kind::Working | Kind::Resolved => {
+                    action("Archive".to_owned(), false, |this, id, cx| {
+                        this.set_archived(id, true, cx)
+                    })
+                }
             }
         }
         div()
@@ -1113,6 +1392,11 @@ impl Workspace {
                     .gap(px(8.))
                     .text_size(px(11.))
                     .child(kind_chip(kind))
+                    // The chat it went to (#77).
+                    .children(c.sent.as_ref().filter(|s| !s.session.is_empty()).map(|s| {
+                        let (letter, hue) = self.chat_mark(&s.session);
+                        chat_badge(letter, hue, !self.chat_listens(&s.session))
+                    }))
                     .child(
                         div()
                             .flex_1()
@@ -1169,7 +1453,7 @@ impl Workspace {
 
     /// The comments the Agents window lists, newest first: the filter's, or the archived ones.
     fn listed_agent_ids(&self) -> Vec<u64> {
-        let alive = |session: &str| self.agent_chats.iter().any(|c| c.session == session);
+        let alive = |session: &str| self.chat_listens(session);
         let mut ids: Vec<u64> = self
             .comments
             .iter()
@@ -1202,7 +1486,7 @@ impl Workspace {
     /// ↵ in the Agents window: the picked row's first action — Send, Answer, Withdraw, Resolve,
     /// Archive.
     pub(super) fn agent_row_action(&mut self, cx: &mut Context<Self>) {
-        let alive = |session: &str| self.agent_chats.iter().any(|c| c.session == session);
+        let alive = |session: &str| self.chat_listens(session);
         let Some((id, kind, archived)) = self
             .agent_row
             .and_then(|id| self.comments.iter().find(|c| c.id == id))
@@ -1375,10 +1659,14 @@ impl Workspace {
                             div()
                                 .text_size(px(15.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(format!(
-                                    "Send {count} comment{} to",
-                                    if count == 1 { "" } else { "s" }
-                                )),
+                                .child(match &pick.route {
+                                    Some(b) if !b.is_empty() => format!("Notes on {b} go to"),
+                                    Some(_) => "Notes go to".to_owned(),
+                                    None => format!(
+                                        "Send {count} comment{} to",
+                                        if count == 1 { "" } else { "s" }
+                                    ),
+                                }),
                         )
                         .children(rows)
                         .child(
@@ -1624,7 +1912,7 @@ fn kind_chip(kind: Kind) -> gpui::Div {
 /// A button of a picked row: Send filled, the rest plain.
 fn row_button(
     id: impl Into<gpui::ElementId>,
-    label: &'static str,
+    label: String,
     primary: bool,
 ) -> gpui::Stateful<gpui::Div> {
     div()
@@ -1662,6 +1950,24 @@ fn foot_button(id: &'static str, label: String) -> gpui::Stateful<gpui::Div> {
         .cursor_pointer()
         .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
         .child(label)
+}
+
+/// A chat's mark: its letter on its hue, hollow when it is gone.
+pub(super) fn chat_badge(letter: char, hue: gpui::Rgba, gone: bool) -> gpui::Div {
+    div()
+        .flex_none()
+        .size(px(18.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(10.))
+        .font_weight(FontWeight::BOLD)
+        .border_1()
+        .border_color(hue)
+        .when(!gone, |s| s.bg(hue).text_color(theme::base()))
+        .when(gone, |s| s.text_color(hue))
+        .child(letter.to_string())
 }
 
 #[cfg(test)]

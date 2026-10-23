@@ -1083,6 +1083,7 @@ impl Workspace {
                 Some(rev) => rev.map(|id| id.to_string()),
                 None => self.shown_head().map(|id| id.to_string()),
             },
+            branch: self.page_branch(),
             ..Default::default()
         });
         self.save_comments();
@@ -1566,7 +1567,7 @@ impl Workspace {
     }
 
     pub(super) fn save_comments(&self) {
-        if let Some(root) = &self.root {
+        if let Some(root) = self.project.as_ref().or(self.root.as_ref()) {
             review::save(root, &self.comments);
         }
     }
@@ -2079,6 +2080,12 @@ impl Workspace {
             .child(div().size(px(7.)).rounded_full().bg(tone))
             .child(match compose.target {
                 Target::Request(iid) => format!("Everyone on !{iid}"),
+                // The chat it will go to, by its page's branch (#77).
+                Target::Agent => match self.route_of(self.page_branch().as_deref()) {
+                    Some(chat) if !chat.title.is_empty() => format!("To: {}", chat.title),
+                    Some(chat) => format!("To: {}", chat.agent),
+                    None => "Your agent".to_owned(),
+                },
                 _ => "Your agent".to_owned(),
             })
             .when(switchable, |s| {

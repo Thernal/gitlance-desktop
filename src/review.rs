@@ -41,6 +41,9 @@ pub struct Comment {
     /// it. Kept on this Mac, never posted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<String>,
+    /// The branch of the page it was written on: it goes to the chat working on that branch (#77).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     /// Put away once it was read, addressed or resolved: out of the lists and off its line (#76).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,

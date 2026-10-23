@@ -336,6 +336,29 @@ impl Repo {
             .to_path_buf()
     }
 
+    /// The project's main working tree: this one, or for a linked worktree the one it was added
+    /// from, named as `root` names it — where the review's notes for the agents are kept, whatever
+    /// worktree a chat works in (#77).
+    pub fn main_root(&self) -> PathBuf {
+        if !self.inner.is_worktree() {
+            return self.root();
+        }
+        self.inner
+            .commondir()
+            .parent()
+            .and_then(|main| Repository::open(main).ok())
+            .and_then(|main| main.workdir().map(Path::to_path_buf))
+            .unwrap_or_else(|| self.root())
+    }
+
+    /// The branch checked out here, by name; None when `HEAD` is detached.
+    pub fn head_branch(&self) -> Option<String> {
+        let head = self.inner.head().ok()?;
+        head.is_branch()
+            .then(|| head.shorthand().ok().map(str::to_owned))
+            .flatten()
+    }
+
     /// The git directory, where refs and reflogs live.
     pub fn git_dir(&self) -> PathBuf {
         self.inner.path().to_path_buf()

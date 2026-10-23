@@ -197,18 +197,36 @@ impl Workspace {
                 .items_center()
                 .gap(px(4.))
                 .pt(px(2.))
-                .children(self.space_tools().iter().map(|&tool| match tool {
-                    Tool::Outline => button(tool, None, String::new()),
-                    Tool::Discussions => button(
-                        tool,
-                        count(self.comments_total(), theme::accent()),
-                        super::plural(self.comments_total(), "comment"),
-                    ),
-                    Tool::Agents => button(
-                        tool,
-                        count(drafts, theme::agent()),
-                        super::plural(drafts, "draft"),
-                    ),
+                .children(self.space_tools().iter().map(|&tool| {
+                    match tool {
+                        Tool::Outline => button(tool, None, String::new()).into_any_element(),
+                        Tool::Discussions => button(
+                            tool,
+                            count(self.comments_total(), theme::accent()),
+                            super::plural(self.comments_total(), "comment"),
+                        )
+                        .into_any_element(),
+                        // A dot per chat that listens, on its own hue (#77).
+                        Tool::Agents => div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(px(3.))
+                            .child(button(
+                                tool,
+                                count(drafts, theme::agent()),
+                                super::plural(drafts, "draft"),
+                            ))
+                            .child(div().flex().gap(px(3.)).children(
+                                self.agent_chats.iter().filter(|c| c.listening()).map(|c| {
+                                    div()
+                                        .size(px(5.))
+                                        .rounded_full()
+                                        .bg(self.chat_mark(&c.session).1)
+                                }),
+                            ))
+                            .into_any_element(),
+                    }
                 })),
         )
     }

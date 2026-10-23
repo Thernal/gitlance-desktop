@@ -25,8 +25,15 @@ pub struct Chat {
     pub session: String,
     /// "Claude Code", "Codex", …
     pub agent: String,
-    /// The repository it works in.
+    /// The folder it works in: the project's main working tree, or a worktree of it.
     pub repo: PathBuf,
+    /// The project's main working tree, where its notes are kept (#77); empty from an older
+    /// watcher, which worked in the main one.
+    #[serde(default)]
+    pub project: PathBuf,
+    /// The branch checked out in its folder: the notes of that branch go to it (#77).
+    #[serde(default)]
+    pub branch: String,
     /// Its first message, to tell chats apart.
     pub title: String,
     /// The agent's process, and the watcher's.
@@ -130,8 +137,9 @@ impl Bus {
         let _ = std::fs::remove_file(self.chat_file(session));
     }
 
-    /// The chats that listened in `root`, newest first; a chat whose watcher stopped saying so is
-    /// still there until the watcher removes it, and `listening` tells them apart.
+    /// The chats that listened in project `root` (its main working tree), in any of its
+    /// worktrees, newest first; a chat whose watcher stopped saying so is still there until the
+    /// watcher removes it, and `listening` tells them apart.
     pub fn chats(&self, root: &Path) -> Vec<Chat> {
         let Ok(dir) = std::fs::read_dir(self.dir.join("chats")) else {
             return Vec::new();
@@ -140,7 +148,9 @@ impl Bus {
             .flatten()
             .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
             .filter_map(|e| serde_json::from_str(&std::fs::read_to_string(e.path()).ok()?).ok())
-            .filter(|c: &Chat| c.repo == root)
+            .filter(|c: &Chat| {
+                c.project == root || (c.project.as_os_str().is_empty() && c.repo == root)
+            })
             .collect();
         chats.sort_by_key(|c| std::cmp::Reverse(c.beat));
         chats
@@ -261,6 +271,41 @@ pub fn send(comments: &mut [Comment], ids: &[u64], session: &str, title: &str) -
         });
     }
     batch
+}
+
+/// Where a note on `branch` goes (#77): the chat picked for that branch (`chosen`) while it
+/// listens, else the chat whose folder is on that branch, else the project's default — the newest
+/// listening chat in the main working tree `main`, else the newest listening one. `chats` newest
+/// first.
+pub fn route<'a>(
+    branch: Option<&str>,
+    chosen: Option<&str>,
+    chats: &'a [Chat],
+    main: &Path,
+) -> Option<&'a Chat> {
+    let listening = || chats.iter().filter(|c| c.listening());
+    chosen
+        .and_then(|s| listening().find(|c| c.session == s))
+        .or_else(|| branch.and_then(|b| listening().find(|c| c.branch == b)))
+        .or_else(|| listening().find(|c| c.repo == main))
+        .or_else(|| listening().next())
+}
+
+/// Who is running this: the agent, its session and its process, from what it puts in a command's
+/// environment (the chat's watcher and the MCP server, #77).
+pub fn whoami() -> Option<(String, String, u32, Option<PathBuf>)> {
+    let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    if let Some(session) = var("CLAUDE_CODE_SESSION_ID") {
+        let pid = var("CLAUDE_PID").and_then(|p| p.parse().ok()).unwrap_or(0);
+        let config = var("CLAUDE_CONFIG_DIR")
+            .map(PathBuf::from)
+            .or_else(|| Some(std::env::home_dir()?.join(".claude")));
+        return Some(("Claude Code".into(), session, pid, config));
+    }
+    if let Some(session) = var("CODEX_SESSION_ID").or_else(|| var("CODEX_THREAD_ID")) {
+        return Some(("Codex".into(), session, 0, None));
+    }
+    None
 }
 
 /// The comments waiting for `session`: sent to it and not handed over yet.
@@ -507,6 +552,39 @@ pub fn brief(root: &Path, comments: &[&Comment]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn chat(session: &str, repo: &str, branch: &str, listening: bool) -> Chat {
+        Chat {
+            session: session.into(),
+            repo: repo.into(),
+            project: "/p".into(),
+            branch: branch.into(),
+            beat: if listening { now() } else { now() - 3600 },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_note_goes_to_the_chat_on_its_branch_else_the_default() {
+        let main = Path::new("/p");
+        // Newest first: a chat in a worktree on feature/x, one in the main tree on main.
+        let chats = [
+            chat("w", "/p-x", "feature/x", true),
+            chat("m", "/p", "main", true),
+            chat("gone", "/p-y", "feature/y", false),
+        ];
+        let to = |branch, chosen| route(branch, chosen, &chats, main).map(|c| c.session.as_str());
+        assert_eq!(to(Some("feature/x"), None), Some("w"));
+        assert_eq!(to(Some("main"), None), Some("m"));
+        // No chat on its branch (its chat is gone): the main tree's.
+        assert_eq!(to(Some("feature/y"), None), Some("m"));
+        assert_eq!(to(None, None), Some("m"));
+        // Picked with Change…, while it listens.
+        assert_eq!(to(Some("feature/x"), Some("m")), Some("m"));
+        assert_eq!(to(Some("feature/x"), Some("gone")), Some("w"));
+        // None listens: nowhere.
+        assert_eq!(route(Some("main"), None, &chats[2..], main), None);
+    }
 
     fn comment(id: u64) -> Comment {
         Comment {

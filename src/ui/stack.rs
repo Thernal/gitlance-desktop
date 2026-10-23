@@ -904,6 +904,18 @@ impl Workspace {
                                 theme::text()
                             }),
                     )
+                    // Another chat is changing it (#77).
+                    .children(self.changing(file.path()).map(|(name, letter, hue)| {
+                        div()
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .text_size(px(12.))
+                            .text_color(theme::muted())
+                            .child(super::agent::chat_badge(letter, hue, false))
+                            .child(format!("{name} is changing it"))
+                    }))
                     .children(self.page_switch(file, true, this))
                     .child(
                         div()

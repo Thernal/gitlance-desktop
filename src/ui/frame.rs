@@ -903,7 +903,14 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &QuickCreateRequest, _, cx| this.open_create_quick(cx)),
             )
-            .on_action(cx.listener(|this, _: &SendToAgent, _, cx| this.open_agent_pick(cx)))
+            // Every draft to its route; with no chat listening, the card asks (#77).
+            .on_action(cx.listener(|this, _: &SendToAgent, _, cx| {
+                let ids = this.agent_drafts();
+                if ids.is_empty() {
+                    return this.open_agent_pick(cx);
+                }
+                this.send_agent(ids, cx)
+            }))
             .on_action(cx.listener(|this, _: &ShowShortcuts, _, cx| this.toggle_shortcuts(cx)))
             .on_action(cx.listener(|this, _: &NextThread, _, cx| {
                 // ⇧N: a note on the agent's form in view, else the next discussion (#10 C).
