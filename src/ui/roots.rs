@@ -52,9 +52,11 @@ pub enum Group {
     Asks,
     /// You marked files of it, and it was pushed since.
     Updated,
+    /// Not asked of you, and nothing of it reviewed yet: new to you; after what changed, before
+    /// what is reviewed.
+    New,
     /// Its head is reviewed.
     Reviewed,
-    Others,
     Yours,
 }
 
@@ -63,8 +65,8 @@ impl Group {
         match self {
             Group::Asks => "Needs your review",
             Group::Updated => "Updated since your review",
+            Group::New => "New",
             Group::Reviewed => "Reviewed, nothing new",
-            Group::Others => "Others",
             Group::Yours => "Yours",
         }
     }
@@ -75,8 +77,8 @@ impl Group {
         match self {
             Group::Asks => ("eye", theme::accent()),
             Group::Updated => ("refresh", theme::warning()),
+            Group::New => ("pull-request", theme::muted()),
             Group::Reviewed => ("check", theme::added()),
-            Group::Others => ("pull-request", theme::faint()),
             Group::Yours => ("user", theme::faint()),
         }
     }
@@ -86,8 +88,9 @@ impl Group {
         match self {
             Group::Asks => "asks",
             Group::Updated => "updated",
+            // "others", its name before.
+            Group::New => "others",
             Group::Reviewed => "reviewed",
-            Group::Others => "others",
             Group::Yours => "yours",
         }
     }
@@ -96,8 +99,8 @@ impl Group {
         [
             Group::Asks,
             Group::Updated,
+            Group::New,
             Group::Reviewed,
-            Group::Others,
             Group::Yours,
         ]
         .into_iter()
@@ -105,9 +108,8 @@ impl Group {
     }
 }
 
-/// The groups folded in a project whose list was never folded or unfolded: those that need
-/// nothing from you.
-const FOLDED: [Group; 2] = [Group::Reviewed, Group::Others];
+/// The groups folded in a project whose list was never folded or unfolded: what you reviewed.
+const FOLDED: [Group; 1] = [Group::Reviewed];
 
 /// What the requests list keeps per project (`<repo>\t<folded groups>\t<requests opened>`, both
 /// comma-separated) (#81).
@@ -124,7 +126,7 @@ pub fn group(mine: bool, asks: bool, seen: Seen) -> Group {
         Seen::Earlier => Group::Updated,
         Seen::Started => Group::Asks,
         Seen::Never if asks => Group::Asks,
-        Seen::Never => Group::Others,
+        Seen::Never => Group::New,
     }
 }
 
@@ -2165,19 +2167,21 @@ mod tests {
     fn a_request_is_grouped_by_what_it_needs_from_you() {
         assert_eq!(group(true, true, Seen::Done), Group::Yours);
         assert_eq!(group(false, true, Seen::Never), Group::Asks);
-        assert_eq!(group(false, false, Seen::Never), Group::Others);
+        assert_eq!(group(false, false, Seen::Never), Group::New);
         assert_eq!(group(false, false, Seen::Started), Group::Asks);
         assert_eq!(group(false, true, Seen::Earlier), Group::Updated);
         assert_eq!(group(false, true, Seen::Done), Group::Reviewed);
-        assert!(Group::Asks < Group::Updated && Group::Others < Group::Yours);
+        // What changed, then what is new, then what is reviewed; yours last.
+        assert!(Group::Asks < Group::Updated && Group::Updated < Group::New);
+        assert!(Group::New < Group::Reviewed && Group::Reviewed < Group::Yours);
     }
 
     #[test]
     fn a_projects_folds_and_opened_requests_are_kept_on_its_own_line() {
-        let folded = HashSet::from([Group::Others, Group::Reviewed]);
+        let folded = HashSet::from([Group::New, Group::Reviewed]);
         let opened = HashSet::from([415, 398]);
         let text = with_kept_list("b\tasks\t7\n", "a", &folded, &opened);
-        assert_eq!(text, "a\treviewed,others\t398,415\nb\tasks\t7\n");
+        assert_eq!(text, "a\tothers,reviewed\t398,415\nb\tasks\t7\n");
         assert_eq!(kept_list(&text, "a"), Some((folded, opened)));
         assert_eq!(
             kept_list(&text, "b"),

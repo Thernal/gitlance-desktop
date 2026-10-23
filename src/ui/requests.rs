@@ -326,7 +326,7 @@ impl Workspace {
 
     /// The next request to review after the open one, going round the list: one that needs your
     /// review or was pushed since your review first — one just reviewed has moved down to
-    /// Reviewed, below them —, then one nobody asked you for; never one of yours (#81).
+    /// Reviewed, below them —, then a new one nobody asked you for; never one of yours (#81).
     fn next_request(&self) -> Option<&Mr> {
         let shown = self.shown_requests();
         let at = shown
@@ -336,7 +336,7 @@ impl Workspace {
             .iter()
             .map(|m| match self.group_of(m) {
                 Group::Asks | Group::Updated => Some(0),
-                Group::Others => Some(1),
+                Group::New => Some(1),
                 Group::Reviewed | Group::Yours => None,
             })
             .collect();
