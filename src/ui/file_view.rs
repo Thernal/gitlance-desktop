@@ -1,7 +1,7 @@
 //! A file read in Code (#71, #75): read only, at Code's revision — the working tree on disk by
 //! default, else a commit's —, highlighted, with its line numbers; a Markdown file rendered
-//! (Source shows its lines), an image shown. A click on a line number writes a note for the agent
-//! on that plain line: kept on the path, the line and its text, drawn under the line while the
+//! (Source shows its lines), an image shown. A click on a line number or on the + of a hovered
+//! line (or c, lines selected) writes a note for the agent on that plain line: kept on the path, the line and its text, drawn under the line while the
 //! text is there (else it is outdated, in the Agents window). Opened from another space, it is
 //! read as that page shows the project. A binary file says so, with Open in (#78); ⌘W closes its
 //! tab, esc goes up to Code.
@@ -421,7 +421,8 @@ impl Workspace {
         let size = self.code_size();
         let row = (size * 1.55).round();
         let digits = view.lines.len().max(1).to_string().len() as f32;
-        let gutter = digits * size * 0.62 + 20.;
+        // Room on its left for the + that writes a note (#104).
+        let gutter = digits * size * 0.62 + 42.;
         let rows = Rc::new(self.file_rows(view));
         if view.list.item_count() != rows.len() {
             let top = view.list.logical_scroll_top();
@@ -474,13 +475,43 @@ impl Workspace {
             let comment = this.clone();
             let styled = StyledText::new(line.clone()).with_highlights(highlights);
             let layout = styled.layout().clone();
+            let plus = this.clone();
             // In the code's font and size on each row: the list's own reach none of its rows.
             div()
+                .id(("file-row", n))
+                .group("file-row")
+                .relative()
                 .h(px(row))
                 .font_family(theme::CODE_FONT)
                 .text_size(px(size))
                 .flex()
                 .items_center()
+                // A note for your agent on the line, as the diff's + is (#104).
+                .child(
+                    div()
+                        .id(("file-plus", n))
+                        .absolute()
+                        .left(px(3.))
+                        .top(px(((row - 18.) / 2.).max(0.)))
+                        .size(px(18.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(super::ROW_RADIUS))
+                        .bg(theme::agent())
+                        .text_color(theme::base())
+                        .font_family(theme::UI_FONT)
+                        .text_size(px(13.))
+                        .cursor_pointer()
+                        .invisible()
+                        .group_hover("file-row", |s| s.visible())
+                        .child("+")
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            plus.update(cx, |ws, cx| ws.start_file_comment(n as u32 + 1, cx))
+                                .ok();
+                        }),
+                )
                 .child(
                     div()
                         .id(("file-line", n))

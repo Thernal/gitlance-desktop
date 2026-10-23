@@ -479,6 +479,11 @@ impl Workspace {
     /// A note on line `line` of the file read in Code: for the agent, kept on the path, the line
     /// and its text, written under the line (#75).
     pub(super) fn start_file_comment(&mut self, line: u32, cx: &mut Context<Self>) {
+        self.start_file_comment_on(None, line, cx)
+    }
+
+    /// A note on lines `first`…`line` of the file read in Code (#104), under the last.
+    fn start_file_comment_on(&mut self, first: Option<u32>, line: u32, cx: &mut Context<Self>) {
         let Some(view) = &self.file_view else {
             return;
         };
@@ -488,7 +493,7 @@ impl Workspace {
         self.compose = Some(Compose {
             path: view.path.clone(),
             old: false,
-            first: None,
+            first: first.filter(|&f| f < line),
             line,
             code: code.to_owned(),
             edit: TextEdit::default(),
@@ -545,6 +550,26 @@ impl Workspace {
         self.comments.iter().any(|c| {
             c.path.strip_suffix('/') == Some(path) && !c.archived && c.state != State::Resolved
         })
+    }
+
+    /// The lines selected in the file read in Code, first and last (1-based); a selection that
+    /// ends at the start of a line does not take that line (#104).
+    fn file_selected_lines(&self) -> Option<(u32, u32)> {
+        let view = self.file_view.as_ref()?;
+        let sel = self
+            .note_sel
+            .as_ref()
+            .filter(|s| s.note.as_ref() == format!("file-lines-{}", view.path))?;
+        if sel.anchor == sel.head {
+            return None;
+        }
+        let ((first, _), (last, at)) = sel.ends();
+        let last = if at == 0 && last > first {
+            last - 1
+        } else {
+            last
+        };
+        Some((first as u32 + 1, last as u32 + 1))
     }
 
     /// The composer written on Code's file: its path and line.
@@ -1113,8 +1138,12 @@ impl Workspace {
         }
         self.last_request_target = None;
         let id = self.comments.iter().map(|c| c.id).max().unwrap_or(0) + 1;
-        let above = match (compose.first, &self.data) {
-            (Some(first), Some(data)) => (first..compose.line)
+        let above = match (compose.first, &self.data, &self.file_view) {
+            // On a file read in Code: its own lines, whatever diff is loaded (#104).
+            (Some(first), _, Some(view)) if compose.file.is_some() => (first..compose.line)
+                .filter_map(|n| view.line(n).map(str::to_owned))
+                .collect(),
+            (Some(first), Some(data), _) if compose.file.is_none() => (first..compose.line)
                 .map(|n| data.side(compose.old).line(n).0.to_owned())
                 .collect(),
             _ => Vec::new(),
@@ -1310,6 +1339,15 @@ impl Workspace {
             && self.compose.is_none()
         {
             return self.start_folder_comment(&path, cx);
+        }
+        // On a file read in Code with lines selected: a note on them (#104).
+        if self.code_file_shown()
+            && !self.settings_open
+            && self.compose.is_none()
+            && let Some((first, last)) = self.file_selected_lines()
+        {
+            self.note_sel = None;
+            return self.start_file_comment_on(Some(first), last, cx);
         }
         // On a file read in Code: the number of the line to write a note on (#75).
         if self.code_file_shown() && !self.settings_open && self.compose.is_none() {

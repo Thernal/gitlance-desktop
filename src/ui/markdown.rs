@@ -32,7 +32,8 @@ pub struct TextSel {
 }
 
 impl TextSel {
-    fn ends(&self) -> ((usize, usize), (usize, usize)) {
+    /// Its two ends, first then last: (block, byte in it).
+    pub fn ends(&self) -> ((usize, usize), (usize, usize)) {
         (self.anchor.min(self.head), self.anchor.max(self.head))
     }
 
