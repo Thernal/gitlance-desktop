@@ -31,10 +31,16 @@ pub fn keys(mac: &str) -> String {
 
 /// macOS keys in Windows and Linux terms: `cmd-` is `ctrl-`, except ⌘1…⌘9 (the tabs), which are
 /// `alt-1`…`alt-9`, as browsers there have them: `ctrl-1`…`ctrl-4` move between zones. ⌃⌘ (the
-/// spaces) is Ctrl+Shift, since Ctrl is already ⌘'s.
+/// spaces) is Ctrl+Shift, since Ctrl is already ⌘'s. ⌥⌘→ ⌥⌘← (the open items) are Ctrl+PageDown
+/// and Ctrl+PageUp, the browsers' there: Ctrl+Alt+arrows switch workspaces on Linux.
 pub fn pc_keys(mac: &str) -> String {
     mac.split(' ')
         .map(|stroke| {
+            match stroke {
+                "cmd-alt-right" => return "ctrl-pagedown".to_owned(),
+                "cmd-alt-left" => return "ctrl-pageup".to_owned(),
+                _ => {}
+            }
             if let Some(key) = stroke.strip_prefix("ctrl-cmd-") {
                 return format!("ctrl-shift-{key}");
             }
@@ -147,6 +153,7 @@ mod tests {
         assert_eq!(pc_keys("cmd-alt-1"), "ctrl-alt-1");
         assert_eq!(pc_keys("cmd-3"), "alt-3");
         assert_eq!(pc_keys("cmd-0"), "ctrl-0");
+        assert_eq!(pc_keys("cmd-alt-right"), "ctrl-pagedown");
         assert_eq!(pc_keys("cmd--"), "ctrl--");
         assert_eq!(pc_keys("ctrl-2"), "ctrl-2");
         assert_eq!(pc_keys("ctrl-cmd-4"), "ctrl-shift-4");

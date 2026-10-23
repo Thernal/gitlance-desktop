@@ -1099,6 +1099,35 @@ impl Workspace {
         crate::storage::save(FILE, lines.join("\n") + "\n");
     }
 
+    /// ⌥⌘→ ⌥⌘← (Ctrl+PageDown, Ctrl+PageUp elsewhere): the next or the previous item open under
+    /// the space — its requests or branches, Code's tabs —, going round.
+    pub(super) fn step_open_item(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let space = self.nav.space;
+        if space == Space::Code {
+            return self.step_code_tab(forward, cx);
+        }
+        let items: Vec<Item> = self
+            .open_items(space)
+            .into_iter()
+            .map(|o| o.item.clone())
+            .collect();
+        let n = items.len();
+        if n == 0 {
+            return;
+        }
+        let at = self
+            .page_of(space)
+            .and_then(Page::item)
+            .and_then(|i| items.iter().position(|x| *x == i));
+        let to = match at {
+            Some(at) => (at + if forward { 1 } else { n - 1 }) % n,
+            None if forward => 0,
+            None => n - 1,
+        };
+        self.nav.picked.clear();
+        self.show_open(&items[to], cx);
+    }
+
     /// The open items of `space`, oldest first.
     pub(super) fn open_items(&self, space: Space) -> Vec<&Opened> {
         self.nav

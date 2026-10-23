@@ -155,6 +155,8 @@ actions!(
         ShowOverview,
         NextSection,
         PreviousSection,
+        NextOpenItem,
+        PreviousOpenItem,
         MarkReviewed,
         OpenRecent,
         ZoomIn,
@@ -324,6 +326,17 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("cmd-i"), ShowOverview, Some("Workspace && !Typing")),
         KeyBinding::new(&k("ctrl-tab"), NextSection, Some("Workspace")),
         KeyBinding::new(&k("ctrl-shift-tab"), PreviousSection, Some("Workspace")),
+        // The items open under the space, as a browser's tabs: ⌥⌘→ ⌥⌘←, not ⌃→ (macOS's Spaces).
+        KeyBinding::new(
+            &k("cmd-alt-right"),
+            NextOpenItem,
+            Some("Workspace && !Typing"),
+        ),
+        KeyBinding::new(
+            &k("cmd-alt-left"),
+            PreviousOpenItem,
+            Some("Workspace && !Typing"),
+        ),
         KeyBinding::new(&k("v"), MarkReviewed, Some("Workspace && !Typing")),
         KeyBinding::new(&k("cmd-e"), OpenRecent, Some("Workspace")),
         KeyBinding::new(&k("cmd-="), ZoomIn, Some("Workspace")),
@@ -571,6 +584,9 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
             MenuItem::separator(),
             MenuItem::action("Next Tab", NextTab),
             MenuItem::action("Previous Tab", PreviousTab),
+            MenuItem::separator(),
+            MenuItem::action("Next Open Item", NextOpenItem),
+            MenuItem::action("Previous Open Item", PreviousOpenItem),
         ]),
         Menu::new("View").items([
             MenuItem::action("Show the Side Panel", ToggleSidebar),

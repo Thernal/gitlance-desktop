@@ -994,6 +994,10 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &NextSection, _, cx| this.step_section(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousSection, _, cx| this.step_section(false, cx)))
+            .on_action(cx.listener(|this, _: &NextOpenItem, _, cx| this.step_open_item(true, cx)))
+            .on_action(
+                cx.listener(|this, _: &PreviousOpenItem, _, cx| this.step_open_item(false, cx)),
+            )
             .on_action(cx.listener(|this, _: &ToggleComments, _, cx| {
                 this.toggle_tool(tools::Tool::Discussions, cx)
             }))
