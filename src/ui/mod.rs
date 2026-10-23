@@ -60,6 +60,7 @@ mod theme;
 mod toast;
 mod tools;
 mod watch;
+mod welcome;
 mod words;
 mod working;
 mod zones;
@@ -976,6 +977,15 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.open_create_menu(menu, cx);
                             continue;
                         }
+                        // The welcome's cards (#54).
+                        "welcome-connect" => {
+                            this.open_welcome_card(welcome::Card::Connect, cx);
+                            continue;
+                        }
+                        "welcome-clone" => {
+                            this.open_welcome_card(welcome::Card::Clone, cx);
+                            continue;
+                        }
                         "all-requests" => {
                             this.requests.scope = requests::Scope::All;
                             this.go_space(spaces::Space::Requests, cx);
@@ -1370,6 +1380,8 @@ pub struct Workspace {
     zen: Option<(bool, bool)>,
     /// Zen shows one file at a time, at a reading width (⌥⌘., #55).
     zen_one: bool,
+    /// The window with no repository: the card one of its ways in opened (#54).
+    welcome: welcome::Welcome,
     /// The Submit review card (`submit.rs`).
     submit: Option<submit::Submit>,
     /// The pending comment ⌥N / ⌥P is on.
@@ -1667,6 +1679,7 @@ impl Workspace {
             draft_at: None,
             zen: None,
             zen_one: false,
+            welcome: Default::default(),
             recording: None,
             note_sel: None,
             settings_section: Default::default(),

@@ -96,6 +96,8 @@ impl Workspace {
             ),
             Field::Keys => (&self.keys_filter, input::Look::default()),
             Field::ThemeValue => (&self.theme_value, input::Look::default()),
+            Field::Host => (&self.welcome.host, input::Look::default()),
+            Field::CloneUrl => (&self.welcome.url, input::Look::default()),
         };
         div()
             .id(id)
@@ -178,11 +180,32 @@ impl Workspace {
             Field::Token => &mut self.token_input,
             Field::Keys => &mut self.keys_filter,
             Field::ThemeValue => &mut self.theme_value,
+            Field::Host => &mut self.welcome.host,
+            Field::CloneUrl => &mut self.welcome.url,
         };
+        let welcome = self.root.is_none() && self.welcome.card.is_some();
         match input::edit(text, &mut self.field_edit, &event.keystroke, cx) {
+            // In the welcome's card, esc goes back to its choices, what was typed kept.
+            Edit::Escape if welcome => {
+                self.welcome.card = None;
+                self.welcome.said = None;
+                self.field = None;
+            }
             Edit::Escape => {
                 text.clear();
                 self.field = None;
+            }
+            Edit::Enter { .. } if field == Field::Host => {
+                self.start_field(Field::Token, cx);
+                return true;
+            }
+            Edit::Enter { .. } if field == Field::Token && welcome => {
+                self.welcome_connect(cx);
+                return true;
+            }
+            Edit::Enter { .. } if field == Field::CloneUrl => {
+                self.welcome_clone(cx);
+                return true;
             }
             Edit::Enter { .. } if field == Field::Branches && self.at_root_list() => {
                 self.open_pick(cx);
@@ -210,6 +233,10 @@ pub enum Field {
     Keys,
     /// The value of a token in the theme editor (Settings → Appearance).
     ThemeValue,
+    /// The welcome's connect card: the host (#54).
+    Host,
+    /// The welcome's clone card: the repository's URL (#54).
+    CloneUrl,
 }
 
 // ---- changed files ----------------------------------------------------------------------

@@ -276,6 +276,26 @@ pub fn me(remote: &WebRemote) -> Result<String> {
     ))
 }
 
+/// What the token can do and until when (GitLab: "api, read_repository · expires 2027-09-01");
+/// `None` where the host does not say (GitHub).
+pub fn token_info(remote: &WebRemote) -> Option<String> {
+    if remote.github || fixture().is_some() {
+        return None;
+    }
+    let me = call(remote, "/personal_access_tokens/self", "GET", &[]).ok()?;
+    let scopes: Vec<&str> = me["scopes"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    let mut out = scopes.join(", ");
+    match me["expires_at"].as_str() {
+        Some(day) => out.push_str(&format!(" · expires {day}")),
+        None => out.push_str(" · never expires"),
+    }
+    Some(out)
+}
+
 /// Whether merge requests can be read for this remote at all.
 pub fn available(remote: &WebRemote) -> bool {
     fixture().is_some() || token(remote).is_some()

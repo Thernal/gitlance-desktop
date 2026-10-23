@@ -207,6 +207,7 @@ impl Workspace {
                                         })),
                                 ),
                         )
+                        .child(self.render_card_presets(cx))
                         .children(self.render_changed_keys(cx))
                         .child(
                             div()
@@ -223,6 +224,37 @@ impl Workspace {
                         .child(self.render_launch_switch()),
                 ),
         )
+    }
+
+    /// Which keys yours start from — GitLance's, Android Studio's or VS Code's (#54): chosen here
+    /// when the card greets the first launch, as Settings → Keyboard does later.
+    fn render_card_presets(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        use super::keymap::{self, Keymap};
+        let preset = cx.global::<Keymap>().preset();
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(8.))
+            .text_size(px(12.))
+            .text_color(theme::muted())
+            .child("Your keys start from")
+            .child(super::diff_view::group().children(
+                keymap::Preset::ALL.into_iter().enumerate().map(|(i, p)| {
+                    super::diff_view::chip(("card-preset", i), p.label(), p == preset).on_click(
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            keymap::set_preset(p, cx);
+                            this.refresh_menus(cx);
+                            cx.notify();
+                        }),
+                    )
+                }),
+            ))
+            .child(
+                div()
+                    .text_color(theme::faint())
+                    .child("· Settings → Keyboard changes any of them"),
+            )
     }
 
     /// The keys changed in Settings → Keyboard, above the shipped ones the card lists.

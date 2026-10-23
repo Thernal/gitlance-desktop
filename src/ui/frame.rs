@@ -422,57 +422,6 @@ impl Workspace {
             )
     }
 
-    pub(super) fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex_1()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_4()
-            .m(px(GAP))
-            .mt_0()
-            .rounded(px(ISLAND_RADIUS))
-            .bg(theme::editor())
-            .child(
-                div()
-                    .text_size(px(22.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("GitLance"),
-            )
-            .child(
-                div()
-                    .text_color(theme::muted())
-                    .child("Open a repository to browse its commits and branch versions — or drop a folder anywhere in this window."),
-            )
-            .child(
-                button("welcome-open", "Open Repository…", "⌘O")
-                    .on_click(cx.listener(|this, _, window, cx| this.open(&Open, window, cx))),
-            )
-            .children((!self.recent.is_empty()).then(|| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .mt_4()
-                    .child(section_label("Recent"))
-                    .children(self.recent.iter().enumerate().map(|(ix, path)| {
-                        let path = path.clone();
-                        div()
-                            .id(("recent", ix))
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme::hover()))
-                            .child(path.display().to_string())
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.request_open(path.clone(), None, cx)
-                            }))
-                    }))
-            }))
-    }
-
     /// The versions, newest first, for the side panel's Versions section.
     pub(super) fn version_rows(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let latest = self.versions.len() - 1;

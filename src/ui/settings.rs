@@ -908,7 +908,7 @@ impl Workspace {
     /// Rebuilds the menu bar once the current event is over: macOS matches a menu key equivalent
     /// against the new menus at once, and the action it fires must not find the workspace still
     /// being updated (a crash when a recorded key was also a new menu shortcut).
-    fn refresh_menus(&self, cx: &mut Context<Self>) {
+    pub(super) fn refresh_menus(&self, cx: &mut Context<Self>) {
         let menus = super::menus(&self.options);
         cx.spawn(async move |_, cx| {
             cx.background_executor()
