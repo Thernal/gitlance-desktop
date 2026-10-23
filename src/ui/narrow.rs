@@ -7,7 +7,7 @@
 //! diff, and a drawer and a floating tool window are never open together.
 
 use super::zones::Zone;
-use super::{Workspace, icons, px, theme};
+use super::{Workspace, icons, keys, px, theme};
 use gpui::{AnyElement, ClickEvent, Context, SharedString, div, prelude::*};
 
 /// Under it the menu folds and the diff is unified.
@@ -121,10 +121,13 @@ impl Workspace {
         }
     }
 
-    /// Under the spaces in the folded menu, below a line: this page's panels as icons, while the
-    /// window is too narrow for the side panel.
+    /// Under the spaces, below a line: this page's panels, while they are not beside the page —
+    /// the window too narrow for the side panel (a click opens it as a drawer), or the panel hidden
+    /// with ⌘J (a click brings it back), so a hidden panel is not lost (the developer,
+    /// 2026-10-23). Icons in the folded menu; named in the open one.
     pub(super) fn render_panel_icons(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.compact() {
+        let narrow = self.compact();
+        if !narrow && self.layout.show_sidebar {
             return None;
         }
         let panels = self.side_icons();
@@ -132,47 +135,81 @@ impl Workspace {
             return None;
         }
         let on = self.side_drawer();
-        Some(
-            div()
-                .flex_none()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .child(
-                    div()
-                        .flex_none()
-                        .h(px(1.))
-                        .mx(px(8.))
-                        .my(px(8.))
-                        .bg(theme::island_border()),
-                )
-                .children(panels.into_iter().map(|(icon, name, zone)| {
-                    let tip: SharedString = format!("{name}  ⌃3").into();
-                    div()
-                        .id(SharedString::from(format!("panel-{name}")))
-                        .h(px(32.))
-                        .flex()
-                        .flex_none()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(super::ROW_RADIUS))
-                        .cursor_pointer()
-                        .when(on, |s| s.bg(theme::selected()))
-                        .hover(|s| s.bg(theme::hover()))
-                        .child(icons::icon(icon).size(px(17.)).text_color(if on {
-                            theme::text()
-                        } else {
-                            theme::muted()
-                        }))
-                        .tooltip_show_delay(super::hover::LONG)
-                        .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+        let named = !self.menu_folded();
+        let rows = div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(1.))
+                    .mx(px(8.))
+                    .my(px(8.))
+                    .bg(theme::island_border()),
+            )
+            .children(panels.into_iter().map(|(icon, name, zone)| {
+                let tip: SharedString = if narrow {
+                    format!("{name}  ⌃3").into()
+                } else {
+                    format!("{name} — hidden  ⌘J").into()
+                };
+                div()
+                    .id(SharedString::from(format!("panel-{name}")))
+                    .h(px(32.))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(10.))
+                    // Where a space's icon sits, folded or open.
+                    .pl(px(11.5))
+                    .pr(px(8.))
+                    .rounded(px(super::ROW_RADIUS))
+                    .cursor_pointer()
+                    .text_color(theme::muted())
+                    .when(on, |s| s.bg(theme::selected()).text_color(theme::text()))
+                    .hover(|s| s.bg(theme::hover()).text_color(theme::text()))
+                    .child(icons::icon(icon).size(px(17.)).text_color(if on {
+                        theme::text()
+                    } else {
+                        theme::muted()
+                    }))
+                    .when(named, |s| {
+                        s.child(div().flex_1().min_w_0().truncate().child(name))
+                            .when(!narrow, |s| s.child(keys::caps("⌘J", keys::On::Plain)))
+                    })
+                    .tooltip_show_delay(super::hover::LONG)
+                    .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if narrow {
                             this.toggle_drawer(zone, cx)
-                        }))
-                        .into_any_element()
-                }))
-                .into_any_element(),
-        )
+                        } else {
+                            this.show_side(zone, cx)
+                        }
+                    }))
+                    .into_any_element()
+            }));
+        // Hidden a moment ago, they fade in as the panel slides away.
+        Some(if self.motion.recent("side") {
+            super::motion::appear(rows, "panel-icons", super::motion::BASE, |rows, v| {
+                rows.opacity(v)
+            })
+            .into_any_element()
+        } else {
+            rows.into_any_element()
+        })
+    }
+
+    /// The side panel hidden with ⌘J comes back, the keyboard in `zone`.
+    fn show_side(&mut self, zone: Option<Zone>, cx: &mut Context<Self>) {
+        self.layout.show_sidebar = true;
+        self.save_layout();
+        self.mark_motion("side", cx);
+        if let Some(zone) = zone {
+            self.set_zone(zone, cx);
+        }
+        cx.notify();
     }
 
     /// The side panel on screen: docked, or as the drawer.
