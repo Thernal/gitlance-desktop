@@ -371,13 +371,22 @@ pub fn parse_lines(source: &str) -> Vec<(Block, (u32, u32))> {
     let before = b.root.len();
     b.close_loose();
     ranges.extend((before..b.root.len()).map(|_| start..source.len()));
-    let line = |at: usize| source[..at.min(source.len())].matches('\n').count() as u32 + 1;
+    // Bytes, not text: a block's last byte may sit inside a wide letter (`ə`, `—`).
+    let bytes = source.as_bytes();
+    let line = |at: usize| {
+        bytes[..at.min(bytes.len())]
+            .iter()
+            .filter(|&&c| c == b'\n')
+            .count() as u32
+            + 1
+    };
     b.root
         .into_iter()
         .zip(ranges)
         .map(|(block, r)| {
             // A list's range takes the blank line after it.
-            let end = r.start + source[r.clone()].trim_end().len();
+            let text = bytes.get(r.clone()).unwrap_or_default();
+            let end = r.start + text.trim_ascii_end().len();
             let first = line(r.start);
             (block, (first, line(end.saturating_sub(1)).max(first)))
         })
@@ -843,6 +852,13 @@ mod tests {
         let src = "# Title\n\nOne\ntwo\n\n- a\n- b\n\n---\n";
         let lines: Vec<(u32, u32)> = parse_lines(src).into_iter().map(|(_, l)| l).collect();
         assert_eq!(lines, [(1, 1), (3, 4), (6, 7), (9, 9)]);
+    }
+
+    #[test]
+    fn a_block_ending_in_a_wide_letter_knows_its_lines() {
+        let src = "# Başlıq ə\n\nBir\niki —\n\n- ✓\n";
+        let lines: Vec<(u32, u32)> = parse_lines(src).into_iter().map(|(_, l)| l).collect();
+        assert_eq!(lines, [(1, 1), (3, 4), (6, 6)]);
     }
 
     #[test]
