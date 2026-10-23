@@ -4028,15 +4028,17 @@ impl Workspace {
         let width = self.body_width.clone();
         let max = self.max_offset();
         let thumb = (!self.options.wrap && max > 0.).then(|| {
-            let track = self.body_width.get();
+            // Its track keeps clear of the island's round bottom corners.
+            let inset = if flat() { 0. } else { ISLAND_RADIUS };
+            let track = (self.body_width.get() - 2. * inset).max(0.);
             let share = track / (track + max);
-            let thumb = (track * share).max(32.);
+            let thumb = (track * share).max(32.).min(track);
             div()
                 .absolute()
                 .bottom(px(2.))
                 .h(px(4.))
                 .w(px(thumb))
-                .left(px((track - thumb) * self.offset / max))
+                .left(px(inset + (track - thumb) * self.offset / max))
                 .rounded_full()
                 .bg(theme::scrollbar())
         });

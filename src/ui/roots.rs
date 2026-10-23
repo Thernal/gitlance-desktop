@@ -616,7 +616,8 @@ impl Workspace {
                 if n == 0 || groups[n - 1] != g {
                     let count = groups.iter().filter(|&&o| o == g).count();
                     bands.push((rows.len(), g, count));
-                    rows.push(self.group_band(g, count, false, cx).into_any_element());
+                    let top = rows.is_empty();
+                    rows.push(self.group_band(g, count, false, top, cx).into_any_element());
                 }
                 let is_picked = picked.is_some_and(|p| p.iid == m.iid);
                 if self.folds(g) && !is_picked {
@@ -652,7 +653,7 @@ impl Workspace {
                         .top(px(push))
                         .left_0()
                         .right_0()
-                        .child(self.group_band(g, count, true, cx))
+                        .child(self.group_band(g, count, true, true, cx))
                 });
             div()
                 .flex_1()
@@ -781,9 +782,17 @@ impl Workspace {
         g: Group,
         count: usize,
         held: bool,
+        top: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let (icon, tone) = g.icon();
+        // At the list's top its fill follows the island's round corners, and the island's own
+        // border is its top edge.
+        let corner = if super::flat() {
+            0.
+        } else {
+            super::ISLAND_RADIUS - 1.
+        };
         let foldable = self.bfilter.trim().is_empty();
         let folded = self.folds(g);
         div()
@@ -796,7 +805,8 @@ impl Workspace {
             .pl(px(16.))
             .pr(px(10.))
             .bg(theme::base())
-            .border_t_1()
+            .when(top, |s| s.rounded_t(px(corner)))
+            .when(!top, |s| s.border_t_1())
             .border_b_1()
             .border_color(theme::island_border())
             .text_size(px(12.))
@@ -2056,9 +2066,12 @@ pub(super) fn empty_state(
                 .text_color(theme::text())
                 .child(title),
         )
+        // Room for three lines, so the box stays put as its words change (the developer,
+        // 2026-10-23).
         .child(
             div()
                 .max_w(px(400.))
+                .min_h(px(19. * 3.))
                 .text_size(px(13.))
                 .line_height(px(19.))
                 .text_center()

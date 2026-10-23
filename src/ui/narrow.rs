@@ -65,6 +65,8 @@ impl Workspace {
     /// ◧ and ⌘B: the menu to icons and back — kept in `layout.txt`, or for while the window is
     /// narrow.
     pub(super) fn toggle_menu(&mut self, cx: &mut Context<Self>) {
+        // Its names fade while it folds or unfolds; its icons stay put (#56, 2).
+        self.mark_motion("places-fold", cx);
         if self.menu_narrow() {
             self.narrowed.menu = Some(!self.menu_folded());
         } else {

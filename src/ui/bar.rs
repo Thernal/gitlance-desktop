@@ -158,15 +158,23 @@ impl Workspace {
                     .children(self.actions_of(space, page.as_ref(), cx)),
             )
             // Public: what is done here is seen on GitLab (#71).
+            // Over the island's own border, its top edge turning down with its round corners (a
+            // strip would cross them square).
             .when(public, |s| {
                 s.child(
                     div()
                         .absolute()
-                        .top_0()
-                        .left_0()
-                        .right_0()
-                        .h(px(2.))
-                        .bg(theme::warning()),
+                        .top(px(-1.))
+                        .left(px(-1.))
+                        .right(px(-1.))
+                        .bottom(px(-1.))
+                        .rounded(px(if super::flat() {
+                            0.
+                        } else {
+                            super::ISLAND_RADIUS
+                        }))
+                        .border_t_2()
+                        .border_color(theme::warning()),
                 )
             });
         Some(bar.into_any_element())

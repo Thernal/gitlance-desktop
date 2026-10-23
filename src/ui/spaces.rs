@@ -14,6 +14,13 @@ use gpui::{ClickEvent, Context, FontWeight, MouseButton, SharedString, div, prel
 /// The menu's width, open and folded to icons.
 const OPEN: f32 = 216.;
 const ICONS: f32 = 52.;
+/// The menu's side padding, folded or open.
+const EDGE: f32 = 6.;
+/// A space's icon (17 px) from its row's start: centred in the folded menu, as far in open, and
+/// further under a project.
+const CENTRED: f32 = (ICONS - 2. * EDGE - 17.) / 2.;
+const INSET: f32 = 10.;
+const NESTED: f32 = 28.;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Space {
@@ -241,6 +248,10 @@ impl Workspace {
             return None;
         }
         let folded = self.menu_folded();
+        // Folding or unfolding: the names fade while the menu narrows or widens, and the icons
+        // stay where they are (#56, 2).
+        let moving = self.motion.recent("places-fold");
+        let named = !folded || moving;
         let here = self.space();
         let projects = self.menu_projects();
         let nested = !projects.is_empty();
@@ -304,9 +315,7 @@ impl Workspace {
                 .flex_none()
                 .items_center()
                 .gap(px(10.))
-                .when(folded, |s| s.justify_center())
-                .when(!folded, |s| s.px(px(8.)))
-                .when(nested && !folded, |s| s.pl(px(26.)))
+                .pr(px(8.))
                 .rounded(px(super::ROW_RADIUS))
                 .text_color(if within {
                     theme::text()
@@ -332,19 +341,22 @@ impl Workspace {
                             s.group_hover(id, |s| s.text_color(theme::text()))
                         }),
                 )
-                .when(!folded, |s| {
-                    // Unfolding, the names fade in as the menu widens (#56, 2).
-                    s.child(super::motion::appear(
+                .when(named, |s| {
+                    // The names fade in as the menu widens, and out as it narrows (#56, 2).
+                    s.child(super::motion::toward(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
                             .child(super::words::say(label).into_owned()),
                         (id, 1usize),
+                        !folded,
+                        moving,
                         super::motion::FAST,
                         |label, v| label.opacity(v),
                     ))
-                    .children(n.map(|n| {
+                    // The count is the badge's once the menu folds.
+                    .children(n.filter(|_| !folded).map(|n| {
                         div()
                             .flex_none()
                             .text_size(px(11.))
@@ -353,13 +365,14 @@ impl Workspace {
                     }))
                     .children(disclose)
                 })
-                // Folded, a badge says something waits for you.
+                // Folded, a badge on the icon's corner says something waits for you; it fades in
+                // as the menu narrows.
                 .when(folded, |s| {
                     s.children(n.map(|n| {
-                        div()
+                        let badge = div()
                             .absolute()
                             .top(px(3.))
-                            .right(px(3.))
+                            .left(px(CENTRED + 11.5))
                             .min_w(px(14.))
                             .h(px(14.))
                             .px(px(3.))
@@ -371,12 +384,33 @@ impl Workspace {
                             .text_size(px(9.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme::base())
-                            .child(n.min(99).to_string())
+                            .child(n.min(99).to_string());
+                        super::motion::toward(
+                            badge,
+                            (id, 8usize),
+                            true,
+                            moving,
+                            super::motion::FAST,
+                            |badge, v| badge.opacity(v),
+                        )
                     }))
                 })
                 .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.go_space(space, cx)));
+            // The icon's place: centred in the folded menu, after the indent open; it moves only
+            // with the menu's own motion.
+            let line = super::motion::toward(
+                line,
+                (id, 7usize),
+                !folded,
+                moving,
+                super::motion::BASE,
+                move |line, v| {
+                    let open = if nested { NESTED } else { INSET };
+                    line.pl(px(super::motion::mix(CENTRED, open, v)))
+                },
+            );
             let why = missing.filter(|_| !folded).map(|m| {
                 div()
                     .flex_none()
@@ -497,7 +531,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap(px(2.))
-            .px(px(if folded { 6. } else { 8. }))
+            .px(px(EDGE))
             .pt(px(4.))
             .pb(px(4.))
             .overflow_hidden()
@@ -531,22 +565,26 @@ impl Workspace {
                     .flex_none()
                     .items_center()
                     .gap(px(10.))
-                    .when(folded, |s| s.justify_center())
-                    .when(!folded, |s| s.px(px(6.)))
+                    .pr(px(6.))
                     .rounded(px(super::ROW_RADIUS))
                     .cursor_pointer()
                     .when(tab.active, |s| s.bg(theme::hover()))
                     .hover(|s| s.bg(theme::hover()))
                     .child(super::rail::project_mark(&mark, tint, 22.))
-                    .when(!folded, |s| {
-                        s.child(
+                    .when(named, |s| {
+                        s.child(super::motion::toward(
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
                                 .font_weight(FontWeight::MEDIUM)
                                 .child(tab.title.clone()),
-                        )
+                            ("menu-project-name", ix),
+                            !folded,
+                            moving,
+                            super::motion::FAST,
+                            |name, v| name.opacity(v),
+                        ))
                         .children((!tab.active && tab.unread > 0).then(|| {
                             div()
                                 .flex_none()
@@ -567,8 +605,20 @@ impl Workspace {
                     })
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         this.with_shell(window, cx, move |s, window, cx| s.select(ix, window, cx))
-                    }))
-                    .into_any_element();
+                    }));
+                // Its mark (22 px) centred folded, near the edge open; it moves with the menu.
+                let project = super::motion::toward(
+                    project,
+                    ("menu-project-place", ix),
+                    !folded,
+                    moving,
+                    super::motion::BASE,
+                    |project, v| {
+                        let centred = (ICONS - 2. * EDGE - 22.) / 2.;
+                        project.pl(px(super::motion::mix(centred, 6., v)))
+                    },
+                )
+                .into_any_element();
                 let mut rows = vec![project];
                 if active {
                     rows.extend(Space::ALL.map(&row));

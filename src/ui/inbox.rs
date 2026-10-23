@@ -282,11 +282,13 @@ impl Workspace {
             island()
                 .flex_1()
                 .bg(theme::editor())
+                // Its button's room kept when there is none, so switching the filter moves
+                // nothing.
                 .child(super::roots::empty_state(
                     "inbox",
                     title.to_owned(),
                     text.to_owned(),
-                    all,
+                    Some(all.unwrap_or_else(|| div().h(px(28.)).into_any_element())),
                 ))
                 .into_any_element()
         } else {
@@ -637,16 +639,19 @@ impl Workspace {
             .flex()
             .gap_2()
             .child(
-                chip("inbox-open", "Open request  ↵", false).on_click(cx.listener(
-                    move |this, _: &ClickEvent, _, cx| {
+                // Buttons that look like buttons, the way on filled (the developer, 2026-10-23).
+                super::bar::bar_button("inbox-open", "Open request", "↵", true).on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.inbox = false;
                         this.open_notice(ix, cx)
-                    },
-                )),
+                    }),
+                ),
             )
-            .child(chip("inbox-done", "Done  E", false).on_click(
-                cx.listener(move |this, _: &ClickEvent, _, cx| this.dismiss_notice(ix, cx)),
-            ));
+            .child(
+                super::bar::bar_button("inbox-done", "Done", "E", false).on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.dismiss_notice(ix, cx)),
+                ),
+            );
         div()
             .flex()
             .flex_col()
