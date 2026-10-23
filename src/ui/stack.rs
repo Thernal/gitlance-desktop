@@ -893,17 +893,12 @@ impl Workspace {
                                 },
                             )),
                     )
-                    .child(super::change_badge(file))
                     .child(super::icons::file_icon(file.path(), 16.))
                     .child(
                         super::hover::cut(("file-path", ix), path)
                             .flex_1()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(if state == Some(State::Done) {
-                                theme::muted()
-                            } else {
-                                theme::text()
-                            }),
+                            .text_color(super::change_color(file, state == Some(State::Done))),
                     )
                     // Another chat is changing it (#77).
                     .children(self.changing(file.path()).map(|(name, letter, hue)| {

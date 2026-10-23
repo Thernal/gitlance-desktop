@@ -3795,9 +3795,15 @@ impl Workspace {
                     .px_4()
                     .border_b_1()
                     .border_color(theme::island_border())
-                    .child(change_badge(f))
                     .child(icons::file_icon(f.path(), 16.))
-                    .child(div().flex_1().min_w_0().truncate().child(path))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(change_color(f, false))
+                            .child(path),
+                    )
                     // An SVG read as its source can go back to the picture.
                     .children(
                         (self.images.source && image_view::is_svg(f))
@@ -4233,32 +4239,33 @@ fn stats(file: &FileDiff) -> impl IntoElement + use<> {
         })
 }
 
-/// A file's status letter; a long hover says what it stands for, with the file's whole path.
-fn change_badge(file: &FileDiff) -> impl IntoElement {
-    use hover::Hover;
-    let (letter, color) = match file.change {
-        ChangeKind::Added => ("A", theme::added()),
-        ChangeKind::Deleted => ("D", theme::removed()),
-        ChangeKind::Modified => ("M", theme::accent()),
-        ChangeKind::Renamed => ("R", theme::renamed()),
-        ChangeKind::Copied => ("C", theme::renamed()),
-        ChangeKind::TypeChanged => ("T", theme::warning()),
+/// A file's change as the colour of its name, beside its icon (the developer, 2026-10-23: a letter
+/// there as well looked odd): added green, deleted red, modified the accent, renamed or copied
+/// their own, a type change the warning's; reviewed, a step fainter.
+fn change_color(file: &FileDiff, reviewed: bool) -> gpui::Rgba {
+    let color = match file.change {
+        ChangeKind::Added => theme::added(),
+        ChangeKind::Deleted => theme::removed(),
+        ChangeKind::Modified => theme::accent(),
+        ChangeKind::Renamed | ChangeKind::Copied => theme::renamed(),
+        ChangeKind::TypeChanged => theme::warning(),
     };
-    div()
-        .id(SharedString::from(format!("status-{}", file.path())))
-        .w(px(16.))
-        .flex_none()
-        .text_size(px(11.))
-        .font_weight(FontWeight::BOLD)
-        .text_color(color)
-        .child(letter)
-        .tip(format!(
-            "{} · {} · +{} −{}",
-            hover::status_word(file.change, file.old_path.as_deref()),
-            file.path(),
-            file.added,
-            file.removed
-        ))
+    if reviewed {
+        gpui::Rgba { a: 0.55, ..color }
+    } else {
+        color
+    }
+}
+
+/// What a long hover on a file's name says: its change, its whole path, its +/−.
+fn change_tip(file: &FileDiff) -> String {
+    format!(
+        "{} · {} · +{} −{}",
+        hover::status_word(file.change, file.old_path.as_deref()),
+        file.path(),
+        file.added,
+        file.removed
+    )
 }
 
 fn section_label(text: impl Into<SharedString>) -> gpui::Div {

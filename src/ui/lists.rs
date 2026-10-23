@@ -5,7 +5,7 @@
 use super::hover::Hover;
 use super::input::{self, Edit};
 use super::px;
-use super::{Workspace, change_badge, row, theme};
+use super::{Workspace, change_color, change_tip, row, theme};
 use crate::git::{Deco, DecoKind, FileDiff};
 use gpui::{
     ClickEvent, Context, KeyDownEvent, MouseButton, MouseDownEvent, ScrollStrategy, div, prelude::*,
@@ -428,6 +428,7 @@ impl Workspace {
                     .next()
                     .unwrap_or_default()
                     .to_owned();
+                let done = self.review_state(ix) == Some(super::reviewed::State::Done);
                 div()
                     .w_full()
                     .h(px(28.))
@@ -438,18 +439,21 @@ impl Workspace {
                             .h(px(26.))
                             .gap_2()
                             .pl(px(8. + *depth as f32 * 14.))
-                            .when(
-                                self.review_state(ix) == Some(super::reviewed::State::Done),
-                                |s| s.text_color(theme::muted()),
-                            )
+                            .when(done, |s| s.text_color(theme::muted()))
                             .children(self.review_box(ix, cx))
-                            .child(change_badge(file))
                             .child(super::icons::file_icon(file.path(), 16.))
-                            .child(div().flex_1().min_w_0().truncate().child(name))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(change_color(file, done))
+                                    .child(name),
+                            )
                             .children(super::generated_tag(file))
                             .children(super::working::file_tag(diff.tags.get(file.path())))
                             .when(counts, |s| s.child(super::stats(file)))
-                            .tip(file.path().to_owned())
+                            .tip(change_tip(file))
                             .on_mouse_down(
                                 MouseButton::Right,
                                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -531,7 +535,6 @@ impl Workspace {
             .gap_2()
             .when(done, |s| s.text_color(theme::muted()))
             .children(self.review_box(ix, cx))
-            .child(change_badge(file))
             .child(super::icons::file_icon(path, 16.))
             .child(
                 div()
@@ -539,7 +542,12 @@ impl Workspace {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(div().truncate().child(name))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_color(change_color(file, done))
+                            .child(name),
+                    )
                     .children(dir.map(|d| {
                         div()
                             .truncate()
@@ -551,7 +559,7 @@ impl Workspace {
             .children(super::generated_tag(file))
             .children(super::working::file_tag(tag))
             .when(counts, |s| s.child(super::stats(file)))
-            .tip(path.to_owned())
+            .tip(change_tip(file))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
