@@ -71,6 +71,11 @@ pub fn data_dir() -> Option<PathBuf> {
     os::data_dir()
 }
 
+/// The key window as a PNG, for a report (#118); `None` when it cannot be taken.
+pub fn window_picture() -> Option<Vec<u8>> {
+    os::window_picture()
+}
+
 /// Where an editor's command-line launcher can be found.
 #[allow(dead_code)] // each OS reads only its own fields
 pub struct Launcher {

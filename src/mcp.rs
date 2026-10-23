@@ -20,7 +20,9 @@ call address_comment with its id and one line on what you did — or reply_comme
 watcher again. Read each comment for what it wants: a question gets an answer (reply_comment); a clear change gets made \
 (then address_comment); a change that is large or unclear is asked about first, with a form (reply_comment with \
 `form`: a plan to approve, a confirm, versions of code …); after explaining, you may offer the fix as a confirm. \
-Never claim a comment is resolved: the reviewer confirms each one in GitLance."
+Never claim a comment is resolved: the reviewer confirms each one in GitLance. \
+When GitLance itself fails (one of these tools, or the app), you may draft a report of it with report_problem; it only \
+opens in the app for the reviewer to check and send."
     )
 }
 
@@ -75,6 +77,18 @@ fn tools() -> Value {
                 },
                 "required": ["id", "text"]
             }
+        },
+        {
+            "name": "report_problem",
+            "description": "Draft a report of a problem in GitLance itself (an error from the app or from these tools, something it did wrong) for its developers. Nothing is sent: the report opens in GitLance with your text, and the reviewer checks it and sends it, or not. Only GitLance's own problems, never the reviewer's code.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "The problem in a few words"},
+                    "description": {"type": "string", "description": "What happened, what was done just before, the error's text"}
+                },
+                "required": ["title", "description"]
+            }
         }
     ])
 }
@@ -90,6 +104,9 @@ fn repo() -> Result<(PathBuf, PathBuf), String> {
 }
 
 fn call(bus: &Bus, name: &str, args: &Value) -> Result<String, String> {
+    if name == "report_problem" {
+        return draft_report(bus, args);
+    }
     let (here, root) = repo()?;
     let comments = bus.comments(&root);
     // A chat's own notes, and those sent to no chat in particular (#77).
@@ -136,6 +153,31 @@ fn call(bus: &Bus, name: &str, args: &Value) -> Result<String, String> {
         Kind::Addressed => format!("Comment {id} marked done; the reviewer will check it."),
         _ => format!("Reply to comment {id} sent to the reviewer."),
     })
+}
+
+/// A report of GitLance's own problem, drafted for the reviewer to check in the app (#118).
+fn draft_report(bus: &Bus, args: &Value) -> Result<String, String> {
+    let text = |key: &str| args[key].as_str().unwrap_or_default().trim().to_owned();
+    let (title, description) = (text("title"), text("description"));
+    if title.is_empty() {
+        return Err("title is missing".to_owned());
+    }
+    let agent = agents::whoami().map_or_else(|| "An agent".to_owned(), |(name, ..)| name);
+    let folder = std::env::current_dir()
+        .ok()
+        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()));
+    let by = match folder {
+        Some(folder) => format!("{agent} · {folder}"),
+        None => agent,
+    };
+    let draft = agents::ReportDraft {
+        title,
+        description,
+        by,
+        at: agents::now(),
+    };
+    bus.draft_report(&draft).map_err(|e| e.to_string())?;
+    Ok("The report opens in GitLance for the reviewer to check; nothing was sent.".to_owned())
 }
 
 /// The answer to one request, or `None` for a notification.
@@ -212,9 +254,38 @@ mod tests {
                 .contains("\"/x/GitLance\" agent-watch")
         );
         let list = handle(&bus, "", &json!({"id": 2, "method": "tools/list"})).unwrap();
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 3);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 4);
         assert!(handle(&bus, "", &json!({"method": "notifications/initialized"})).is_none());
         let unknown = handle(&bus, "", &json!({"id": 3, "method": "nope"})).unwrap();
         assert_eq!(unknown["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn a_report_is_only_drafted() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bus = Bus::at(dir.path().to_path_buf());
+        let call = |args: Value| {
+            handle(
+                &bus,
+                "",
+                &json!({"id": 4, "method": "tools/call",
+                        "params": {"name": "report_problem", "arguments": args}}),
+            )
+            .unwrap()
+        };
+        let none = call(json!({"title": " ", "description": "x"}));
+        assert_eq!(none["result"]["isError"], true);
+        let done =
+            call(json!({"title": "list_comments failed", "description": "It said: no home."}));
+        assert!(
+            done["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("nothing was sent")
+        );
+        let drafts = bus.take_reports();
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].title, "list_comments failed");
+        assert!(bus.take_reports().is_empty(), "taken once");
     }
 }

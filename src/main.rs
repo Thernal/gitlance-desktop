@@ -4,6 +4,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod agents;
+mod applog;
 mod avatars;
 mod codeowners;
 mod editor;
@@ -22,6 +23,7 @@ mod mddiff;
 mod mr;
 mod platform;
 mod rank;
+mod report;
 mod review;
 mod search;
 mod storage;
@@ -39,6 +41,7 @@ fn main() {
     // An explicit path opens just that folder (a repository or not, #75); without one the window comes back as it was
     // left (the tabs of the last session), or offers to open one.
     // What an agent runs in its chat (`claude mcp add gitlance -- <this> mcp`): no window.
+    applog::catch_panics();
     match std::env::args().nth(1).as_deref() {
         Some("mcp") => return mcp::run(),
         Some("agent-watch") => return watch::run(),

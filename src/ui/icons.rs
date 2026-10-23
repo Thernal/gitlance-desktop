@@ -18,6 +18,13 @@ macro_rules! lucide {
 
 const ICONS: &[(&str, &str)] = &[
     (
+        "flag",
+        lucide!(
+            r#"<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/>"#
+            r#"<line x1="4" x2="4" y1="22" y2="15"/>"#
+        ),
+    ),
+    (
         "refresh",
         lucide!(
             r#"<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>"#

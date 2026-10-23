@@ -1,0 +1,17 @@
+# The relay between GitLance and its private reports (relay/README.md).
+name = "gitlance-reports"
+main = "src/worker.js"
+compatibility_date = "2025-09-01"
+
+[vars]
+# The private intake repository the GitHub App is installed on.
+REPO = "Thernal/gitlance-reports"
+# "0" closes the reports: the app is answered 503 and offers GitHub's page instead.
+OPEN = "1"
+# Reports in all, in a day.
+DAILY_CAP = "100"
+
+# `npx wrangler kv namespace create REPORTS` prints the id to put here.
+[[kv_namespaces]]
+binding = "REPORTS"
+id = "REPLACE_WITH_THE_KV_NAMESPACE_ID"

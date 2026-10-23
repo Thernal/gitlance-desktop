@@ -84,6 +84,17 @@ pub fn uid() -> String {
     format!("{nanos:x}-{:x}", std::process::id())
 }
 
+/// A problem an agent's chat hit and drafted a report of (`report_problem`, #118): the reviewer
+/// checks it in the app and sends it, or not.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportDraft {
+    pub title: String,
+    pub description: String,
+    /// Who drafted it: "Claude Code · payments-service".
+    pub by: String,
+    pub at: i64,
+}
+
 /// The folder all of this lives in.
 #[derive(Clone, Debug)]
 pub struct Bus {
@@ -98,6 +109,31 @@ impl Bus {
 
     pub fn at(dir: PathBuf) -> Self {
         Self { dir }
+    }
+
+    /// Keeps an agent's draft of a report for the app to open (#118).
+    pub fn draft_report(&self, draft: &ReportDraft) -> std::io::Result<()> {
+        let dir = self.dir.join("reports");
+        std::fs::create_dir_all(&dir)?;
+        let text = serde_json::to_string(draft).unwrap_or_default();
+        std::fs::write(dir.join(format!("{}.json", uid())), text)
+    }
+
+    /// The agents' drafts of reports not taken yet, oldest first; taken, they are gone from here.
+    pub fn take_reports(&self) -> Vec<ReportDraft> {
+        let Ok(entries) = std::fs::read_dir(self.dir.join("reports")) else {
+            return Vec::new();
+        };
+        let mut out: Vec<ReportDraft> = entries
+            .flatten()
+            .filter_map(|e| {
+                let text = std::fs::read_to_string(e.path()).ok()?;
+                std::fs::remove_file(e.path()).ok()?;
+                serde_json::from_str(&text).ok()
+            })
+            .collect();
+        out.sort_by_key(|d| d.at);
+        out
     }
 
     fn chat_file(&self, session: &str) -> PathBuf {

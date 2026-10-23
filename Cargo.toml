@@ -12,7 +12,10 @@ anyhow = "1"
 imagesize = "0.14"
 # GitLab names a diff line by the SHA-1 of its file's path (already in GPUI's graph).
 sha1_smol = "1"
-image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+# PNG pictures: a snapshot's, and the window's a report carries (#118; already in GPUI's graph).
+image = { version = "0.25", default-features = false, features = ["png"] }
+# A report's picture goes to the relay as base64 (#118; already in the dependency graph).
+base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 # Folder icons by the user's rules (#95; already in the dependency graph).
 regex = "1"
@@ -53,13 +56,15 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = 
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# The key window's picture for a report, its own window only (#118; already in GPUI's graph).
+core-graphics = "0.24"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSAccessibility", "NSApplication", "NSImage", "NSResponder", "NSWorkspace"] }
+objc2-app-kit = { version = "0.3", features = ["NSAccessibility", "NSApplication", "NSImage", "NSResponder", "NSWindow", "NSWorkspace"] }
 objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSString", "NSURL"] }
 
 [features]
 # `GITLANCE_SNAPSHOT=<file.png>` renders the window to a PNG and quits — UI checks without screen access.
-snapshot = ["dep:image", "gpui/test-support", "gpui_platform/test-support"]
+snapshot = ["gpui/test-support", "gpui_platform/test-support"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -30,6 +30,56 @@ pub fn reduce_motion() -> bool {
     objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
 }
 
+/// The key window as a PNG, at its nominal size (#118): the app's own window, so no screen
+/// recording permission is asked for; `None` when it cannot be taken.
+pub fn window_picture() -> Option<Vec<u8>> {
+    use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+    use core_graphics::window::{
+        create_image, kCGWindowImageBoundsIgnoreFraming, kCGWindowImageNominalResolution,
+        kCGWindowListOptionIncludingWindow,
+    };
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    let mtm = MainThreadMarker::new()?;
+    let app = NSApplication::sharedApplication(mtm);
+    let window = app.keyWindow().or_else(|| app.mainWindow())?;
+    let number = u32::try_from(window.windowNumber())
+        .ok()
+        .filter(|n| *n > 0)?;
+    // CGRectNull: the window's own bounds.
+    let null = CGRect::new(
+        &CGPoint::new(f64::INFINITY, f64::INFINITY),
+        &CGSize::new(0., 0.),
+    );
+    let shot = create_image(
+        null,
+        kCGWindowListOptionIncludingWindow,
+        number,
+        kCGWindowImageBoundsIgnoreFraming | kCGWindowImageNominalResolution,
+    )?;
+    let (width, height, row) = (shot.width(), shot.height(), shot.bytes_per_row());
+    if shot.bits_per_pixel() != 32 || width == 0 || height == 0 {
+        return None;
+    }
+    let data = shot.data();
+    let bytes = data.bytes();
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        let line = bytes.get(y * row..y * row + width * 4)?;
+        // In memory B G R A (32-bit little-endian, alpha first).
+        for [b, g, r, a] in line.as_chunks::<4>().0 {
+            rgba.extend_from_slice(&[*r, *g, *b, *a]);
+        }
+    }
+    let picture = image::RgbaImage::from_raw(width as u32, height as u32, rgba)?;
+    let mut png = Vec::new();
+    picture
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    Some(png)
+}
+
 pub fn data_dir() -> Option<PathBuf> {
     Some(std::env::home_dir()?.join("Library/Application Support/GitLance"))
 }

@@ -14,6 +14,8 @@ pub enum Tool {
     Outline,
     Discussions,
     Agents,
+    /// Report a problem, in every space (#118).
+    Report,
 }
 
 impl Tool {
@@ -22,11 +24,12 @@ impl Tool {
             Tool::Outline => "outline",
             Tool::Discussions => "discussions",
             Tool::Agents => "agents",
+            Tool::Report => "report",
         }
     }
 
     pub fn parse(name: &str) -> Option<Self> {
-        [Tool::Outline, Tool::Discussions, Tool::Agents]
+        [Tool::Outline, Tool::Discussions, Tool::Agents, Tool::Report]
             .into_iter()
             .find(|t| t.name() == name)
     }
@@ -36,6 +39,7 @@ impl Tool {
             Tool::Outline => "list",
             Tool::Discussions => "message",
             Tool::Agents => "bot",
+            Tool::Report => "flag",
         }
     }
 
@@ -44,6 +48,7 @@ impl Tool {
             Tool::Outline => "Outline",
             Tool::Discussions => "Discussions  ⌘⇧D",
             Tool::Agents => "Agents  ⇧⌘A",
+            Tool::Report => "Report a problem  ⌥⌘/",
         }
     }
 }
@@ -63,12 +68,15 @@ impl Workspace {
     /// a request's page Discussions · Agents, the Inbox none.
     fn space_tools(&self) -> &'static [Tool] {
         use super::spaces::Space;
+        // Report a problem is in every one, last (#118).
         match self.nav.space {
-            Space::Inbox => &[],
-            Space::Code => &[Tool::Outline, Tool::Agents],
-            Space::Branches => &[Tool::Agents],
-            Space::Requests if self.nav_page().is_some() => &[Tool::Discussions, Tool::Agents],
-            Space::Requests => &[Tool::Agents],
+            Space::Inbox => &[Tool::Report],
+            Space::Code => &[Tool::Outline, Tool::Agents, Tool::Report],
+            Space::Branches => &[Tool::Agents, Tool::Report],
+            Space::Requests if self.nav_page().is_some() => {
+                &[Tool::Discussions, Tool::Agents, Tool::Report]
+            }
+            Space::Requests => &[Tool::Agents, Tool::Report],
         }
     }
 
@@ -104,6 +112,11 @@ impl Workspace {
         }
         if tool == Some(Tool::Agents) {
             self.refresh_chats();
+        }
+        // The window's picture is taken before the report's window is drawn over it.
+        if tool == Some(Tool::Report) && was != Some(Tool::Report) {
+            self.prepare_report();
+            self.refresh_report_states(cx);
         }
         if tool.is_some() {
             self.set_zone(Zone::Tool, cx);
@@ -203,7 +216,9 @@ impl Workspace {
                 .pt(px(2.))
                 .children(self.space_tools().iter().map(|&tool| {
                     match tool {
-                        Tool::Outline => button(tool, None, String::new()).into_any_element(),
+                        Tool::Outline | Tool::Report => {
+                            button(tool, None, String::new()).into_any_element()
+                        }
                         Tool::Discussions => button(
                             tool,
                             count(self.comments_total(), theme::accent()),
@@ -249,6 +264,7 @@ impl Workspace {
                 Tool::Outline => self.outline_tool(cx),
                 Tool::Discussions => self.discussions_tool(cx),
                 Tool::Agents => self.agents_tool(cx),
+                Tool::Report => self.report_tool(cx),
             },
         };
         let submitting = self.submit.is_some();

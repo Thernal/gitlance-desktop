@@ -265,6 +265,9 @@ impl Workspace {
         if self.goline.is_some() {
             return self.goline_key(event, cx);
         }
+        if self.report_typing() {
+            return self.report_key(event, cx);
+        }
         if self.compose.is_some() && !self.compose_stepped_aside() {
             return self.compose_key(event, cx);
         }

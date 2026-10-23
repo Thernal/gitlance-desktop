@@ -843,6 +843,7 @@ impl Render for Workspace {
                     || self.open_ask.is_some()
                     || self.agent_pick.is_some()
                     || self.reaction_grid.is_some()
+                    || self.report_typing()
                 {
                     if self.palette.is_some() || self.ffind.is_some() {
                         "Workspace Typing Palette"
@@ -850,6 +851,7 @@ impl Render for Workspace {
                         || self.goline.is_some()
                         || self.typing_description()
                         || self.submit.is_some()
+                        || self.report_typing()
                     {
                         // ↑ ↓ belong to the field: they move its caret or its line.
                         "Workspace Typing Caret"
@@ -892,6 +894,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_requests))
             .on_action(cx.listener(Self::focus_diff))
             .on_action(cx.listener(Self::zen_one_file))
+            .on_action(cx.listener(Self::report_problem))
             .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::next_change))

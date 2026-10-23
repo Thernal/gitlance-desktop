@@ -981,6 +981,8 @@ impl Workspace {
         }
         self.chats_known = true;
         self.read_chat_edits(cx);
+        // An agent's draft of a report opens to be checked (#118).
+        self.take_report_drafts(cx);
         let (Some(root), Some(bus)) = (self.project.clone().or(self.root.clone()), Self::bus())
         else {
             return;

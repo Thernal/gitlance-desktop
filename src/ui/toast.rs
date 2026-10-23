@@ -81,6 +81,10 @@ impl Workspace {
         info: bool,
         cx: &mut Context<Self>,
     ) {
+        // Errors go in the app's log, for a report to carry (#118).
+        if !info {
+            crate::applog::line(&text);
+        }
         self.toasts.list.retain(|t| t.text != text);
         let id = self.toasts.next;
         self.toasts.next += 1;

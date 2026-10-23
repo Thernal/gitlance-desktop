@@ -15,6 +15,11 @@ pub fn reduce_motion() -> bool {
     false
 }
 
+/// The window's picture for a report (#118): not taken here yet.
+pub fn window_picture() -> Option<Vec<u8>> {
+    None
+}
+
 pub fn data_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)

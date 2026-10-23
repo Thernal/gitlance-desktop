@@ -42,6 +42,7 @@ mod palette;
 mod rail;
 mod reactions;
 mod recents;
+mod report;
 mod request_page;
 mod requests;
 mod reviewed;
@@ -122,6 +123,7 @@ actions!(
         ToggleRequests,
         FocusDiff,
         ZenOneFile,
+        ReportProblem,
         CopySelection,
         SelectAll,
         NextChange,
@@ -396,6 +398,7 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("cmd-9"), Tab9, Some("Workspace")),
         KeyBinding::new(&k("cmd-."), FocusDiff, Some("Workspace")),
         KeyBinding::new(&k("cmd-alt-."), ZenOneFile, Some("Workspace")),
+        KeyBinding::new(&k("cmd-alt-/"), ReportProblem, Some("Workspace")),
         KeyBinding::new(&k("cmd-c"), CopySelection, Some("Workspace")),
         KeyBinding::new(&k("cmd-a"), SelectAll, Some("Workspace && !Typing")),
         KeyBinding::new(&k("f7"), NextChange, Some("Workspace")),
@@ -617,7 +620,10 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
                 .checked(options.ignore_whitespace),
             MenuItem::action("One File at a Time", ToggleOneFile).checked(options.one_file),
         ]),
-        Menu::new("Help").items([MenuItem::action("Keyboard Shortcuts", ShowShortcuts)]),
+        Menu::new("Help").items([
+            MenuItem::action("Keyboard Shortcuts", ShowShortcuts),
+            MenuItem::action("Report a Problem…", ReportProblem),
+        ]),
     ]
 }
 
@@ -1382,6 +1388,8 @@ pub struct Workspace {
     zen_one: bool,
     /// The window with no repository: the card one of its ways in opened (#54).
     welcome: welcome::Welcome,
+    /// Report a problem, the tool window (#118).
+    report: report::ReportView,
     /// The Submit review card (`submit.rs`).
     submit: Option<submit::Submit>,
     /// The pending comment ⌥N / ⌥P is on.
@@ -1680,6 +1688,7 @@ impl Workspace {
             zen: None,
             zen_one: false,
             welcome: Default::default(),
+            report: Default::default(),
             recording: None,
             note_sel: None,
             settings_section: Default::default(),
@@ -3078,6 +3087,11 @@ impl Workspace {
         self.mark_motion("side", cx);
         self.mark_motion("zen", cx);
         cx.notify();
+    }
+
+    /// ⌥⌘/, Help → Report a Problem…: the report's tool window (#118).
+    fn report_problem(&mut self, _: &ReportProblem, _: &mut Window, cx: &mut Context<Self>) {
+        self.open_report(cx);
     }
 
     /// ⌥⌘.: zen with one file at a time, at a reading width (#55); outside zen it enters zen so.
