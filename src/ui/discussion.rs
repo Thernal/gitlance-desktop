@@ -282,7 +282,17 @@ pub fn note(
                                 .child(r)
                         }))
                         .child(stamp)
-                        .children(action.map(|a| div().ml_auto().flex_none().child(a))),
+                        // As tall as the name's line: the reaction bar coming on a hover
+                        // overhangs it rather than pushing the note down.
+                        .children(action.map(|a| {
+                            div()
+                                .ml_auto()
+                                .flex_none()
+                                .h(px(20.))
+                                .flex()
+                                .items_center()
+                                .child(a)
+                        })),
                 )
                 .child(div().min_w_0().child(body)),
         )

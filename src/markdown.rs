@@ -306,6 +306,10 @@ impl Builder {
         match event {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
+            // `:tada:` as the hosts show it; code keeps it as written.
+            Event::Text(t) if self.code.is_none() => {
+                self.text(&crate::emoji::shortcodes(&t), false)
+            }
             Event::Text(t) => self.text(&t, false),
             Event::Code(t) => self.text(&t, true),
             Event::Html(t) => self.text(&t, false),
@@ -337,7 +341,8 @@ impl Builder {
 /// The blocks of a markdown body, GitLab-flavoured: tables, task lists and strikethrough included.
 pub fn parse(source: &str) -> Vec<Block> {
     let mut b = Builder::default();
-    for event in Parser::new_ext(source, OPTIONS) {
+    // Text in one piece, so a `:name:` is never split.
+    for event in pulldown_cmark::TextMergeStream::new(Parser::new_ext(source, OPTIONS)) {
         b.event(event);
     }
     b.close_loose();
@@ -867,6 +872,14 @@ mod tests {
         assert!(!is_rich(&parse("just words\nover two lines")));
         assert!(is_rich(&parse("- a list")));
         assert!(is_rich(&parse("with `code`")));
+    }
+
+    #[test]
+    fn emoji_names_show_as_emoji_but_in_code() {
+        assert_eq!(
+            plain("ship :white_check_mark: `:tada:`\n\n```\n:rocket:\n```"),
+            "ship ✅ :tada: :rocket:"
+        );
     }
 
     #[test]

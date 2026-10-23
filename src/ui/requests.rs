@@ -730,11 +730,7 @@ impl Workspace {
             let edit_box = self.edit_box(change, edit.clone());
             let own = self.requests.login.as_deref() == Some(note.login.as_str());
             let editable = can_act && self.compose.is_none() && own;
-            let (hover, pills, grid) = (
-                edit.clone(),
-                self.reaction_pills(note.id, edit.clone()),
-                self.reaction_grid(note.id, edit.clone()),
-            );
+            let (hover, pills) = (edit.clone(), self.reaction_pills(note.id, edit.clone()));
             let bar = can_act
                 .then(|| self.hover_bar(ix, note.id, &note.login, edit.clone()))
                 .flatten();
@@ -756,7 +752,6 @@ impl Workspace {
                         ),
                     })
                     .children(pills)
-                    .children(grid)
                     .into_any_element(),
                 n == last && !replying,
                 (bar.is_some() || editable).then(|| {

@@ -1384,6 +1384,7 @@ pub struct Workspace {
     /// ☺+'s search and its cursor (#9).
     reaction_query: String,
     reaction_at: usize,
+    reaction_scroll: UniformListScrollHandle,
     /// Settings → Agents: what connecting said, and whether it runs.
     agent_setup: Option<String>,
     agent_setup_busy: bool,
@@ -1635,6 +1636,7 @@ impl Workspace {
             reaction_grid: None,
             reaction_query: String::new(),
             reaction_at: 0,
+            reaction_scroll: UniformListScrollHandle::new(),
             agent_setup: None,
             agent_setup_busy: false,
             notices: Default::default(),
