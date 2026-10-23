@@ -28,6 +28,8 @@ pub struct FileView {
     lines: Vec<String>,
     /// Its lines with their tabs widened, and their highlights.
     text: Rc<Vec<(SharedString, Vec<Span>)>>,
+    /// Those lines as the selection copies them (#93).
+    plain: Rc<std::cell::RefCell<Vec<String>>>,
     list: ListState,
     /// A Markdown file: shown rendered, until Source.
     pub rendered: bool,
@@ -164,17 +166,19 @@ impl Workspace {
                 this.file_reading = None;
                 match read {
                     Some((lines, spans, at, image, binary)) => {
-                        let text = lines
+                        let text: Vec<_> = lines
                             .iter()
                             .enumerate()
                             .map(|(n, l)| widen(l, spans.get(n).map_or(&[][..], Vec::as_slice)))
                             .collect();
+                        let plain = text.iter().map(|(l, _)| l.to_string()).collect();
                         this.file_view = Some(FileView {
                             path,
                             at,
                             rev,
                             lines,
                             text: Rc::new(text),
+                            plain: Rc::new(std::cell::RefCell::new(plain)),
                             list: ListState::new(0, ListAlignment::Top, px(400.)),
                             rendered: true,
                             image,
@@ -314,7 +318,7 @@ impl Workspace {
                     true,
                     format!("file-{}", view.path),
                     None,
-                    None,
+                    Some(self.selecting(cx.entity().downgrade())),
                 ))
                 .into_any_element()
         } else {
@@ -426,6 +430,12 @@ impl Workspace {
         }
         let text = view.text.clone();
         let this = cx.entity().downgrade();
+        // Its lines select as one text, across rows (#93).
+        let (sel, note, plain) = (
+            self.selecting(this.clone()),
+            SharedString::from(format!("file-lines-{}", view.path)),
+            view.plain.clone(),
+        );
         list(view.list.clone(), move |ix, _, cx| {
             let Some(&row_kind) = rows.get(ix) else {
                 return div().into_any_element();
@@ -462,8 +472,13 @@ impl Workspace {
                 })
                 .collect::<Vec<_>>();
             let comment = this.clone();
+            let styled = StyledText::new(line.clone()).with_highlights(highlights);
+            let layout = styled.layout().clone();
+            // In the code's font and size on each row: the list's own reach none of its rows.
             div()
                 .h(px(row))
+                .font_family(theme::CODE_FONT)
+                .text_size(px(size))
                 .flex()
                 .items_center()
                 .child(
@@ -486,10 +501,18 @@ impl Workspace {
                 )
                 .child(
                     div()
+                        .flex_1()
                         .pl_2()
                         .whitespace_nowrap()
                         .text_color(theme::code_text())
-                        .child(StyledText::new(line.clone()).with_highlights(highlights)),
+                        .child(markdown::line_block(
+                            styled.into_any_element(),
+                            layout,
+                            note.clone(),
+                            n,
+                            plain.clone(),
+                            sel.clone(),
+                        )),
                 )
                 .into_any_element()
         })

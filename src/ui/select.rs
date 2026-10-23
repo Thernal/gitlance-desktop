@@ -221,6 +221,17 @@ impl Workspace {
 }
 
 impl Workspace {
+    /// Text with no click of its own drawn so it can be selected and copied, as a comment's: a
+    /// title, a commit's message (#93).
+    pub(super) fn selectable(
+        &self,
+        key: impl Into<gpui::SharedString>,
+        text: &str,
+        this: gpui::WeakEntity<Self>,
+    ) -> gpui::AnyElement {
+        super::markdown::body(text, false, key, None, Some(self.selecting(this)))
+    }
+
     /// How the text of comments can be selected: the selection now, and presses back to here.
     pub(super) fn selecting(&self, this: gpui::WeakEntity<Self>) -> super::markdown::Selecting {
         let link = this.clone();

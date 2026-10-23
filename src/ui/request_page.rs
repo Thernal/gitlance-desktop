@@ -85,7 +85,7 @@ impl Workspace {
                 true,
                 format!("overview-{}", m.iid),
                 self.web.as_ref().map(|w| w.base.as_str()),
-                None,
+                Some(self.selecting(cx.entity().downgrade())),
             )
         };
         island()
@@ -203,7 +203,11 @@ impl Workspace {
                             .truncate()
                             .text_size(px(17.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(m.title.clone()),
+                            .child(self.selectable(
+                                format!("title-{}", m.iid),
+                                &m.title,
+                                cx.entity().downgrade(),
+                            )),
                     )
                     .child(state_chip(m))
                     .child(div().flex_1())
@@ -731,7 +735,11 @@ impl Workspace {
                     .min_w_0()
                     .truncate()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(m.title.clone()),
+                    .child(self.selectable(
+                        format!("line-title-{}", m.iid),
+                        &m.title,
+                        cx.entity().downgrade(),
+                    )),
             )
             .child(state_chip(m))
             .child(div().flex_1())

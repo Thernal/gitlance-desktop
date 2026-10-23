@@ -599,13 +599,20 @@ impl Workspace {
         let Some((path, text)) = &self.code.readme else {
             return self.render_code_root(cx).into_any_element();
         };
+        let selecting = Some(self.selecting(cx.entity().downgrade()));
         let body = if path.ends_with(".md") || path.ends_with(".markdown") {
-            markdown::body(text, true, "folder-readme", None, None)
+            markdown::body(text, true, "folder-readme", None, selecting)
         } else {
             div()
                 .font_family(theme::CODE_FONT)
                 .whitespace_normal()
-                .child(text.clone())
+                .child(markdown::body(
+                    text,
+                    false,
+                    "folder-readme",
+                    None,
+                    selecting,
+                ))
                 .into_any_element()
         };
         island()

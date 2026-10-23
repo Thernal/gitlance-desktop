@@ -1372,7 +1372,7 @@ impl Workspace {
                         true,
                         "create-preview",
                         self.web.as_ref().map(|w| w.base.as_str()),
-                        None,
+                        Some(self.selecting(cx.entity().downgrade())),
                     )
                 })
                 .into_any_element()

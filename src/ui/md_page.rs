@@ -544,6 +544,7 @@ impl Workspace {
         let under = self.page_under(ix, &path, &rows, &this);
         let ctx = BlockCtx {
             ix,
+            sel: self.selecting(this.clone()),
             this,
             notes: Rc::new(notes),
             under: RefCell::new(under),
@@ -686,6 +687,8 @@ impl Workspace {
 /// What every block of one page needs.
 struct BlockCtx {
     ix: usize,
+    /// A block's text can be selected and copied, as a comment's.
+    sel: super::markdown::Selecting,
     this: WeakEntity<Workspace>,
     notes: Rc<Vec<LineNote>>,
     /// What goes under a block (the composer, its opened comments), by side and first line.
@@ -734,7 +737,12 @@ impl BlockCtx {
         };
         let struck = unified && r.change == Change::Removed;
         self.frame(
-            doc_block(block, format!("page-{}-{k}-{old}", self.ix), pics.clone()),
+            doc_block(
+                block,
+                format!("page-{}-{k}-{old}", self.ix),
+                pics.clone(),
+                self.sel.clone(),
+            ),
             bar(r.change),
             struck,
             old,

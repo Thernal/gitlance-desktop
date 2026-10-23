@@ -153,12 +153,13 @@ pub fn doc_block(
     block: &Block,
     key: impl Into<SharedString>,
     pictures: Rc<Pictures>,
+    sel: Selecting,
 ) -> AnyElement {
     let mut ctx = Ctx {
         key: key.into(),
         next: 0,
         base: None,
-        sel: None,
+        sel: Some(sel),
         blocks: 0,
         texts: Rc::default(),
         doc: Some(pictures),
@@ -198,17 +199,36 @@ fn text_block(text_el: AnyElement, layout: TextLayout, text: &str, ctx: &mut Ctx
         }
         texts[block] = text.to_owned();
     }
-    let note = ctx.key.clone();
+    line_block(
+        text_el,
+        layout,
+        ctx.key.clone(),
+        block,
+        ctx.texts.clone(),
+        sel,
+    )
+}
+
+/// Block `block` of the text named `note`, whose blocks' texts are `texts`, selectable: the
+/// selection painted under it, the mouse turned into presses. A text drawn a row at a time (a
+/// file in Code) makes each line one, so a selection runs across rows.
+pub fn line_block(
+    text_el: AnyElement,
+    layout: TextLayout,
+    note: SharedString,
+    block: usize,
+    texts: Rc<RefCell<Vec<String>>>,
+    sel: Selecting,
+) -> AnyElement {
+    let len = texts.borrow().get(block).map_or(0, String::len);
     let range = sel
         .current
         .as_ref()
         .filter(|s| s.note == note)
-        .and_then(|s| s.in_block(block, text.len()));
+        .and_then(|s| s.in_block(block, len));
     let (for_paint, for_down, for_move) = (layout.clone(), layout.clone(), layout);
     let (on_down, on_move) = (sel.on.clone(), sel.on);
     let (note_down, note_move) = (note.clone(), note);
-    let texts = ctx.texts.clone();
-    let len = text.len();
     div()
         .relative()
         .cursor_text()

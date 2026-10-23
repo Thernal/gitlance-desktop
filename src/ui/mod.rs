@@ -3404,7 +3404,11 @@ impl Workspace {
                         div()
                             .text_size(px(15.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(commit.summary.clone()),
+                            .child(self.selectable(
+                                format!("commit-summary-{}", commit.id),
+                                &commit.summary,
+                                cx.entity().downgrade(),
+                            )),
                     )
                     .children(body.clone().filter(|_| self.body_expanded).map(|b| {
                         div()
@@ -3412,7 +3416,11 @@ impl Workspace {
                             .max_h(px(220.))
                             .overflow_y_scroll()
                             .text_color(theme::muted())
-                            .child(b)
+                            .child(self.selectable(
+                                format!("commit-body-{}", commit.id),
+                                &b,
+                                cx.entity().downgrade(),
+                            ))
                     }))
                     .child(
                         div()
