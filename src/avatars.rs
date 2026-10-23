@@ -15,6 +15,9 @@ use std::sync::{LazyLock, Mutex};
 
 /// Who has which picture: username and name, lower case → its address.
 static WHO: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
+/// Each person's username by their name (and by the username itself), lower case: what an
+/// initial's colour is made from, so one looks the same wherever they are named (#112).
+static LOGINS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
 /// Each address's file once it is in; None while it is being fetched or could not be.
 static FILES: LazyLock<Mutex<HashMap<String, Option<PathBuf>>>> = LazyLock::new(Default::default);
 /// A picture came in since the window last looked.
@@ -30,8 +33,14 @@ pub fn harvest(value: &Value) {
                 .iter()
                 .find_map(|k| map.get(*k).and_then(Value::as_str))
                 .unwrap_or("");
+            let name = map.get("name").and_then(Value::as_str).unwrap_or("");
+            if !login.is_empty() {
+                let mut logins = LOGINS.lock().unwrap_or_else(|e| e.into_inner());
+                for key in [login, name].into_iter().filter(|k| !k.is_empty()) {
+                    logins.insert(key.to_lowercase(), login.to_lowercase());
+                }
+            }
             if !url.is_empty() && !login.is_empty() {
-                let name = map.get("name").and_then(Value::as_str).unwrap_or("");
                 learn(login, name, url);
             }
             map.values().for_each(harvest);
@@ -214,6 +223,18 @@ pub fn picture(who: &str) -> Option<std::sync::Arc<gpui::Image>> {
         .clone()
 }
 
+/// The username of `who` (a name or a username), lower case, once a host named them; else `who`
+/// itself, lower case.
+pub fn login_of(who: &str) -> String {
+    let key = who.to_lowercase();
+    LOGINS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+        .cloned()
+        .unwrap_or(key)
+}
+
 /// Whether a picture came in since the last ask: the window is drawn again.
 pub fn take_fresh() -> bool {
     FRESH.swap(false, Ordering::Relaxed)
@@ -244,6 +265,10 @@ mod tests {
             "reviewers": [{ "login": "wren-avatars-test", "avatar_url": "x:not-a-url" }]
         }]);
         harvest(&answer);
+        // An initial's colour comes from the username, by name or by username alike.
+        assert_eq!(login_of("Ember Avatars"), "ember-avatars-test");
+        assert_eq!(login_of("EMBER-AVATARS-TEST"), "ember-avatars-test");
+        assert_eq!(login_of("Nobody Known"), "nobody known");
         let who = WHO.lock().unwrap();
         assert!(!who.contains_key("ember-avatars-test"));
         assert_eq!(

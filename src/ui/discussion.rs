@@ -165,10 +165,12 @@ pub fn avatar(name: &str, me: bool, size: f32) -> Div {
             .child(gpui::img(picture).size(px(size)).rounded_full());
     }
     const HUES: [u32; 6] = [0x56b6c2, 0x98c379, 0xc678dd, 0xe5c07b, 0xe06c75, 0xd19a66];
+    // The colour from the username, when a host named them (#112): the same person looks the same
+    // by name or by username; the initial from what is shown.
     let color = if me {
         theme::accent()
     } else {
-        let h = name
+        let h = crate::avatars::login_of(name)
             .bytes()
             .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)));
         gpui::rgb(HUES[h as usize % HUES.len()])
