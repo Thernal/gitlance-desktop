@@ -268,12 +268,12 @@ impl Drop for Claim {
 
 impl Chat {
     pub fn listening(&self) -> bool {
-        let fresh = if self.beta() { CODEX_FRESH } else { FRESH };
+        let fresh = if self.limited() { CODEX_FRESH } else { FRESH };
         now() - self.beat <= fresh
     }
 
-    /// A Codex session the app watches for (`crate::codex`, beta): said so wherever it is picked.
-    pub fn beta(&self) -> bool {
+    /// A Codex session the app watches for (`crate::codex`), limited: said so wherever it is picked.
+    pub fn limited(&self) -> bool {
         self.watcher == 0 && self.agent == "Codex"
     }
 }

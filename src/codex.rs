@@ -1,4 +1,4 @@
-//! Codex's chats (#18, beta). Codex has no background command that wakes it when it ends, as
+//! Codex's chats (#18, limited). Codex has no background command that wakes it when it ends, as
 //! Claude Code has, so the app is the watcher for it: on the app's beat, the session of the project
 //! that a Codex running in a terminal is on — the one `codex resume <id>` named, else the newest
 //! written in that terminal's folder since that Codex started (one not written yet is not taken
@@ -25,7 +25,7 @@ const AGENT: &str = "Codex";
 
 /// What a Codex chat cannot do yet, where it is picked (the developer, 2026-10-23: say its
 /// problems rather than hide it).
-pub const BETA: &str = "Codex is in beta. GitLance sees a Codex running in a terminal and the session it has written to since it started; sending starts a turn in that session (codex queue). Not seen: Codex in VS Code or the Codex app, nor a session before its first message. A turn sent as its terminal closes may run on unseen.";
+pub const LIMITS: &str = "Codex is limited here: GitLance sees a Codex running in a terminal and the session it has written to since it started; sending starts a turn in that session (codex queue). Not seen: Codex in VS Code or the Codex app, nor a session before its first message. A turn sent as its terminal closes may run on unseen.";
 
 /// `codex`'s commands that are not a session in a terminal (`codex --help`); `resume` and `fork`
 /// are one, and so is a prompt.

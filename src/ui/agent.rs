@@ -26,8 +26,8 @@ pub struct PickChat {
     title: String,
     agent: String,
     listening: bool,
-    /// A Codex session the app watches for (#18).
-    beta: bool,
+    /// A Codex session the app watches for (#18): limited.
+    limited: bool,
 }
 
 /// The "send to which chat?" card; with `route`, which chat a branch's notes go to (#77).
@@ -77,7 +77,7 @@ impl Workspace {
             .into_iter()
             .map(|c| PickChat {
                 listening: c.listening(),
-                beta: c.beta(),
+                limited: c.limited(),
                 session: c.session,
                 title: c.title,
                 agent: c.agent,
@@ -91,7 +91,7 @@ impl Workspace {
                     title,
                     agent: "Claude Code".into(),
                     listening: false,
-                    beta: false,
+                    limited: false,
                 });
             }
         }
@@ -100,7 +100,7 @@ impl Workspace {
             title: "New chat".into(),
             agent: "Claude Code".into(),
             listening: true,
-            beta: false,
+            limited: false,
         });
         self.agent_pick = Some(AgentPick {
             chats,
@@ -123,7 +123,7 @@ impl Workspace {
                 title: c.title.clone(),
                 agent: c.agent.clone(),
                 listening: true,
-                beta: c.beta(),
+                limited: c.limited(),
             })
             .collect();
         let selected = chats
@@ -1262,9 +1262,9 @@ impl Workspace {
                                     .text_size(px(11.))
                                     .text_color(theme::faint())
                                     .child(c.agent.clone())
-                                    .when(c.beta(), |s| {
-                                        s.child(beta(gpui::SharedString::from(format!(
-                                            "chat-beta-{}",
+                                    .when(c.limited(), |s| {
+                                        s.child(limited(gpui::SharedString::from(format!(
+                                            "chat-limited-{}",
                                             c.session
                                         ))))
                                     })
@@ -1913,7 +1913,9 @@ impl Workspace {
                                 .text_size(px(12.))
                                 .text_color(theme::muted())
                                 .child(format!("{} · {state}", chat.agent))
-                                .when(chat.beta, |s| s.child(beta(("pick-chat-beta", ix)))),
+                                .when(chat.limited, |s| {
+                                    s.child(limited(("pick-chat-limited", ix)))
+                                }),
                         ),
                 )
                 .children(on.then(|| keys::caps("↵", On::Plain)))
@@ -2076,14 +2078,14 @@ impl Workspace {
             .child(command("agents-cmd-claude", "Or by hand, in a terminal:", claude_cmd))
             .child(command(
                 "agents-cmd-codex",
-                "Codex (its tools; then a Codex running in a terminal in the project listens by itself — beta):",
+                "Codex (its tools; then a Codex running in a terminal in the project listens by itself — limited):",
                 codex_cmd,
             ))
             .child(
                 div()
                     .text_size(px(11.))
                     .text_color(theme::faint())
-                    .child(crate::codex::BETA),
+                    .child(crate::codex::LIMITS),
             )
     }
 
@@ -2302,8 +2304,9 @@ mod tests {
     }
 }
 
-/// "beta" beside a Codex chat (#18), what it cannot do yet in its tooltip.
-fn beta(id: impl Into<gpui::ElementId>) -> gpui::Stateful<gpui::Div> {
+/// "limited" beside a Codex chat (#18; the developer, 2026-10-23: not "beta"), what it cannot do
+/// yet in its tooltip.
+fn limited(id: impl Into<gpui::ElementId>) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .flex_none()
@@ -2314,7 +2317,7 @@ fn beta(id: impl Into<gpui::ElementId>) -> gpui::Stateful<gpui::Div> {
         .font_family(theme::UI_FONT)
         .text_size(px(10.))
         .text_color(theme::faint())
-        .child("beta")
+        .child("limited")
         .tooltip_show_delay(super::hover::LONG)
-        .tooltip(|_, cx| cx.new(|_| super::Tip(crate::codex::BETA)).into())
+        .tooltip(|_, cx| cx.new(|_| super::Tip(crate::codex::LIMITS)).into())
 }
