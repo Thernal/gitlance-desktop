@@ -2,6 +2,10 @@
 //! user is fetched once, through `curl` as the rest, into the app's folder (`avatars/`, named by
 //! the address), and an avatar shows it; until it is in, and for one without, the initial on its
 //! colour. Users are learnt from every answer the hosts give (`harvest`), by username and name.
+//! Gravatar is asked for a real picture only (`d=404`): its made-up pattern for one who has none
+//! is no picture of them. A host that keeps its uploads behind sign-in (a GitLab whose Public
+//! visibility is restricted answers 401 to an API token too) leaves the initial; a picture that
+//! could not be had is not asked for again for a week (`<name>.none`).
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -38,6 +42,7 @@ pub fn harvest(value: &Value) {
 }
 
 fn learn(login: &str, name: &str, url: &str) {
+    let url = &real_picture(url);
     {
         let mut who = WHO.lock().unwrap_or_else(|e| e.into_inner());
         for key in [login, name].into_iter().filter(|k| !k.is_empty()) {
@@ -65,6 +70,17 @@ fn learn(login: &str, name: &str, url: &str) {
         files.insert(url.to_owned(), Some(file));
         return;
     }
+    // Not to be had a short while ago: not asked for again yet.
+    let none = stem.with_extension("none");
+    if std::fs::metadata(&none)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < RETRY)
+    {
+        files.insert(url.to_owned(), None);
+        return;
+    }
     files.insert(url.to_owned(), None);
     let url = url.to_owned();
     std::thread::spawn(move || {
@@ -76,6 +92,25 @@ fn learn(login: &str, name: &str, url: &str) {
             FRESH.store(true, Ordering::Relaxed);
         }
     });
+}
+
+/// How long a picture that could not be had is not asked for again.
+const RETRY: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3600);
+
+/// `url` as it is asked for: Gravatar's for a real picture only — its `d=` (the pattern made up
+/// for one who has none) becomes `d=404`.
+fn real_picture(url: &str) -> String {
+    if !url.contains("gravatar.com/avatar/") {
+        return url.to_owned();
+    }
+    let (base, query) = url.split_once('?').unwrap_or((url, ""));
+    let mut params: Vec<String> = query
+        .split('&')
+        .filter(|p| !p.is_empty() && !p.starts_with("d="))
+        .map(str::to_owned)
+        .collect();
+    params.push("d=404".to_owned());
+    format!("{base}?{}", params.join("&"))
 }
 
 /// The kinds a picture is kept as, by what its bytes start with: the extension tells the image
@@ -117,15 +152,24 @@ fn stem_of(url: &str) -> Option<PathBuf> {
 fn fetch(url: &str, stem: &std::path::Path) -> Option<PathBuf> {
     std::fs::create_dir_all(stem.parent()?).ok()?;
     let part = stem.with_extension("part");
-    let ok = std::process::Command::new("curl")
+    let none = stem.with_extension("none");
+    let status = std::process::Command::new("curl")
         .args(["-sSfL", "--max-time", "15", "-o"])
         .arg(&part)
         .arg(url)
         .status()
-        .is_ok_and(|s| s.success());
-    let head = std::fs::read(&part).ok().filter(|_| ok)?;
+        .ok()?;
+    // The host said no (curl's 22: 404 for no Gravatar, 401 behind sign-in): not again for a
+    // while. A host not reached (the VPN off) is asked again next time.
+    if status.code() == Some(22) {
+        let _ = std::fs::remove_file(&part);
+        let _ = std::fs::write(&none, "");
+        return None;
+    }
+    let head = std::fs::read(&part).ok().filter(|_| status.success())?;
     let Some(kind) = kind_of(&head[..head.len().min(512)]) else {
         let _ = std::fs::remove_file(&part);
+        let _ = std::fs::write(&none, "");
         return None;
     };
     let file = stem.with_extension(kind);
@@ -178,6 +222,20 @@ pub fn take_fresh() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gravatar_is_asked_for_a_real_picture_only() {
+        assert_eq!(
+            real_picture("https://secure.gravatar.com/avatar/b8e3?s=80&d=identicon"),
+            "https://secure.gravatar.com/avatar/b8e3?s=80&d=404"
+        );
+        assert_eq!(
+            real_picture("https://www.gravatar.com/avatar/b8e3"),
+            "https://www.gravatar.com/avatar/b8e3?d=404"
+        );
+        let upload = "https://gitlab.example/uploads/-/system/user/avatar/1/avatar.png";
+        assert_eq!(real_picture(upload), upload);
+    }
 
     #[test]
     fn users_are_learnt_however_deep() {
