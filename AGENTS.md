@@ -4,8 +4,8 @@ What GitLance is and the MVP: `README.md`.
 Feature specs, UI mockups and design decisions: the sibling repo `../Design` — a new feature starts there.
 
 - **Everything written here is English** — code, comments, docs, commits.
-- **Rust, stable toolchain.** `cargo fmt` and `cargo clippy -- -D warnings` clean, `cargo test` green before
-  a commit to `main`.
+- **Rust, stable toolchain.** `cargo fmt` and `cargo clippy --all-targets -- -D warnings` clean (as CI runs it: without
+  `--all-targets` the tests' lints go unseen), `cargo test` green before a commit to `main`.
 - **UI first.** GitLance is the app; the binary takes at most an optional repository path. A real CLI is
   outside the MVP — ask first.
 - **Read-only towards the reviewed repository.** GitLance reads git state and never changes the index, the

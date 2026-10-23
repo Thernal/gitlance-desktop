@@ -2370,6 +2370,34 @@ pub(super) fn chat_badge(letter: char, hue: gpui::Rgba, gone: bool) -> gpui::Div
         .child(letter.to_string())
 }
 
+/// "limited" beside a Codex chat (#18; the developer, 2026-10-23: not "beta"), what it cannot do
+/// yet in its tooltip.
+fn limited(id: impl Into<gpui::ElementId>) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .px(px(5.))
+        .rounded(px(4.))
+        .border_1()
+        .border_color(theme::island_border())
+        .font_family(theme::UI_FONT)
+        .text_size(px(10.))
+        .text_color(theme::faint())
+        .child("limited")
+        .tooltip_show_delay(super::hover::LONG)
+        .tooltip(|_, cx| cx.new(|_| super::Tip(crate::codex::LIMITS)).into())
+}
+
+/// Chats by the names they were given (`crate::labels`), the rest by their first message.
+fn named(mut chats: Vec<agents::Chat>) -> Vec<agents::Chat> {
+    for c in &mut chats {
+        if let Some(name) = crate::labels::chat(&c.session) {
+            c.title = name;
+        }
+    }
+    chats
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2400,32 +2428,4 @@ mod tests {
         assert!(Filter::Waiting.takes(Kind::Working) && !Filter::Waiting.takes(Kind::Resolved));
         assert!(Filter::Done.takes(Kind::Addressed) && Filter::All.takes(Kind::Sent));
     }
-}
-
-/// "limited" beside a Codex chat (#18; the developer, 2026-10-23: not "beta"), what it cannot do
-/// yet in its tooltip.
-fn limited(id: impl Into<gpui::ElementId>) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .flex_none()
-        .px(px(5.))
-        .rounded(px(4.))
-        .border_1()
-        .border_color(theme::island_border())
-        .font_family(theme::UI_FONT)
-        .text_size(px(10.))
-        .text_color(theme::faint())
-        .child("limited")
-        .tooltip_show_delay(super::hover::LONG)
-        .tooltip(|_, cx| cx.new(|_| super::Tip(crate::codex::LIMITS)).into())
-}
-
-/// Chats by the names they were given (`crate::labels`), the rest by their first message.
-fn named(mut chats: Vec<agents::Chat>) -> Vec<agents::Chat> {
-    for c in &mut chats {
-        if let Some(name) = crate::labels::chat(&c.session) {
-            c.title = name;
-        }
-    }
-    chats
 }
