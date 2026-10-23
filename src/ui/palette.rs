@@ -242,7 +242,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
         Cmd::NextRequest,
     ),
     ("Previous merge request", "⌥↑", Cmd::PreviousRequest),
-    ("Hide or show the side panel", "⌥⌘1", Cmd::ToggleSidebar),
+    ("Hide or show the side panel", "⌘J", Cmd::ToggleSidebar),
     ("Fold or open Changes", "⌥⌘2", Cmd::ToggleFiles),
     ("Branches or merge requests", "⌥⌘3", Cmd::ToggleRequests),
     ("Diff only", "⌘.", Cmd::FocusDiff),
@@ -296,6 +296,14 @@ pub struct Palette {
     open_only: bool,
     items: Vec<Item>,
     refs: Vec<NamedRef>,
+}
+
+/// A file's name, which leads, and its folder, which follows it fainter — as IDEs list files.
+fn name_and_folder(path: &str) -> (String, String) {
+    match path.rsplit_once('/') {
+        Some((folder, name)) => (name.to_owned(), folder.to_owned()),
+        None => (path.to_owned(), String::new()),
+    }
 }
 
 /// The words of `query` all occur in `hay`, ignoring case — or as the starts of its words.
@@ -756,10 +764,11 @@ impl Workspace {
                     && crate::rank::score(query, &name(f.path())).is_none()
             })) {
                 if seen.insert(f.path().to_owned()) {
+                    let (label, detail) = name_and_folder(f.path());
                     items.push(Item {
                         group: "In this diff",
-                        label: f.path().to_owned(),
-                        detail: String::new(),
+                        label,
+                        detail,
                         key: "",
                         pick: Pick::File(ix),
                     });
@@ -778,12 +787,15 @@ impl Workspace {
                     }))
                     .filter(|f| seen.insert((*f).clone()))
                     .take(60)
-                    .map(|f| Item {
-                        group: "In the repository",
-                        label: f.clone(),
-                        detail: String::new(),
-                        key: "",
-                        pick: Pick::RepoFile(f.clone()),
+                    .map(|f| {
+                        let (label, detail) = name_and_folder(f);
+                        Item {
+                            group: "In the repository",
+                            label,
+                            detail,
+                            key: "",
+                            pick: Pick::RepoFile(f.clone()),
+                        }
                     }),
             );
         }
@@ -1172,20 +1184,24 @@ impl Workspace {
                 );
             }
             let selected = ix == p.at;
+            // A file: its name, then its folder right after it, cut first.
+            let file = matches!(item.pick, Pick::File(_) | Pick::RepoFile(_));
             rows.push(
                 super::row(("palette-item", ix), selected)
                     .h(px(28.))
                     .gap_3()
                     .child(
                         div()
-                            .flex_1()
+                            .when(!file, |s| s.flex_1())
+                            .when(file, |s| s.flex_none().max_w(px(320.)))
                             .min_w_0()
                             .truncate()
                             .child(super::keys::text(&item.label).into_owned()),
                     )
                     .child(
                         div()
-                            .flex_none()
+                            .when(!file, |s| s.flex_none())
+                            .when(file, |s| s.flex_1().min_w_0().truncate())
                             .text_size(px(11.))
                             .text_color(theme::muted())
                             .child(item.detail.clone()),

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 const FILE: &str = "open-with.txt";
 
 /// Finder with it selected, as the rail's project menu words it off macOS.
-const REVEAL: &str = if platform::MAC {
+pub(super) const REVEAL: &str = if platform::MAC {
     "Reveal in Finder"
 } else {
     "Show in its folder"
@@ -345,6 +345,11 @@ impl Workspace {
             self.error = app.open(&path, line).err().map(Into::into);
             self.open_cache.picked = Some((path, app));
         }
+    }
+
+    /// A file or folder of Code's tree opened in `app`.
+    pub(super) fn open_path_with(&mut self, path: &Path, app: App) {
+        self.error = app.open(path, 1).err().map(Into::into);
     }
 
     /// "Always open .ext files in …": kept, or let go when it was.

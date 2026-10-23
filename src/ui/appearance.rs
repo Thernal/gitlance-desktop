@@ -805,13 +805,17 @@ impl Workspace {
                     .iter()
                     .copied()
                     .min_by(|a, b| a.1.total_cmp(&b.1))?;
-                Some({
+                // It opens out and fades in, rather than pushing the page down at once (the
+                // developer, 2026-10-23); a new pair of themes opens it again.
+                let id = gpui::SharedString::from(format!("code-contrast-{}-{}", code.id, window.id));
+                Some(super::motion::appear(
                     div()
                         .flex()
                         .items_center()
                         .gap(px(10.))
                         .px(px(12.))
                         .py(px(8.))
+                        .overflow_hidden()
                         .rounded(px(ROW_RADIUS))
                         .bg(theme::danger_bg())
                         .text_size(px(12.))
@@ -829,8 +833,11 @@ impl Workspace {
                                 c.code = None;
                                 this.choose_theme(c, cx);
                             }),
-                        ))
-                })
+                        )),
+                    id,
+                    super::motion::BASE,
+                    |warning, v| warning.max_h(px(96. * v)).opacity(v),
+                ))
             }))
             .child(
                 div()
@@ -953,6 +960,23 @@ impl Workspace {
     }
 
     /// Leaves the editor.
+    /// Esc in the theme editor: the token being edited lets go, then the editor closes — Settings
+    /// stays (the developer, 2026-10-23). Whether it was in the editor.
+    pub(super) fn theme_edit_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(edit) = &mut self.theme_edit else {
+            return false;
+        };
+        if edit.selected.take().is_some() {
+            if self.field == Some(Field::ThemeValue) {
+                self.field = None;
+            }
+            cx.notify();
+        } else {
+            self.close_theme_edit(cx);
+        }
+        true
+    }
+
     pub(super) fn close_theme_edit(&mut self, cx: &mut Context<Self>) {
         self.theme_edit = None;
         if self.field == Some(Field::ThemeValue) {

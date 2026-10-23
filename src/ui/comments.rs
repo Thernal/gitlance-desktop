@@ -1751,6 +1751,9 @@ impl Workspace {
         let Some(compose) = self.compose.as_mut() else {
             return;
         };
+        // Clicked, it has the keys again, and a filter that had them lets go.
+        self.compose_aside = false;
+        self.field = None;
         compose.edit.click(at, clicks, shift || drag);
         if clicks == 1 && !shift && !drag {
             compose.edit.set_downstream(lower);
@@ -2526,6 +2529,8 @@ impl Workspace {
         }
         let (for_caret, for_down, for_move) = (layout.clone(), layout.clone(), layout);
         let (caret, downstream) = (compose.edit.caret(), compose.edit.downstream());
+        // Stepped aside, it shows no caret: the field that has the keys does.
+        let focused = !self.compose_stepped_aside();
         let (down, drag) = (this.clone(), this);
         div()
             .relative()
@@ -2547,6 +2552,9 @@ impl Workspace {
                 canvas(
                     |_, _, _| (),
                     move |bounds, _, window, _| {
+                        if !focused {
+                            return;
+                        }
                         let at = input::caret_point(&for_caret, caret, downstream)
                             .unwrap_or(bounds.origin + point(px(pad_x), px(pad_y)));
                         window.paint_quad(fill(
@@ -2581,13 +2589,19 @@ impl Workspace {
             .into_any_element()
     }
 
+    /// Whether the open composer has stepped aside for a field still open (a filter, a find).
+    pub(super) fn compose_stepped_aside(&self) -> bool {
+        self.compose_aside
+            && (self.field.is_some() || self.dfind.is_some() || self.find.text.is_some())
+    }
+
     /// Shows a comment: in the open file, scrolled to; in another file of the diff, that file first.
     pub(super) fn jump_to(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(path) = self
+        let Some((path, line, old)) = self
             .comments
             .iter()
             .find(|c| c.id == id)
-            .map(|c| c.path.clone())
+            .map(|c| (c.path.clone(), c.line, c.old))
         else {
             return;
         };
@@ -2602,6 +2616,14 @@ impl Workspace {
             .and_then(|d| d.files.iter().position(|f| f.path() == path));
         match ix {
             Some(ix) => self.select_file(ix, cx),
+            // Not in the diff open: the file in Code at its line, the note drawn under it there
+            // (the developer, 2026-10-23: a note asking you led nowhere).
+            None if !old && self.root.is_some() => {
+                self.jump = None;
+                self.file_jump = Some((path.clone(), line));
+                self.nav.space = super::spaces::Space::Code;
+                self.open_code_file(path, false, cx);
+            }
             None => self.jump = None,
         }
     }

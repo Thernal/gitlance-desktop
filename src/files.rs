@@ -132,11 +132,18 @@ fn level(files: &[String], dir: &str, depth: usize, open: &HashSet<String>, out:
     }
     folders.dedup();
     for folder in folders {
-        let path = format!("{prefix}{folder}");
+        let mut path = format!("{prefix}{folder}");
+        let mut name = folder.to_owned();
+        // A folder that holds one folder and nothing else is one row with it, `main/kotlin/a`,
+        // as Android Studio shows them; it opens as its last.
+        while let Some(only) = only_folder(files, &path) {
+            path = format!("{path}/{only}");
+            name = format!("{name}/{only}");
+        }
         let is_open = open.contains(&path);
         out.push(Row {
             path: path.clone(),
-            name: folder.to_owned(),
+            name,
             depth,
             folder: Some(is_open),
         });
@@ -157,6 +164,20 @@ fn level(files: &[String], dir: &str, depth: usize, open: &HashSet<String>, out:
             folder: None,
         });
     }
+}
+
+/// The one folder `dir` holds, when it holds nothing else.
+fn only_folder<'a>(files: &'a [String], dir: &str) -> Option<&'a str> {
+    let inside = format!("{dir}/");
+    let mut only: Option<&str> = None;
+    for f in files.iter().filter_map(|f| f.strip_prefix(inside.as_str())) {
+        let (first, _) = f.split_once('/')?;
+        match only {
+            Some(o) if o != first => return None,
+            _ => only = Some(first),
+        }
+    }
+    only
 }
 
 /// The README a folder page renders: the first of the usual names among `files` directly in
@@ -222,6 +243,33 @@ mod tests {
                 ("money", 0),
                 (".gitlab-ci.yml", 0),
                 ("README.md", 0)
+            ]
+            .map(|(n, d)| (n.to_owned(), d))
+        );
+    }
+
+    #[test]
+    fn a_folder_with_only_a_folder_in_it_is_one_row_with_it() {
+        let all = files(&[
+            "app/src/main/kotlin/a/B.kt",
+            "app/src/main/kotlin/a/C.kt",
+            "app/build.gradle",
+            "lib/x/y/Z.kt",
+        ]);
+        let open = ["app", "app/src/main/kotlin/a"].map(String::from).into();
+        let rows: Vec<(String, usize)> = rows(&all, &open)
+            .into_iter()
+            .map(|r| (r.name, r.depth))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("app", 0),
+                ("src/main/kotlin/a", 1),
+                ("B.kt", 2),
+                ("C.kt", 2),
+                ("build.gradle", 1),
+                ("lib/x/y", 0),
             ]
             .map(|(n, d)| (n.to_owned(), d))
         );

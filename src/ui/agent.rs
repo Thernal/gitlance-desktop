@@ -1391,9 +1391,18 @@ impl Workspace {
                         this.delete_draft(id, cx)
                     });
                 }
-                Kind::Asks => action("Answer…".to_owned(), true, |this, id, cx| {
-                    this.jump_to(id, cx)
-                }),
+                // Answered where it stands, or put away from here (the developer, 2026-10-23).
+                Kind::Asks => {
+                    action("Answer…".to_owned(), true, |this, id, cx| {
+                        this.jump_to(id, cx)
+                    });
+                    action("Resolve".to_owned(), false, |this, id, cx| {
+                        this.resolve_agent_comment(id, cx)
+                    });
+                    action("Archive".to_owned(), false, |this, id, cx| {
+                        this.set_archived(id, true, cx)
+                    });
+                }
                 Kind::Sent => action("Withdraw".to_owned(), false, |this, id, cx| {
                     this.withdraw(id, cx)
                 }),

@@ -188,9 +188,9 @@ impl Workspace {
         }
     }
 
-    /// The side panel; None when it is hidden (⌥⌘1, zen).
+    /// The side panel; None when it is hidden (⌘J, zen).
     pub(super) fn render_side(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        // Hidden a moment ago (⌥⌘1, zen), it is drawn on its way out (#56, 4).
+        // Hidden a moment ago (⌘J, zen), it is drawn on its way out (#56, 4).
         if !self.layout.show_sidebar && !self.motion.recent("side") && !self.side_drawer() {
             return None;
         }

@@ -79,7 +79,9 @@ impl Workspace {
             return;
         }
         let (min, max) = drag.split.bounds();
-        let moved = axis(drag.split, event.position) - drag.origin;
+        // In the interface's units, as the widths are: the edge stays under the pointer at any
+        // interface size.
+        let moved = (axis(drag.split, event.position) - drag.origin) / super::ui_zoom();
         let moved = if drag.split == Split::Tool {
             -moved
         } else {
@@ -1169,7 +1171,7 @@ impl Render for Workspace {
                             self.zen.is_none(),
                             self.motion.recent("zen"),
                             motion::BASE,
-                            |rail, v| rail.max_w(px(48. * v)),
+                            |rail, v| rail.max_w(px(48. * v)).opacity(v),
                         )
                     }))
                     .children(self.render_spaces(cx))
@@ -1183,7 +1185,7 @@ impl Render for Workspace {
                             self.zen.is_none(),
                             self.motion.recent("zen"),
                             motion::BASE,
-                            |stripe, v| stripe.max_w(px(44. * v)),
+                            |stripe, v| stripe.max_w(px(44. * v)).opacity(v),
                         )
                     }))
                     .into_any_element(),

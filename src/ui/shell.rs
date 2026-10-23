@@ -130,13 +130,30 @@ impl Shell {
         self.attach(ws, window, cx);
     }
 
-    /// Opens `path` in a tab of its own, and gives back its workspace.
+    /// The tab that has `path` open, as the tabs last said (a workspace may be mid-update).
+    pub(super) fn tab_of(&self, path: &std::path::Path) -> Option<usize> {
+        let same = |root: &std::path::Path| {
+            root == path
+                || matches!((root.canonicalize(), path.canonicalize()), (Ok(a), Ok(b)) if a == b)
+        };
+        self.model
+            .borrow()
+            .iter()
+            .position(|t| t.root.as_deref().is_some_and(same))
+    }
+
+    /// Opens `path` in a tab of its own, and gives back its workspace; a project already open
+    /// is gone to, not opened twice.
     pub(super) fn open_tab(
         &mut self,
         path: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<Workspace> {
+        if let Some(ix) = self.tab_of(&path).filter(|&ix| ix < self.tabs.len()) {
+            self.select(ix, window, cx);
+            return self.tabs[ix].clone();
+        }
         let ws = cx.new(|cx| Workspace::new(Some(path), false, window, cx));
         self.attach(ws.clone(), window, cx);
         ws

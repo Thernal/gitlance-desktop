@@ -270,7 +270,8 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("cmd-alt-p"), FilterFiles, Some("Workspace")),
         KeyBinding::new(&k("cmd-["), GoBack, Some("Workspace")),
         KeyBinding::new(&k("cmd-]"), GoForward, Some("Workspace")),
-        KeyBinding::new(&k("cmd-alt-1"), ToggleSidebar, Some("Workspace")),
+        // ⌘J the side panel, as ⌘B the menu (the developer, 2026-10-23; ⌥⌘1 before).
+        KeyBinding::new(&k("cmd-j"), ToggleSidebar, Some("Workspace")),
         KeyBinding::new(&k("cmd-alt-2"), ToggleFiles, Some("Workspace")),
         KeyBinding::new(&k("cmd-alt-3"), ToggleRequests, Some("Workspace")),
         KeyBinding::new(&k("c"), CommentLine, Some("Workspace && !Typing")),
@@ -571,7 +572,7 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
             MenuItem::action("Previous Tab", PreviousTab),
         ]),
         Menu::new("View").items([
-            MenuItem::action("Show Branches and Commits", ToggleSidebar),
+            MenuItem::action("Show the Side Panel", ToggleSidebar),
             MenuItem::action("Show Files", ToggleFiles),
             MenuItem::action("Focus on the Diff", FocusDiff),
             MenuItem::action("Fold the Menu to Icons", FoldMenu),
@@ -1553,6 +1554,12 @@ pub struct Workspace {
     widths: room::Widths,
     /// What a narrow window folded, for the session (#80).
     narrowed: narrow::Narrowed,
+    /// An open composer stepped aside for a field clicked or opened since (a filter, a find):
+    /// the keys go there until the composer is clicked again.
+    compose_aside: bool,
+    /// A file of Code being read and the line to show once it is in (a note from the Agents
+    /// window whose file is not in the diff open).
+    file_jump: Option<(String, u32)>,
     /// Whether this is the tab on screen: one behind another polls its repository seldom.
     on_screen: Rc<Shared<bool>>,
     /// Advance of one code character, measured on the first render.
@@ -1744,6 +1751,8 @@ impl Workspace {
             body_width: Rc::new(Shared::new(0.)),
             widths: Default::default(),
             narrowed: Default::default(),
+            compose_aside: false,
+            file_jump: None,
             on_screen: Rc::new(Shared::new(true)),
             char_width: 0.,
             commit_scroll: UniformListScrollHandle::new(),
@@ -2872,6 +2881,10 @@ impl Workspace {
     }
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
+        // A narrow window has it folded into the menu: it opens as the drawer (#80).
+        if self.compact() && !self.side_icons().is_empty() {
+            return self.toggle_drawer(None, cx);
+        }
         self.layout.show_sidebar = !self.layout.show_sidebar;
         self.layout.save();
         self.mark_motion("side", cx);
@@ -4222,6 +4235,11 @@ fn section_label(text: impl Into<SharedString>) -> gpui::Div {
 /// window goes through here, so the whole of it grows and shrinks together.
 pub(crate) fn px(value: f32) -> gpui::Pixels {
     gpui::px(value * f32::from(UI_ZOOM.load(std::sync::atomic::Ordering::Relaxed)) / 100.)
+}
+
+/// The interface size as a factor (1.1 at 110 %): what turns window pixels into `px` units.
+pub(crate) fn ui_zoom() -> f32 {
+    f32::from(UI_ZOOM.load(std::sync::atomic::Ordering::Relaxed)) / 100.
 }
 
 /// Makes `percent` the interface size: `px` and the window's rem (what `px_2`, `gap_3` … use).

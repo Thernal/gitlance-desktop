@@ -96,6 +96,7 @@ impl Workspace {
         if self.find.text.is_none() {
             self.reset_field_edit();
         }
+        self.compose_aside = self.compose.is_some();
         self.field = None;
         self.settings_open = false;
         self.dfind = None;
@@ -264,7 +265,7 @@ impl Workspace {
         if self.goline.is_some() {
             return self.goline_key(event, cx);
         }
-        if self.compose.is_some() {
+        if self.compose.is_some() && !self.compose_stepped_aside() {
             return self.compose_key(event, cx);
         }
         if self.reaction_grid.is_some() {
@@ -308,6 +309,7 @@ impl Workspace {
             } else if !self.nav.picked.is_empty() {
                 self.nav.picked.clear();
                 cx.notify();
+            } else if self.settings_open && self.theme_edit_escape(cx) {
             } else if self.settings_open {
                 self.settings_open = false;
                 cx.notify();
@@ -363,6 +365,7 @@ impl Workspace {
         if self.dfind.is_none() {
             self.reset_field_edit();
         }
+        self.compose_aside = self.compose.is_some();
         self.field = None;
         self.settings_open = false;
         self.find.text = None;

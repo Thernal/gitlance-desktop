@@ -200,7 +200,26 @@ impl Workspace {
             .min_h_0()
             .flex()
             .gap(px(super::gap()))
-            .children(self.side_docked().then(|| self.render_code_tree(cx)))
+            // It slides and fades in and out with ⌘J, as the side panel does.
+            .children(
+                (!self.compact() && (self.layout.show_sidebar || self.motion.recent("side"))).then(
+                    || {
+                        let room = self.layout.sidebar + super::gap();
+                        super::motion::toward(
+                            div()
+                                .flex()
+                                .flex_none()
+                                .overflow_hidden()
+                                .child(self.render_code_tree(cx)),
+                            "code-tree-pane",
+                            self.layout.show_sidebar,
+                            self.motion.recent("side"),
+                            super::motion::BASE,
+                            move |pane, v| pane.max_w(px(room * v)).opacity(v),
+                        )
+                    },
+                ),
+            )
             .child(page)
             .children(self.render_tool(cx))
             // Narrow, the tree opens over the page (#80).
@@ -338,6 +357,16 @@ impl Workspace {
                     .when(preview, |s| s.italic())
                     .child(row.name.clone()),
             )
+            // A right click: Reveal in Finder, Copy path, Open in.
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener({
+                    let path = row.path.clone();
+                    move |this, e: &gpui::MouseDownEvent, _, cx| {
+                        this.tree_context(path.clone(), e.position, cx)
+                    }
+                }),
+            )
             .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                 if row.folder.is_some() {
                     if !this.code.open.remove(&path) {
@@ -350,6 +379,31 @@ impl Workspace {
                 this.open_code_file(path.clone(), e.click_count() < 2, cx)
             }))
             .into_any_element()
+    }
+
+    /// A file's or a folder's menu in the tree: show it in Finder, copy its path, open it.
+    fn tree_context(
+        &mut self,
+        path: String,
+        at: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let full = root.join(&path);
+        let mut groups = vec![vec![
+            Entry::new(super::open_in::REVEAL, Act::Reveal(full.clone())),
+            Entry::new("Copy path", Act::Copy(path.clone())),
+            Entry::new("Copy full path", Act::Copy(full.display().to_string())),
+        ]];
+        if let Some(app) = self.open_app(&full) {
+            groups.push(vec![Entry::new(
+                format!("Open in {}", app.name()),
+                Act::OpenPathWith(full, app),
+            )]);
+        }
+        self.open_menu(at, groups, cx);
     }
 
     /// What the chip says Code reads: the working tree, or the branch or commit picked.

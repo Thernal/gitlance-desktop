@@ -48,6 +48,8 @@ pub enum Act {
     /// Open in's ▾ (#78): the page's file in this app, this once; its app kept for files with
     /// this extension (or let go); Settings, where the editor is chosen.
     OpenWith(super::open_in::App),
+    /// A file or folder of Code's tree in this app (its right click).
+    OpenPathWith(std::path::PathBuf, super::open_in::App),
     AlwaysOpen(String),
     EditorSettings,
 }
@@ -165,6 +167,7 @@ impl Workspace {
             Act::ThemeBase(id) => self.set_theme_base(&id, cx),
             Act::CodeRevision(rev) => self.set_code_revision(rev, cx),
             Act::OpenWith(app) => self.open_with_app(app),
+            Act::OpenPathWith(path, app) => self.open_path_with(&path, app),
             Act::AlwaysOpen(ext) => self.always_open(ext),
             Act::EditorSettings => self.open_settings(cx),
             // Need the window: `run_act_in` runs them.
@@ -277,13 +280,18 @@ impl Workspace {
         let height = rows as f32 * ROW + heads as f32 * HEAD + menu.groups.len() as f32 * 9. + 12.;
         // Inside the window: moved back from an edge it would cross, and scrolling when taller
         // than the window has room for.
+        // The pointer and the window in the interface's own units: `px` scales by the interface
+        // size, so at 110 % a menu placed in window pixels landed a tenth too far (#87).
+        let zoom = super::ui_zoom();
+        let viewport = gpui::size(viewport.width / zoom, viewport.height / zoom);
+        let at = gpui::point(menu.at.x / zoom, menu.at.y / zoom);
         let room = f32::from(viewport.height) - 2. * EDGE;
         let scrolls = height > room;
         let height = height.min(room);
-        let x = f32::from(menu.at.x)
+        let x = f32::from(at.x)
             .min(f32::from(viewport.width) - WIDTH - EDGE)
             .max(EDGE);
-        let y = f32::from(menu.at.y)
+        let y = f32::from(at.y)
             .min(f32::from(viewport.height) - height - EDGE)
             .max(EDGE);
         let groups = menu.groups.iter().enumerate().map(|(g, entries)| {

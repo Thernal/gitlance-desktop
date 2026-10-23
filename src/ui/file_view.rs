@@ -180,6 +180,14 @@ impl Workspace {
                             image,
                             binary,
                         });
+                        // A note shown from the Agents window: its line comes into view.
+                        if let Some(line) = this
+                            .file_jump
+                            .take_if(|(p, _)| this.file_view.as_ref().is_some_and(|v| &v.path == p))
+                            .map(|(_, line)| line)
+                        {
+                            this.reveal_file_line(line, cx);
+                        }
                     }
                     None => {
                         this.error = Some(format!("{path} is not in this version.").into());

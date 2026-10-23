@@ -127,6 +127,8 @@ impl Workspace {
         if self.field != Some(field) {
             self.reset_field_edit();
         }
+        // A composer open beside it steps aside: the keys come here (the developer, 2026-10-23).
+        self.compose_aside = self.compose.is_some();
         self.find.text = None;
         self.dfind = None;
         self.dterms = Default::default();

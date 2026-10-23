@@ -115,7 +115,8 @@ impl Workspace {
                             self.layout.show_sidebar,
                             self.motion.recent("side"),
                             motion::BASE,
-                            move |pane, v| pane.max_w(px(room * v)),
+                            // It fades as it narrows (the developer, 2026-10-23).
+                            move |pane, v| pane.max_w(px(room * v)).opacity(v),
                         )
                     }),
             )

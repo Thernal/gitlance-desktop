@@ -29,7 +29,19 @@ impl Workspace {
         then: Option<Target>,
         cx: &mut Context<Self>,
     ) {
-        if self.root.is_none() || self.root.as_ref() == Some(&path) {
+        if self.root.as_ref() == Some(&path) {
+            return self.open_here(path, then, cx);
+        }
+        // Open in another tab already: that tab comes on screen.
+        let other = self
+            .shell
+            .as_ref()
+            .and_then(gpui::WeakEntity::upgrade)
+            .filter(|shell| shell.read(cx).tab_of(&path).is_some());
+        if other.is_some() {
+            return self.open_in_new_tab(path, then, cx);
+        }
+        if self.root.is_none() {
             return self.open_here(path, then, cx);
         }
         match self.settings.open_in {

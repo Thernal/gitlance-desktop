@@ -10,6 +10,11 @@ use super::{Workspace, format, icons, island, markdown, plural, px, theme, words
 use crate::mr::{Details, Mr};
 use gpui::{AnyElement, ClickEvent, Context, Div, FontWeight, Rgba, SharedString, div, prelude::*};
 
+/// Overview's column beside the description, and the least height it keeps when the
+/// description is short.
+const SIDE: f32 = 300.;
+const SIDE_MIN: f32 = 320.;
+
 impl Workspace {
     /// The request of the page on screen, once it is the one loaded.
     fn page_request(&self) -> Option<&Mr> {
@@ -95,16 +100,17 @@ impl Workspace {
                     .overflow_y_scroll()
                     .child(self.overview_identity(m, cx))
                     .child(div().h(px(1.)).bg(theme::island_border()))
+                    // The description sets the height; the facts and discussions beside it are no
+                    // taller and scroll in their own column (the developer, 2026-10-23).
                     .child(
                         div()
-                            .flex()
-                            .items_start()
-                            .gap(px(32.))
+                            .relative()
                             .px(px(24.))
                             .py(px(20.))
                             .child(
                                 div()
-                                    .flex_1()
+                                    .mr(px(SIDE + 32.))
+                                    .min_h(px(SIDE_MIN))
                                     .min_w_0()
                                     .flex()
                                     .flex_col()
@@ -119,8 +125,13 @@ impl Workspace {
                             )
                             .child(
                                 div()
-                                    .w(px(300.))
-                                    .flex_none()
+                                    .id("overview-side")
+                                    .absolute()
+                                    .top(px(20.))
+                                    .bottom(px(20.))
+                                    .right(px(24.))
+                                    .w(px(SIDE))
+                                    .overflow_y_scroll()
                                     .flex()
                                     .flex_col()
                                     .gap(px(20.))

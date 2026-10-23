@@ -87,7 +87,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌥U ⌥D ⌥Z", "split, mode, wrap"),
             ("⌥E ⌥W", "full file, whitespace"),
             ("⌥⌘B", "annotate: who wrote each line"),
-            ("⌥⌘1 ⌥⌘2 ⌥⌘3", "side panel, fold Changes, Merge requests"),
+            ("⌘J ⌥⌘2 ⌥⌘3", "side panel, fold Changes, Merge requests"),
             ("⌘B", "fold the menu to icons"),
             ("⌘.", "zen: the diff alone, the keys of a review below"),
             ("⌘+  ⌘−  ⌘0", "interface bigger, smaller, actual size"),

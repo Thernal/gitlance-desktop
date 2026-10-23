@@ -397,7 +397,14 @@ impl Workspace {
                 })
                 .tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into())
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.go_space(space, cx)));
+                // A double click folds or opens what is open under it, as its chevron does.
+                .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                    if e.click_count() == 2 && !this.open_rows(space).is_empty() {
+                        this.toggle_open_items(space, cx)
+                    } else {
+                        this.go_space(space, cx)
+                    }
+                }));
             // The icon's place: centred in the folded menu, after the indent open; it moves only
             // with the menu's own motion.
             let line = super::motion::toward(
@@ -658,7 +665,7 @@ impl Workspace {
             self.zen.is_none(),
             self.motion.recent("zen"),
             super::motion::BASE,
-            |menu, v| menu.max_w(px(OPEN * v)),
+            |menu, v| menu.max_w(px(OPEN * v)).opacity(v),
         ))
     }
 }
