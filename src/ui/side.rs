@@ -133,8 +133,20 @@ impl Workspace {
     fn side_versions(&self) -> bool {
         let page = self.nav_page();
         let tabbed = !self.item_sections().is_empty();
-        let commit_level = matches!(page, Some(Page::RequestCommit(..) | Page::BranchCommit(..)));
-        let branch = tabbed && matches!(page, Some(Page::Branch(_) | Page::BranchCommit(..)));
+        let commit_level = matches!(
+            page,
+            Some(
+                Page::RequestCommit(..)
+                    | Page::BranchCommit(..)
+                    | Page::RequestCommits(..)
+                    | Page::BranchCommits(..)
+            )
+        );
+        let branch = tabbed
+            && matches!(
+                page,
+                Some(Page::Branch(_) | Page::BranchCommit(..) | Page::BranchCommits(..))
+            );
         self.versions.len() > 1 && !commit_level && !branch
     }
 

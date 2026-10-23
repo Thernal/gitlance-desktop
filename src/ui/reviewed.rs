@@ -289,16 +289,9 @@ pub fn fingerprint(file: &FileDiff) -> u64 {
 
 impl Workspace {
     /// The key the marks of the open diff are kept under; none for the working tree, which has
-    /// no stable identity.
+    /// no stable identity. A branch's pages keep them too: your own work is reviewed there before
+    /// it goes out (the developer, 2026-10-23; #74 had none).
     fn review_scope(&self) -> Option<String> {
-        // A branch's pages are your own work: no review marks there (#74). The main line keeps
-        // them, its commits are everyone's.
-        if let Some(super::nav::Page::Branch(refname) | super::nav::Page::BranchCommit(refname, _)) =
-            self.loaded_page()
-            && self.branch_tabbed(&refname)
-        {
-            return None;
-        }
         let root = self.root.as_ref()?.display().to_string();
         let key = match &self.diff.as_ref()?.header {
             Header::Commit(c) => format!("commit:{}", c.id),

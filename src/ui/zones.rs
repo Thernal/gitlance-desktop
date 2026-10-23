@@ -132,10 +132,6 @@ impl Workspace {
 
     /// ← and → : the neighbouring file, or in the file tree open and close folders.
     pub(super) fn zone_horizontal(&mut self, forward: bool, cx: &mut Context<Self>) {
-        // On a request's commit they walk its commits, but in the file tree (#73).
-        if self.zone != Zone::Files && self.step_item_commit(forward, cx) {
-            return;
-        }
         match self.zone {
             Zone::Files if !self.options.list_files && self.pfilter.trim().is_empty() => {
                 self.tree_horizontal(forward, cx)

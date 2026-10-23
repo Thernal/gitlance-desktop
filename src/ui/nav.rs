@@ -24,6 +24,9 @@ pub enum Page {
     Branch(String),
     /// A commit of a branch off the main line: a level under its Commits (#74).
     BranchCommit(String, Oid),
+    /// A run of a branch's commits picked with shift, newest and oldest: one diff, a level under
+    /// its Commits.
+    BranchCommits(String, Oid, Oid),
     /// Two versions of a branch compared.
     Versions(String, usize, usize),
     /// What is not committed, against `HEAD`.
@@ -33,6 +36,8 @@ pub enum Page {
     Request(u64),
     /// A commit of a request.
     RequestCommit(u64, Oid),
+    /// A run of a request's commits picked with shift, newest and oldest.
+    RequestCommits(u64, Oid, Oid),
     /// Two versions of a request compared.
     RequestVersions(u64, usize, usize),
 }
@@ -43,24 +48,26 @@ impl Page {
             Page::File(_) => Space::Code,
             Page::Branch(_)
             | Page::BranchCommit(..)
+            | Page::BranchCommits(..)
             | Page::Versions(..)
             | Page::WorkingTree
             | Page::Compare(..) => Space::Branches,
-            Page::Request(_) | Page::RequestCommit(..) | Page::RequestVersions(..) => {
-                Space::Requests
-            }
+            Page::Request(_)
+            | Page::RequestCommit(..)
+            | Page::RequestCommits(..)
+            | Page::RequestVersions(..) => Space::Requests,
         }
     }
 
     /// The page one up; None when that is the space's root.
     pub fn parent(&self) -> Option<Page> {
         match self {
-            Page::Versions(refname, ..) | Page::BranchCommit(refname, _) => {
-                Some(Page::Branch(refname.clone()))
-            }
-            Page::RequestCommit(iid, _) | Page::RequestVersions(iid, ..) => {
-                Some(Page::Request(*iid))
-            }
+            Page::Versions(refname, ..)
+            | Page::BranchCommit(refname, _)
+            | Page::BranchCommits(refname, ..) => Some(Page::Branch(refname.clone())),
+            Page::RequestCommit(iid, _)
+            | Page::RequestCommits(iid, ..)
+            | Page::RequestVersions(iid, ..) => Some(Page::Request(*iid)),
             Page::File(_)
             | Page::Branch(_)
             | Page::WorkingTree
@@ -74,10 +81,12 @@ impl Page {
         match self {
             Page::Branch(refname)
             | Page::BranchCommit(refname, _)
+            | Page::BranchCommits(refname, ..)
             | Page::Versions(refname, ..) => Some(Item::Branch(refname.clone())),
-            Page::Request(iid) | Page::RequestCommit(iid, _) | Page::RequestVersions(iid, ..) => {
-                Some(Item::Request(*iid))
-            }
+            Page::Request(iid)
+            | Page::RequestCommit(iid, _)
+            | Page::RequestCommits(iid, ..)
+            | Page::RequestVersions(iid, ..) => Some(Item::Request(*iid)),
             Page::File(_) | Page::WorkingTree | Page::Compare(..) => None,
         }
     }
@@ -88,11 +97,13 @@ impl Page {
             Page::File(path) => format!("file:{path}"),
             Page::Branch(refname) => format!("branch:{refname}"),
             Page::BranchCommit(refname, id) => format!("branch-commit:{id}:{refname}"),
+            Page::BranchCommits(refname, a, b) => format!("branch-commits:{a}:{b}:{refname}"),
             Page::Versions(refname, a, b) => format!("versions:{a}:{b}:{refname}"),
             Page::WorkingTree => "working-tree".to_owned(),
             Page::Compare((base, a), (head, b)) => format!("compare:{a}:{b}:{base}:{head}"),
             Page::Request(iid) => format!("request:{iid}"),
             Page::RequestCommit(iid, id) => format!("request-commit:{iid}:{id}"),
+            Page::RequestCommits(iid, a, b) => format!("request-commits:{iid}:{a}:{b}"),
             Page::RequestVersions(iid, a, b) => format!("request-versions:{iid}:{a}:{b}"),
         }
     }
@@ -108,6 +119,10 @@ impl Page {
                 let (id, refname) = rest.split_once(':')?;
                 Page::BranchCommit(refname.to_owned(), Oid::from_str(id).ok()?)
             }
+            "branch-commits" => {
+                let (a, b) = (Oid::from_str(next()?).ok()?, Oid::from_str(next()?).ok()?);
+                Page::BranchCommits(next()?.to_owned(), a, b)
+            }
             "versions" => {
                 let (a, b) = (next()?.parse().ok()?, next()?.parse().ok()?);
                 Page::Versions(next()?.to_owned(), a, b)
@@ -121,6 +136,11 @@ impl Page {
             "request-commit" => {
                 Page::RequestCommit(next()?.parse().ok()?, Oid::from_str(next()?).ok()?)
             }
+            "request-commits" => Page::RequestCommits(
+                next()?.parse().ok()?,
+                Oid::from_str(next()?).ok()?,
+                Oid::from_str(next()?).ok()?,
+            ),
             "request-versions" => Page::RequestVersions(
                 next()?.parse().ok()?,
                 next()?.parse().ok()?,
@@ -239,9 +259,13 @@ pub struct Nav {
     pending_show: Option<(Space, Option<Page>)>,
     /// The row a root list has selected: a request, a branch or the working tree.
     pub pick_request: Option<u64>,
-    /// The commit a request's Commits section has selected (#73).
+    /// The commit a request's Commits section has selected (#73), and with shift the other end
+    /// of a run of them.
     pub pick_commit: Option<Oid>,
+    pub pick_to: Option<Oid>,
     pub pick_branch: Option<BranchRow>,
+    /// The menu's open items picked with shift, the first the one it began from: ⌘W closes them.
+    pub picked: Vec<Item>,
     /// Loading what a page needs, or coming back to a moment: no new moment, no link.
     restoring: bool,
 }
@@ -261,6 +285,8 @@ impl Default for Nav {
             pick_request: None,
             pick_commit: None,
             pick_branch: None,
+            picked: Vec::new(),
+            pick_to: None,
             restoring: false,
         }
     }
@@ -374,6 +400,11 @@ impl Workspace {
             let iid = *iid;
             return Some(match self.selection {
                 Selection::Commit(ix) => Page::RequestCommit(iid, self.commits.get(ix)?.id),
+                Selection::Commits { newest, oldest } => Page::RequestCommits(
+                    iid,
+                    self.commits.get(newest)?.id,
+                    self.commits.get(oldest)?.id,
+                ),
                 Selection::Versions { from, to } => Page::RequestVersions(iid, from, to),
                 Selection::None | Selection::WorkingTree => Page::Request(iid),
             });
@@ -386,6 +417,11 @@ impl Workspace {
                 (Selection::Commit(ix), _) if tabbed => {
                     Page::BranchCommit(refname, self.commits.get(ix)?.id)
                 }
+                (Selection::Commits { newest, oldest }, _) => Page::BranchCommits(
+                    refname,
+                    self.commits.get(newest)?.id,
+                    self.commits.get(oldest)?.id,
+                ),
                 (Selection::None, Some(Header::Compare { .. })) if self.branch_compare() => {
                     Page::Branch(refname)
                 }
@@ -430,14 +466,17 @@ impl Workspace {
     /// Commits and Changes (#74); none for anything else.
     pub(super) fn item_sections(&self) -> &'static [Section] {
         match self.nav_page() {
-            Some(Page::Request(_) | Page::RequestCommit(..) | Page::RequestVersions(..)) => {
-                &Section::ALL
-            }
-            Some(Page::Branch(refname) | Page::BranchCommit(refname, _))
-                if self.branch_tabbed(refname) =>
-            {
-                &[Section::Commits, Section::Changes]
-            }
+            Some(
+                Page::Request(_)
+                | Page::RequestCommit(..)
+                | Page::RequestCommits(..)
+                | Page::RequestVersions(..),
+            ) => &Section::ALL,
+            Some(
+                Page::Branch(refname)
+                | Page::BranchCommit(refname, _)
+                | Page::BranchCommits(refname, ..),
+            ) if self.branch_tabbed(refname) => &[Section::Commits, Section::Changes],
             _ => &[],
         }
     }
@@ -535,6 +574,14 @@ impl Workspace {
             let section = match &page {
                 Page::RequestCommit(_, id) | Page::BranchCommit(_, id) => {
                     self.nav.pick_commit = Some(*id);
+                    self.nav.pick_to = None;
+                    Some(Section::Commits)
+                }
+                // A run is picked there as it was, newest first.
+                Page::RequestCommits(_, newest, oldest)
+                | Page::BranchCommits(_, newest, oldest) => {
+                    self.nav.pick_commit = Some(*newest);
+                    self.nav.pick_to = Some(*oldest);
                     Some(Section::Commits)
                 }
                 Page::RequestVersions(..) => Some(Section::Changes),
@@ -725,12 +772,22 @@ impl Workspace {
                     self.select_request(iid, cx);
                 }
             }
-            Page::RequestCommit(iid, _) | Page::RequestVersions(iid, ..) => {
+            Page::RequestCommit(iid, _)
+            | Page::RequestCommits(iid, ..)
+            | Page::RequestVersions(iid, ..) => {
                 self.nav.pending = Some(page);
                 if same_item {
                     self.finish_pending(cx);
                 } else {
                     self.select_request(iid, cx);
+                }
+            }
+            Page::BranchCommits(refname, ..) => {
+                self.nav.pending = Some(page);
+                if same_item {
+                    self.finish_pending(cx);
+                } else if let Some(ix) = self.branch_ix(&refname) {
+                    self.select_branch(ix, None, cx);
                 }
             }
         }
@@ -747,10 +804,26 @@ impl Workspace {
             return false;
         };
         let done = match page {
-            Page::RequestCommit(iid, _) | Page::RequestVersions(iid, ..)
+            Page::RequestCommit(iid, _)
+            | Page::RequestCommits(iid, ..)
+            | Page::RequestVersions(iid, ..)
                 if self.open_request.as_ref().map(|r| r.2) != Some(iid) =>
             {
                 false
+            }
+            Page::RequestCommits(_, newest, oldest) | Page::BranchCommits(_, newest, oldest) => {
+                let at = |id: Oid| self.commits.iter().position(|c| c.id == id);
+                match (at(newest), at(oldest)) {
+                    (Some(a), Some(b)) => {
+                        self.select_commits(a, b, cx);
+                        true
+                    }
+                    _ => {
+                        // A push rewrote them: the item's own page.
+                        self.nav.pending = None;
+                        return false;
+                    }
+                }
             }
             Page::RequestCommit(_, id) => match self.commits.iter().position(|c| c.id == id) {
                 Some(ix) => {
@@ -870,6 +943,7 @@ impl Workspace {
     /// root comes.
     pub(super) fn close_open(&mut self, item: &Item, cx: &mut Context<Self>) {
         self.nav.open.retain(|o| &o.item != item);
+        self.nav.picked.retain(|o| o != item);
         let space = item.space();
         let shown = self.page_of(space).and_then(Page::item).as_ref() == Some(item);
         if shown {
@@ -888,8 +962,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ⌘W: closes what is open on screen — a request, a branch, a file in Code.
+    /// ⌘W: closes the open items picked in the menu, else what is open on screen — a request, a
+    /// branch, a file in Code.
     pub(super) fn close_shown(&mut self, cx: &mut Context<Self>) {
+        if self.close_picked(cx) {
+            return;
+        }
         match self.nav_page().cloned() {
             Some(Page::File(path)) => self.close_code_tab(&path, cx),
             Some(page) => match page.item() {
@@ -1022,6 +1100,39 @@ impl Workspace {
             .collect()
     }
 
+    /// Shift and a click on an open item in the menu: the items of its space from the one it began
+    /// from (the first picked, else the one on screen) to this one, picked to close with ⌘W.
+    pub(super) fn pick_open(&mut self, item: Item, cx: &mut Context<Self>) {
+        let items: Vec<Item> = self
+            .open_items(item.space())
+            .into_iter()
+            .map(|o| o.item.clone())
+            .collect();
+        let from = self
+            .nav
+            .picked
+            .first()
+            .cloned()
+            .or_else(|| self.page_of(item.space()).and_then(Page::item))
+            .filter(|f| items.contains(f))
+            .unwrap_or_else(|| item.clone());
+        if let Some(picked) = run(&items, &from, &item) {
+            self.nav.picked = picked;
+            cx.notify();
+        }
+    }
+
+    /// ⌘W with open items picked in the menu: they all close.
+    pub(super) fn close_picked(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.nav.picked.is_empty() {
+            return false;
+        }
+        for item in std::mem::take(&mut self.nav.picked) {
+            self.close_open(&item, cx);
+        }
+        true
+    }
+
     /// Whether `item` is the one on screen.
     pub(super) fn is_shown(&self, item: &Item) -> bool {
         self.nav_page().and_then(Page::item).as_ref() == Some(item)
@@ -1048,9 +1159,29 @@ impl Workspace {
     }
 }
 
+/// The items from `from` to `to` in `items`' order, `from` first; None when either is missing.
+fn run<T: PartialEq + Clone>(items: &[T], from: &T, to: &T) -> Option<Vec<T>> {
+    let a = items.iter().position(|i| i == from)?;
+    let b = items.iter().position(|i| i == to)?;
+    let mut out = items[a.min(b)..=a.max(b)].to_vec();
+    if a > b {
+        out.reverse();
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shift_picks_the_run_from_where_it_began() {
+        let items = [1, 2, 3, 4, 5];
+        assert_eq!(run(&items, &2, &4), Some(vec![2, 3, 4]));
+        assert_eq!(run(&items, &4, &2), Some(vec![4, 3, 2]));
+        assert_eq!(run(&items, &3, &3), Some(vec![3]));
+        assert_eq!(run(&items, &9, &3), None);
+    }
 
     #[test]
     fn a_page_knows_its_space_and_the_page_above_it() {

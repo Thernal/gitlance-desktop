@@ -407,6 +407,14 @@ impl Workspace {
                 .get(ix)
                 .map(|c| format::short(c.id))
                 .unwrap_or_default(),
+            Selection::Commits { newest, oldest } => {
+                match (self.commits.get(oldest), self.commits.get(newest)) {
+                    (Some(a), Some(b)) => {
+                        format!("{}..{}", format::short(a.id), format::short(b.id))
+                    }
+                    _ => String::new(),
+                }
+            }
             Selection::Versions { from, to } => {
                 match (self.versions.get(from), self.versions.get(to)) {
                     (Some(a), Some(b)) => format!("v{}→v{}", a.number, b.number),

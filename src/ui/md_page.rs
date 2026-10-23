@@ -384,6 +384,15 @@ impl Workspace {
                 }
                 None => ("Before".into(), "After".into()),
             },
+            Selection::Commits { newest, oldest } => {
+                match (self.commits.get(oldest), self.commits.get(newest)) {
+                    (Some(a), Some(b)) => (
+                        format!("{}^ · before", super::format::short(a.id)),
+                        format!("{} · now", super::format::short(b.id)),
+                    ),
+                    _ => ("Before".into(), "After".into()),
+                }
+            }
             Selection::None => ("Before".into(), "After".into()),
         }
     }

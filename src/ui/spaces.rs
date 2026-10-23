@@ -428,6 +428,10 @@ impl Workspace {
                 .map(|(n, open)| {
                     let group: gpui::SharedString = format!("{id}-open-{n}").into();
                     let on = open.on;
+                    let picked = open
+                        .item
+                        .as_ref()
+                        .is_some_and(|i| self.nav.picked.contains(i));
                     let item = open.item.clone();
                     let close = item.clone();
                     let dot = |color: gpui::Rgba, tip: &'static str| {
@@ -465,6 +469,12 @@ impl Workspace {
                                 .border_color(theme::island_border())
                                 .text_color(theme::muted())
                                 .hover(|s| s.text_color(theme::text()))
+                        })
+                        // Picked with shift, for ⌘W.
+                        .when(picked && !on, |s| {
+                            s.rounded_r(px(super::ROW_RADIUS))
+                                .bg(theme::selected())
+                                .text_color(theme::text())
                         })
                         .child(
                             icons::icon(open.icon)
@@ -508,8 +518,13 @@ impl Workspace {
                             let tip: SharedString = open.tip.into();
                             move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into()
                         })
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| match &item {
-                            Some(item) => this.show_open(item, cx),
+                        // Shift picks a run of them to close together with ⌘W.
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| match &item {
+                            Some(item) if e.modifiers().shift => this.pick_open(item.clone(), cx),
+                            Some(item) => {
+                                this.nav.picked.clear();
+                                this.show_open(item, cx)
+                            }
                             None => this.go_space(space, cx),
                         }))
                         .into_any_element()

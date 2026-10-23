@@ -1,9 +1,9 @@
 //! A branch's page (#74): a branch that forks from the main line has the tabs Commits · Changes,
 //! Changes being the branch against the main line since they parted, with one line of facts over
 //! it — how far ahead and behind, whether it is pushed, its request — and Create merge request as
-//! its primary action. A commit of it is a level under Commits. Its pages carry no review marks:
-//! a branch is your own work (`review_scope`). The main line itself has no base: its page is the
-//! commit browser it always was.
+//! its primary action. A commit of it is a level under Commits; a run of its commits picked with
+//! shift is one diff there. Its pages carry review marks, so your own work is reviewed before it
+//! goes out. The main line itself has no base: its page is the commit browser it always was.
 
 use super::nav::Page;
 use super::{Header, NamedTip, Workspace, island, plural, px, theme};

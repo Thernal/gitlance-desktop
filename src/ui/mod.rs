@@ -103,6 +103,8 @@ actions!(
         NextCommit,
         PreviousFile,
         NextFile,
+        PreviousCommitOrFile,
+        NextCommitOrFile,
         ToggleUnified,
         CycleMode,
         SetLines,
@@ -350,8 +352,10 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
         KeyBinding::new(&k("end"), DiffEnd, Some("Workspace && !Typing")),
         KeyBinding::new(&k("h"), PreviousFile, Some("Workspace && !Typing")),
         KeyBinding::new(&k("l"), NextFile, Some("Workspace && !Typing")),
-        KeyBinding::new(&k("["), PreviousFile, Some("Workspace && !Typing")),
-        KeyBinding::new(&k("]"), NextFile, Some("Workspace && !Typing")),
+        // [ ] walk a commit's neighbours on its page, else the files as ← → do (the developer,
+        // 2026-10-23).
+        KeyBinding::new(&k("["), PreviousCommitOrFile, Some("Workspace && !Typing")),
+        KeyBinding::new(&k("]"), NextCommitOrFile, Some("Workspace && !Typing")),
         KeyBinding::new(&k("ctrl-1"), SwitchBranch, Some("Workspace")),
         KeyBinding::new(&k("ctrl-2"), FocusCommits, Some("Workspace")),
         KeyBinding::new(&k("ctrl-3"), FocusFiles, Some("Workspace")),
@@ -1174,7 +1178,15 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
 enum Selection {
     None,
     Commit(usize),
-    Versions { from: usize, to: usize },
+    /// A run of the list's commits as one diff: the newest's index and the oldest's.
+    Commits {
+        newest: usize,
+        oldest: usize,
+    },
+    Versions {
+        from: usize,
+        to: usize,
+    },
     WorkingTree,
 }
 
@@ -1829,6 +1841,7 @@ impl Workspace {
                         } else if let Some(
                             page @ (nav::Page::Request(_)
                             | nav::Page::RequestCommit(..)
+                            | nav::Page::RequestCommits(..)
                             | nav::Page::RequestVersions(..)),
                         ) = this.page_of(spaces::Space::Requests).cloned()
                             && this.nav.space == spaces::Space::Requests
@@ -2024,6 +2037,56 @@ impl Workspace {
             Ok(Diff {
                 header: Header::Commit(commit),
                 files: Arc::new(files),
+                pairs: Vec::new(),
+                tags: Default::default(),
+            })
+        });
+    }
+
+    /// A run of the list's commits, `newest` to `oldest` (indexes, newest first), as one diff.
+    pub(super) fn select_commits(&mut self, newest: usize, oldest: usize, cx: &mut Context<Self>) {
+        self.load_commits(newest, oldest, None, cx);
+    }
+
+    /// Shows the run as one diff: what the newest holds against the oldest's parent, as a
+    /// request's Changes shows all its commits; its marks are kept for that range.
+    fn load_commits(
+        &mut self,
+        newest: usize,
+        oldest: usize,
+        keep: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if newest == oldest {
+            return self.load_commit(newest, keep, cx);
+        }
+        let (Some(root), Some(head), Some(tail)) = (
+            self.root.clone(),
+            self.commits.get(newest).map(|c| c.id),
+            self.commits.get(oldest).map(|c| c.id),
+        ) else {
+            return;
+        };
+        self.clear_diff();
+        self.selection = Selection::Commits { newest, oldest };
+        self.record();
+        let settings = self.settings();
+        self.load_diff(keep, cx, move || {
+            let repo = Repo::open(&root)?;
+            // A first commit has no parent: the run is then from it.
+            let base = repo.parent_of(tail).unwrap_or(tail);
+            let c = repo.compare(base, head, false, settings)?;
+            Ok(Diff {
+                header: Header::Compare {
+                    base: (format!("{}^", format::short(tail)), base),
+                    head: (format::short(head), head),
+                    since_merge_base: false,
+                    start: c.start,
+                    commits: c.commits,
+                    request: None,
+                    stale: None,
+                },
+                files: Arc::new(c.files),
                 pairs: Vec::new(),
                 tags: Default::default(),
             })
@@ -2566,6 +2629,7 @@ impl Workspace {
             .map(|f| f.path().to_owned());
         match self.selection {
             Selection::Commit(ix) => self.load_commit(ix, keep, cx),
+            Selection::Commits { newest, oldest } => self.load_commits(newest, oldest, keep, cx),
             Selection::Versions { from, to } => self.load_versions(from, to, keep, cx),
             Selection::WorkingTree => self.load_working_tree(keep, cx),
             Selection::None => {}
@@ -2762,6 +2826,18 @@ impl Workspace {
 
     fn previous_file(&mut self, _: &PreviousFile, _: &mut Window, cx: &mut Context<Self>) {
         self.zone_horizontal(false, cx);
+    }
+
+    fn previous_step(&mut self, _: &PreviousCommitOrFile, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.step_item_commit(false, cx) {
+            self.zone_horizontal(false, cx);
+        }
+    }
+
+    fn next_step(&mut self, _: &NextCommitOrFile, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.step_item_commit(true, cx) {
+            self.zone_horizontal(true, cx);
+        }
     }
 
     fn next_file(&mut self, _: &NextFile, _: &mut Window, cx: &mut Context<Self>) {

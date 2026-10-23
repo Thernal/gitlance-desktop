@@ -881,6 +881,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::next_commit))
             .on_action(cx.listener(Self::previous_file))
             .on_action(cx.listener(Self::next_file))
+            .on_action(cx.listener(Self::previous_step))
+            .on_action(cx.listener(Self::next_step))
             .on_action(cx.listener(Self::toggle_unified))
             .on_action(cx.listener(Self::cycle_mode))
             .on_action(cx.listener(|this, _: &ToggleRendered, _, cx| this.toggle_page_source(cx)))

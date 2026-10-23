@@ -305,6 +305,9 @@ impl Workspace {
                 self.close_find(cx);
             } else if self.side_drawer() {
                 self.close_drawer(cx);
+            } else if !self.nav.picked.is_empty() {
+                self.nav.picked.clear();
+                cx.notify();
             } else if self.settings_open {
                 self.settings_open = false;
                 cx.notify();

@@ -261,6 +261,31 @@ impl Workspace {
                 format::short(*id),
                 true,
             ),
+            Some(Page::RequestCommits(iid, newest, oldest)) => (
+                vec![
+                    requests(),
+                    Crumb::up(words::number(*iid), Some(Page::Request(*iid))),
+                    Crumb::up("Commits", Some(Page::Request(*iid))),
+                ],
+                format!("{}..{}", format::short(*oldest), format::short(*newest)),
+                true,
+            ),
+            Some(Page::BranchCommits(refname, newest, oldest)) => {
+                let up = |label: String, mono: bool| Crumb {
+                    label,
+                    mono,
+                    to: Some(Some(Page::Branch(refname.clone()))),
+                };
+                (
+                    vec![
+                        Crumb::up("Branches", None),
+                        up(branch(refname), true),
+                        up("Commits".to_owned(), false),
+                    ],
+                    format!("{}..{}", format::short(*oldest), format::short(*newest)),
+                    true,
+                )
+            }
             Some(Page::RequestVersions(iid, a, b)) => (
                 vec![
                     requests(),

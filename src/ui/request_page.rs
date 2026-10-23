@@ -453,6 +453,8 @@ impl Workspace {
         use super::hover::Hover;
         let versions = versions.unwrap_or_else(|| vec![None; self.commits.len()]);
         let picked = self.picked_commit();
+        // Shift picks a run of them, to review as one diff.
+        let run = self.picked_run();
         // A commit's anatomy (#79): its sha and title always; when, and who when there are
         // several, while the list has 260 px; the icon and its version under 360 px leave first.
         // The tooltip holds them all.
@@ -466,7 +468,10 @@ impl Workspace {
             .iter()
             .enumerate()
             .map(|(ix, c)| {
-                let selected = picked == Some(ix);
+                let selected = match run {
+                    Some((newest, oldest)) => (newest..=oldest).contains(&ix),
+                    None => picked == Some(ix),
+                };
                 let mut tip = vec![
                     c.summary.clone(),
                     format!(
@@ -530,10 +535,22 @@ impl Workspace {
                     })
                     .tip(tip.join("\n"))
                     .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                        let id = this.commits.get(ix).map(|c| c.id);
+                        if event.modifiers().shift {
+                            // The run from the one picked to this one.
+                            if this.nav.pick_commit.is_none() {
+                                this.nav.pick_commit = this
+                                    .picked_commit()
+                                    .and_then(|at| this.commits.get(at).map(|c| c.id));
+                            }
+                            this.nav.pick_to = id;
+                            return cx.notify();
+                        }
                         if this.picked_commit() == Some(ix) && event.click_count() > 1 {
                             return this.select_commit(ix, cx);
                         }
-                        this.nav.pick_commit = this.commits.get(ix).map(|c| c.id);
+                        this.nav.pick_commit = id;
+                        this.nav.pick_to = None;
                         cx.notify();
                     }))
             })
@@ -559,8 +576,15 @@ impl Workspace {
                             .pb(px(6.))
                             .text_size(px(11.))
                             .text_color(theme::faint())
-                            .child(plural(self.commits.len(), "commit"))
-                            .tip("Newest first · ↵ opens one, esc comes back here"),
+                            .child(match run {
+                                Some((newest, oldest)) => format!(
+                                    "{} of {} picked · ↵ reviews them as one",
+                                    oldest - newest + 1,
+                                    plural(self.commits.len(), "commit")
+                                ),
+                                None => plural(self.commits.len(), "commit"),
+                            })
+                            .tip("Newest first · ↵ opens one, esc comes back here · shift and a click picks a run of them to review as one"),
                     )
                     .children(rows),
             )
@@ -617,6 +641,14 @@ impl Workspace {
         at.or((!self.commits.is_empty()).then_some(0))
     }
 
+    /// The run of commits picked with shift: the newest's index and the oldest's.
+    fn picked_run(&self) -> Option<(usize, usize)> {
+        let at = |id: git2::Oid| self.commits.iter().position(|c| c.id == id);
+        let a = at(self.nav.pick_commit?)?;
+        let b = at(self.nav.pick_to?)?;
+        (a != b).then_some((a.min(b), a.max(b)))
+    }
+
     /// ↑ ↓ in a request's Commits: another commit picked, nothing opened.
     pub(super) fn step_commit_pick(&mut self, down: bool, cx: &mut Context<Self>) {
         let n = self.commits.len();
@@ -626,11 +658,16 @@ impl Workspace {
             (None, _) => return,
         };
         self.nav.pick_commit = self.commits.get(to).map(|c| c.id);
+        self.nav.pick_to = None;
         cx.notify();
     }
 
-    /// ↵ in a request's Commits: the commit picked opens as a level under it.
+    /// ↵ in a request's Commits: the commit picked opens as a level under it, or the run picked
+    /// as one diff.
     pub(super) fn open_commit_pick(&mut self, cx: &mut Context<Self>) {
+        if let Some((newest, oldest)) = self.picked_run() {
+            return self.select_commits(newest, oldest, cx);
+        }
         if let Some(ix) = self.picked_commit() {
             self.select_commit(ix, cx);
         }

@@ -20,7 +20,10 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌃2 ⌃3 ⌃4", "commits, files, diff"),
             ("j k", "next / previous commit"),
             ("h l  ← →", "previous / next file"),
-            ("[  ]", "previous / next file"),
+            (
+                "[  ]",
+                "on a commit: the one before / after it; else the file",
+            ),
             ("n p", "next / previous change"),
             (
                 "v  ⇧v",
