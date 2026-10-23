@@ -219,6 +219,17 @@ impl Store {
             .unwrap_or_default()
     }
 
+    /// The head the newest mark of `scope` was made at, when it is not `now`: the push last
+    /// viewed (X22).
+    fn last_head(&self, scope: &str, now: Option<git2::Oid>) -> Option<git2::Oid> {
+        self.marks
+            .get(scope)?
+            .values()
+            .filter(|m| m.head.is_some() && m.head != now)
+            .max_by_key(|m| m.time)?
+            .head
+    }
+
     /// When the file was marked, and the head the diff was at then.
     fn when(&self, scope: &str, path: &str) -> Option<(i64, Option<git2::Oid>)> {
         let m = self.marks.get(scope)?.get(path)?;
@@ -460,6 +471,12 @@ impl Workspace {
         } else {
             Seen::Earlier
         }
+    }
+
+    /// The head of request `iid` you last reviewed at, when it was pushed since (`Seen::Earlier`).
+    pub(super) fn reviewed_head(&self, iid: u64, head: Option<git2::Oid>) -> Option<git2::Oid> {
+        let root = self.root.as_ref()?.display().to_string();
+        self.reviewed.last_head(&format!("{root}|mr:{iid}"), head)
     }
 
     /// Whether the whole diff of a branch or request ending at `head` was reviewed.

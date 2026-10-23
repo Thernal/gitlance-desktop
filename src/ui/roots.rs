@@ -155,6 +155,9 @@ struct Preview {
     updated: i64,
     pipeline: Option<Pipeline>,
     approvals: Option<Approvals>,
+    /// Pushed since your review: the version you viewed, and how many files changed since then
+    /// (X22).
+    since: Option<(usize, usize)>,
 }
 
 #[derive(Default)]
@@ -372,16 +375,43 @@ impl Workspace {
         {
             return;
         }
-        let Some(remote) = self.web.clone() else {
+        let (Some(remote), Some(root)) = (self.web.clone(), self.root.clone()) else {
             return;
         };
+        // Pushed since your review: what changed since the push you viewed.
+        let head = git2::Oid::from_str(&m.head).ok();
+        let viewed = match self.request_seen(iid, head) {
+            Seen::Earlier => head.zip(self.reviewed_head(iid, head)),
+            _ => None,
+        };
+        let settings = self.settings();
         self.roots.preview_task = Some(cx.spawn(async move |this, cx| {
-            let (pipeline, approvals) = cx
+            let (pipeline, approvals, since) = cx
                 .background_executor()
                 .spawn(async move {
+                    let since = viewed.and_then(|(head, viewed)| {
+                        let pushes: Vec<_> = crate::mr::versions(&remote, iid)
+                            .ok()?
+                            .iter()
+                            .filter_map(|p| {
+                                Some((
+                                    git2::Oid::from_str(&p.head).ok()?,
+                                    git2::Oid::from_str(&p.base).ok(),
+                                    p.created,
+                                ))
+                            })
+                            .collect();
+                        let repo = Repo::open(&root).ok()?;
+                        let versions = repo.versions_from_pushes(&pushes);
+                        let from = versions.iter().find(|v| v.tip == viewed)?;
+                        let to = versions.iter().find(|v| v.tip == head)?;
+                        let diff = repo.version_diff(from, to, settings).ok()?;
+                        Some((from.number, diff.files.len()))
+                    });
                     (
                         crate::mr::pipeline(&remote, iid).ok().flatten(),
                         crate::mr::approvals(&remote, iid).ok(),
+                        since,
                     )
                 })
                 .await;
@@ -392,6 +422,7 @@ impl Workspace {
                         updated,
                         pipeline,
                         approvals,
+                        since,
                     },
                 );
                 cx.notify();
@@ -1224,7 +1255,13 @@ impl Workspace {
             head.and_then(|h| self.head_part(h)),
         ) {
             (Seen::Done, _) => facts.push("Reviewed at this push".to_owned()),
-            (Seen::Earlier, _) => facts.push("Pushed since your review".to_owned()),
+            (Seen::Earlier, _) => facts.push(match preview.and_then(|p| p.since) {
+                Some((viewed, 0)) => format!("Pushed since you viewed v{viewed}, no file changed"),
+                Some((viewed, n)) => {
+                    format!("{} changed since you viewed v{viewed}", plural(n, "file"))
+                }
+                None => "Pushed since your review".to_owned(),
+            }),
             (_, Some((done, total))) => facts.push(format!("{done} of {total} files reviewed")),
             (Seen::Started | Seen::Never, None) => {}
         }
