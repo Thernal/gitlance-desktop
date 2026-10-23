@@ -450,23 +450,46 @@ impl Workspace {
         versions: Option<Vec<Option<usize>>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        use super::hover::Hover;
         let versions = versions.unwrap_or_else(|| vec![None; self.commits.len()]);
         let picked = self.picked_commit();
+        // A commit's anatomy (#79): its sha and title always; when, and who when there are
+        // several, while the list has 260 px; the icon and its version under 360 px leave first.
+        // The tooltip holds them all.
+        let room = self.widths.room("commits");
+        let several = self
+            .commits
+            .first()
+            .is_some_and(|first| self.commits.iter().any(|c| c.author != first.author));
         let rows: Vec<_> = self
             .commits
             .iter()
             .enumerate()
             .map(|(ix, c)| {
                 let selected = picked == Some(ix);
+                let mut tip = vec![
+                    c.summary.clone(),
+                    format!(
+                        "{} · {} · {}",
+                        format::short(c.id),
+                        c.author,
+                        super::hover::full_date(c.time)
+                    ),
+                ];
+                if let Some(v) = versions[ix] {
+                    tip.push(format!("came with v{v}"));
+                }
                 super::row(("request-commit", ix), selected)
                     .h(px(36.))
                     .gap(px(10.))
                     .px(px(10.))
-                    .child(
-                        icons::icon("commit")
-                            .size(px(14.))
-                            .text_color(theme::faint()),
-                    )
+                    .when(room.third(), |s| {
+                        s.child(
+                            icons::icon("commit")
+                                .size(px(14.))
+                                .text_color(theme::faint()),
+                        )
+                    })
                     .child(
                         div()
                             .flex_none()
@@ -476,7 +499,16 @@ impl Workspace {
                             .child(format::short(c.id)),
                     )
                     .child(div().flex_1().min_w_0().truncate().child(c.summary.clone()))
-                    .children(versions[ix].map(|v| {
+                    .children((several && room.second()).then(|| {
+                        div()
+                            .flex_none()
+                            .max_w(px(140.))
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(theme::muted())
+                            .child(c.author.clone())
+                    }))
+                    .children(versions[ix].filter(|_| room.third()).map(|v| {
                         div()
                             .flex_none()
                             .px(px(6.))
@@ -487,12 +519,16 @@ impl Workspace {
                             .text_color(theme::accent())
                             .child(format!("v{v}"))
                     }))
-                    .child(
-                        super::hover::ago(("request-commit-ago", ix), c.time)
-                            .flex_none()
-                            .text_size(px(11.))
-                            .text_color(theme::faint()),
-                    )
+                    .when(room.second(), |s| {
+                        s.child(
+                            div()
+                                .flex_none()
+                                .text_size(px(11.))
+                                .text_color(theme::faint())
+                                .child(format::ago(c.time)),
+                        )
+                    })
+                    .tip(tip.join("\n"))
                     .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                         if this.picked_commit() == Some(ix) && event.click_count() > 1 {
                             return this.select_commit(ix, cx);
@@ -509,18 +545,22 @@ impl Workspace {
             .child(
                 div()
                     .id("request-commits")
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
                     .px(px(8.))
                     .py(px(8.))
+                    .child(self.widths.measure("commits"))
                     .child(
                         div()
+                            .id("commits-count")
                             .px(px(10.))
                             .pb(px(6.))
                             .text_size(px(11.))
                             .text_color(theme::faint())
-                            .child(plural(self.commits.len(), "commit")),
+                            .child(plural(self.commits.len(), "commit"))
+                            .tip("Newest first · ↵ opens one, esc comes back here"),
                     )
                     .children(rows),
             )

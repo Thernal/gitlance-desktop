@@ -5,6 +5,7 @@
 //! the local branches with how far they are from the main line and their request; a remote's
 //! branches fold under its name.
 
+use super::hover::Hover;
 use super::lists::Field;
 use super::nav::BranchRow;
 use super::reviewed::Seen;
@@ -19,6 +20,19 @@ use std::collections::{HashMap, HashSet};
 
 /// The width of a root's list.
 const LIST: f32 = 460.;
+
+/// A root's list's width: `LIST`, or a snapshot's `GITLANCE_SNAPSHOT_LIST` to see its rows
+/// narrow (#79).
+pub(super) fn list_width(width: f32) -> f32 {
+    #[cfg(feature = "snapshot")]
+    if let Some(w) = std::env::var("GITLANCE_SNAPSHOT_LIST")
+        .ok()
+        .and_then(|w| w.parse().ok())
+    {
+        return w;
+    }
+    width
+}
 
 /// What a request needs from you: the list's groups, in their order.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -134,7 +148,7 @@ struct Preview {
 #[derive(Default)]
 pub struct Roots {
     /// Per refname.
-    facts: HashMap<String, Fact>,
+    pub(super) facts: HashMap<String, Fact>,
     facts_task: Option<Task<()>>,
     /// The remotes whose branches the list shows; the rest are folded to their name.
     open_remotes: HashSet<String>,
@@ -547,7 +561,7 @@ impl Workspace {
                 .gap(px(super::gap()))
                 .child(
                     island()
-                        .w(px(LIST))
+                        .w(px(list_width(LIST)))
                         .flex_none()
                         .p(px(16.))
                         .child(skeleton(7)),
@@ -634,7 +648,7 @@ impl Workspace {
                 .gap(px(super::gap()))
                 .child(
                     island()
-                        .w(px(LIST))
+                        .w(px(list_width(LIST)))
                         .flex_none()
                         .border_color(self.zone_border(super::zones::Zone::Branches))
                         .child(
@@ -645,6 +659,7 @@ impl Workspace {
                                 .flex()
                                 .flex_col()
                                 .overflow_hidden()
+                                .child(self.widths.measure("requests"))
                                 .child(
                                     div()
                                         .id("requests")
@@ -833,31 +848,52 @@ impl Workspace {
             Some(n) => n > 0,
             None => !self.opened_before(iid),
         };
-        let mut meta: Vec<AnyElement> = Vec::new();
-        let mut text = |s: String| meta.push(div().child(s).into_any_element());
-        match waiting {
-            Some(n) if n > 0 => meta.push(
-                div()
-                    .text_color(theme::warning())
-                    .child(format!(
-                        "{} for you",
-                        if n == 1 {
-                            "1 thread waits".to_owned()
-                        } else {
-                            format!("{n} threads wait")
-                        }
-                    ))
-                    .into_any_element(),
-            ),
-            Some(_) => {}
-            None => text(if m.draft {
-                format!("draft · {}", m.author)
-            } else {
-                m.author.clone()
-            }),
+        // Its anatomy (#79): the number, the title and the pipeline's verdict always; who (or
+        // what waits for you) and when while the list has 260 px; the threads and how far your
+        // review is under 360 px leave first. The tooltip holds it all.
+        let room = self.widths.room("requests");
+        let who = match waiting {
+            Some(n) if n > 0 => Some((
+                format!(
+                    "{} for you",
+                    if n == 1 {
+                        "1 thread waits".to_owned()
+                    } else {
+                        format!("{n} threads wait")
+                    }
+                ),
+                theme::warning(),
+            )),
+            _ => Some((
+                if m.draft {
+                    format!("draft · {}", m.author)
+                } else {
+                    m.author.clone()
+                },
+                theme::muted(),
+            )),
+        };
+        let verdict = pipeline.map(super::requests::pipeline_word);
+        let threads = threads.filter(|&n| n > 0 && waiting.is_none_or(|w| w == 0));
+        let mut tip = vec![
+            format!("{} {}", words::number(iid), m.title),
+            format!("{} · {} → {}", m.author, m.source, m.target),
+        ];
+        if let Some((glyph, word, _)) = &verdict {
+            tip.push(format!("pipeline {glyph} {word}"));
         }
-        if let Some(p) = pipeline {
-            let (glyph, word, color) = super::requests::pipeline_word(p);
+        if let Some(n) = threads {
+            tip.push(plural(n, "thread"));
+        }
+        if let Some((text, _)) = who.as_ref().filter(|_| waiting.is_some_and(|w| w > 0)) {
+            tip.push(text.clone());
+        }
+        tip.push(format!("updated {}", super::hover::full_date(m.updated)));
+        let mut meta: Vec<AnyElement> = Vec::new();
+        if let Some((text, color)) = who.filter(|_| room.second()) {
+            meta.push(div().text_color(color).child(text).into_any_element());
+        }
+        if let Some((glyph, word, color)) = verdict {
             meta.push(
                 div()
                     .text_color(color)
@@ -865,20 +901,8 @@ impl Workspace {
                     .into_any_element(),
             );
         }
-        match (waiting, threads) {
-            (Some(_), _) => meta.push(
-                div()
-                    .font_family(theme::CODE_FONT)
-                    .child(format!("{} → {}", m.source, m.target))
-                    .into_any_element(),
-            ),
-            (None, Some(n)) if n > 0 => {
-                meta.push(div().child(plural(n, "thread")).into_any_element())
-            }
-            _ => {}
-        }
-        if waiting.is_none() && !matches!(m.target.as_str(), "main" | "master") {
-            meta.push(div().child(format!("→ {}", m.target)).into_any_element());
+        if let Some(n) = threads.filter(|_| room.third()) {
+            meta.push(div().child(plural(n, "thread")).into_any_element());
         }
         let mut line2: Vec<AnyElement> = Vec::new();
         for (n, part) in meta.into_iter().enumerate() {
@@ -923,39 +947,35 @@ impl Workspace {
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .child(words::number(iid)),
                                 )
-                                .child(
-                                    super::hover::cut(
-                                        SharedString::from(format!("mr-title-{iid}")),
-                                        m.title.clone(),
-                                    )
-                                    .flex_1(),
-                                )
+                                .child(div().flex_1().min_w_0().truncate().child(m.title.clone()))
                                 .children(
-                                    part.map(|(done, total)| {
+                                    part.filter(|_| room.third()).map(|(done, total)| {
                                         super::lists::progress_badge(done, total)
                                     }),
                                 )
-                                .child(
-                                    super::hover::ago(
-                                        SharedString::from(format!("mr-ago-{iid}")),
-                                        m.updated,
-                                    )
-                                    .text_size(px(11.))
-                                    .text_color(theme::faint()),
-                                ),
+                                .children(room.second().then(|| {
+                                    div()
+                                        .flex_none()
+                                        .text_size(px(11.))
+                                        .text_color(theme::faint())
+                                        .child(format::ago(m.updated))
+                                })),
                         )
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(5.))
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .text_size(px(12.))
-                                .text_color(theme::muted())
-                                .children(line2),
-                        ),
+                        .when(!line2.is_empty(), |s| {
+                            s.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.))
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_size(px(12.))
+                                    .text_color(theme::muted())
+                                    .children(line2),
+                            )
+                        }),
                 )
+                .tip(tip.join("\n"))
                 .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                     // A second click on the picked one opens it, as ↵ does.
                     if this.nav.pick_request == Some(iid) && event.click_count() > 1 {
@@ -1179,27 +1199,17 @@ impl Workspace {
                     .children(facts.into_iter().map(|f| div().child(f))),
             )
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(
-                        primary_button("request-open", open_label, "↵").on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| match first {
-                                Some(note) => this.open_at_note(iid, Some(note), cx),
-                                None => {
-                                    this.field = None;
-                                    this.select_request(iid, cx)
-                                }
-                            },
-                        )),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(theme::faint())
-                            .child(open_hint),
-                    ),
+                div().flex().items_center().gap(px(12.)).child(
+                    primary_button("request-open", open_label, "↵")
+                        .tip(open_hint)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| match first {
+                            Some(note) => this.open_at_note(iid, Some(note), cx),
+                            None => {
+                                this.field = None;
+                                this.select_request(iid, cx)
+                            }
+                        })),
+                ),
             )
             .into_any_element()
     }
@@ -1369,9 +1379,11 @@ impl Workspace {
             .gap(px(super::gap()))
             .child(
                 island()
-                    .w(px(LIST))
+                    .w(px(list_width(LIST)))
                     .flex_none()
+                    .relative()
                     .border_color(self.zone_border(super::zones::Zone::Branches))
+                    .child(self.widths.measure("branches"))
                     .child(
                         div()
                             .id("branches")
@@ -1398,7 +1410,9 @@ impl Workspace {
     }
 
     /// A row of Branches: the working tree's, or a branch's name, when, how far from the main
-    /// line, its request. `flat` (filtered) names a remote branch with its remote.
+    /// line, its request. `flat` (filtered) names a remote branch with its remote. Its anatomy
+    /// (#79): the name and ↑ ↓ always; its request and when while the list has 260 px; HEAD and
+    /// how far your review is under 360 px leave first; its card holds it all.
     fn branch_row(
         &self,
         row: BranchRow,
@@ -1406,6 +1420,7 @@ impl Workspace {
         flat: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        let room = self.widths.room("branches");
         let head_name = self
             .branches
             .iter()
@@ -1430,15 +1445,21 @@ impl Workspace {
                                 .child(plural(self.wt.count, "change"))
                                 .into_any_element()
                         })
-                        .child(div().flex_1().text_color(theme::muted()).child(
-                            if self.wt.count == 0 {
-                                "nothing to commit"
-                            } else {
-                                "not committed"
-                            },
-                        ))
-                        .children(head_name.map(|n| {
+                        .child(
                             div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(theme::muted())
+                                .child(if self.wt.count == 0 {
+                                    "nothing to commit"
+                                } else {
+                                    "not committed"
+                                }),
+                        )
+                        .children(head_name.filter(|_| room.second()).map(|n| {
+                            div()
+                                .flex_none()
                                 .text_size(px(11.))
                                 .text_color(theme::faint())
                                 .child(format!("on {n}"))
@@ -1485,25 +1506,25 @@ impl Workspace {
                         )
                         .children(
                             self.head_part(b.tip)
+                                .filter(|_| room.third())
                                 .map(|(done, total)| super::lists::progress_badge(done, total)),
                         )
-                        .children(self.head_reviewed(b.tip).then(|| {
+                        .children((room.third() && self.head_reviewed(b.tip)).then(|| {
                             div()
                                 .text_size(px(11.))
                                 .text_color(theme::added())
                                 .child("✓ reviewed")
                         }))
-                        .children(fact.map(|f| {
-                            super::hover::ago(
-                                SharedString::from(format!("branch-ago-{ix}")),
-                                f.time,
-                            )
-                            .text_size(px(11.))
-                            .text_color(theme::faint())
+                        .children(fact.filter(|_| room.second()).map(|f| {
+                            div()
+                                .flex_none()
+                                .text_size(px(11.))
+                                .text_color(theme::faint())
+                                .child(format::ago(f.time))
                         }))
                         .into_any_element();
                     let mut parts: Vec<AnyElement> = Vec::new();
-                    if b.is_head {
+                    if b.is_head && room.third() {
                         parts.push(
                             div()
                                 .px(px(6.))
@@ -1529,7 +1550,7 @@ impl Workspace {
                         ),
                         None => {}
                     }
-                    if let Some(m) = self.request_of_branch(ix) {
+                    if let Some(m) = self.request_of_branch(ix).filter(|_| room.second()) {
                         let iid = m.iid;
                         parts.push(
                             div()
@@ -1565,7 +1586,21 @@ impl Workspace {
             BranchRow::Branch(ix) => self.branch_card(ix),
             BranchRow::WorkingTree => None,
         };
-        use super::hover::Hover;
+        // The working tree has no card: its tooltip names its files.
+        let tree_tip = (row == BranchRow::WorkingTree).then(|| {
+            let mut tip = vec![if self.wt.count == 0 {
+                "Clean: nothing to commit".to_owned()
+            } else {
+                format!("{}, not committed", plural(self.wt.count, "change"))
+            }];
+            if let Some(files) = self.roots.tree.as_ref().map(|t| &t.1) {
+                tip.extend(files.iter().take(12).map(|f| f.path.clone()));
+                if files.len() > 12 {
+                    tip.push(format!("and {} more", files.len() - 12));
+                }
+            }
+            tip.join("\n")
+        });
         div().px(px(6.)).py(px(1.)).child(
             div()
                 .id(id)
@@ -1599,6 +1634,7 @@ impl Workspace {
                         ),
                 )
                 .when_some(card, |s, card| s.card(card))
+                .when_some(tree_tip, |s, tip| s.tip(tip))
                 .when_some(
                     match row {
                         BranchRow::Branch(ix) => Some(ix),

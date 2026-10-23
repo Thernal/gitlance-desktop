@@ -309,10 +309,13 @@ impl Workspace {
         _n: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        use super::hover::Hover;
         let selected = shown == Some(row.path.as_str());
         let preview = self.code.preview.as_deref() == Some(row.path.as_str());
         let path = row.path.clone();
         super::row(SharedString::from(format!("tree-{}", row.path)), selected)
+            // Its whole path, whatever the depth (#79).
+            .tip(row.path.clone())
             .h(px(26.))
             .pl(px(8. + row.depth as f32 * 14.))
             .gap(px(6.))

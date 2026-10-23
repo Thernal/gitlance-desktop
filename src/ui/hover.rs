@@ -136,16 +136,6 @@ fn full_date_at(time: i64) -> String {
     )
 }
 
-/// A relative time ("2 h ago") whose long hover gives its date.
-pub fn ago(id: impl Into<gpui::ElementId>, time: i64) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .flex_none()
-        .whitespace_nowrap()
-        .child(format::ago(time))
-        .tip(full_date(time))
-}
-
 /// What a status letter stands for.
 pub fn status_word(change: crate::git::ChangeKind, old: Option<&str>) -> String {
     use crate::git::ChangeKind::*;
@@ -464,6 +454,9 @@ impl MentionHover {
 pub struct BranchCard {
     pub name: String,
     pub tracking: Option<(String, usize, usize)>,
+    /// ↑ ↓ against the main line, and its request: what its row shows when it has room (#79).
+    pub against: Option<(String, usize, usize)>,
+    pub request: Option<String>,
     pub last: Option<CommitInfo>,
 }
 
@@ -495,6 +488,21 @@ impl BranchCard {
                         }
                         None => "No upstream".to_owned(),
                     }),
+            )
+            .children(
+                self.against
+                    .as_ref()
+                    .filter(|(on, ..)| self.tracking.as_ref().is_none_or(|(up, ..)| up != on))
+                    .map(|(on, ahead, behind)| {
+                        div()
+                            .text_color(theme::muted())
+                            .child(format!("↑{ahead} ↓{behind} against {on}"))
+                    }),
+            )
+            .children(
+                self.request
+                    .clone()
+                    .map(|r| div().text_color(theme::accent()).child(r)),
             )
             .children(self.last.as_ref().map(|c| {
                 div().flex().flex_col().child(c.summary.clone()).child(
@@ -615,11 +623,21 @@ impl Workspace {
     ) -> Option<impl Fn(&mut Window, &mut App) -> AnyView + 'static> {
         let b = self.branches.get(ix)?;
         let (root, name, tip) = (self.root.clone()?, b.name.clone(), b.tip);
+        let against = self
+            .roots
+            .facts
+            .get(&b.refname)
+            .and_then(|f| f.against.clone());
+        let request = self
+            .request_of_branch(ix)
+            .map(|m| format!("{} {}", super::words::number(m.iid), m.title));
         Some(move |_: &mut Window, cx: &mut App| {
             let repo = crate::git::Repo::open(&root).ok();
             let card = BranchCard {
                 name: name.clone(),
                 tracking: repo.as_ref().and_then(|r| r.tracking(&name)),
+                against: against.clone(),
+                request: request.clone(),
                 last: repo.as_ref().and_then(|r| r.commit(tip).ok()),
             };
             cx.new(|_| card).into()

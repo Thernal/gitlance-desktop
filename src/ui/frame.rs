@@ -695,6 +695,9 @@ impl Workspace {
     ) -> impl IntoElement + use<> {
         let commit = &self.commits[ix];
         let selected = self.selection == Selection::Commit(ix);
+        // Its anatomy (#79): the title and sha always; who and when while the panel has 260 px;
+        // its labels under 360 px leave first. Its card holds them all.
+        let room = self.widths.room("side-commits");
         let item = row(("commit", ix), selected)
             .h(px(62.))
             .flex_col()
@@ -720,31 +723,35 @@ impl Workspace {
                             .font_family(theme::CODE_FONT)
                             .child(format::short(commit.id)),
                     )
-                    .child(
-                        div().flex().min_w_0().flex_shrink(1.).gap_2().children(
-                            self.decor
-                                .get(&commit.id)
-                                // The first label and "+N" for the rest; the card names them all.
-                                .map(|d| lists::deco_tags(d))
-                                .unwrap_or_default(),
-                        ),
-                    )
-                    // Always shown: a branch of one's own still has commits by others under it. The
-                    // labels give way first; the card has the whole name.
-                    .child(
-                        div()
-                            .flex_none()
-                            .max_w(px(160.))
-                            .truncate()
-                            .child(commit.author.clone()),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .flex_none()
-                            .whitespace_nowrap()
-                            .child(format::ago(commit.time)),
-                    ),
+                    .when(room.third(), |s| {
+                        s.child(
+                            div().flex().min_w_0().flex_shrink(1.).gap_2().children(
+                                self.decor
+                                    .get(&commit.id)
+                                    // The first label and "+N" for the rest; the card names them all.
+                                    .map(|d| lists::deco_tags(d))
+                                    .unwrap_or_default(),
+                            ),
+                        )
+                    })
+                    // A branch of one's own still has commits by others under it. The labels give
+                    // way first; the card has the whole name.
+                    .when(room.second(), |s| {
+                        s.child(
+                            div()
+                                .flex_none()
+                                .max_w(px(160.))
+                                .truncate()
+                                .child(commit.author.clone()),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .flex_none()
+                                .whitespace_nowrap()
+                                .child(format::ago(commit.time)),
+                        )
+                    }),
             )
             .on_mouse_down(
                 MouseButton::Right,

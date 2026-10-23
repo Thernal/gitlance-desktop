@@ -233,9 +233,11 @@ impl Workspace {
             }
             let commits_rows = !commits_folded || self.motion.recent("fold-1");
             let commits = div()
+                .relative()
                 .flex()
                 .flex_col()
                 .overflow_hidden()
+                .child(self.widths.measure("side-commits"))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| this.set_zone(Zone::Commits, cx)),

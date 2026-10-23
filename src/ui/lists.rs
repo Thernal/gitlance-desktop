@@ -2,6 +2,7 @@
 //! tree or a flat list with a path filter and the labels on commits. Designed in review round 1
 //! (A9, A10, A11, A13); the branches' list is Branches' root page (`roots.rs`, #72).
 
+use super::hover::Hover;
 use super::input::{self, Edit};
 use super::px;
 use super::{Workspace, change_badge, row, theme};
@@ -381,10 +382,12 @@ impl Workspace {
     pub(super) fn render_changes(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let count = self.items().len();
         div()
+            .relative()
             .flex_1()
             .min_h_0()
             .flex()
             .flex_col()
+            .child(self.widths.measure("changes"))
             .children(self.render_review_progress(cx))
             .child(self.render_field("file-filter", Field::Files, "Filter by path  ⌥⌘P", cx))
             .child(if count == 0 {
@@ -407,6 +410,12 @@ impl Workspace {
             return div().into_any_element();
         };
         let tree = !self.options.list_files && self.pfilter.trim().is_empty();
+        // A file's row: its status and name always, its +/− while the list has 240 px (#79); its
+        // tooltip the whole path.
+        let counts = {
+            let width = self.widths.width("changes");
+            width <= 0. || width >= 240.
+        };
         match item {
             FileItem::File { ix, depth } if tree => {
                 let file = &diff.files[*ix];
@@ -436,7 +445,8 @@ impl Workspace {
                             .child(div().flex_1().min_w_0().truncate().child(name))
                             .children(super::generated_tag(file))
                             .children(super::working::file_tag(diff.tags.get(file.path())))
-                            .child(super::stats(file))
+                            .when(counts, |s| s.child(super::stats(file)))
+                            .tip(file.path().to_owned())
                             .on_mouse_down(
                                 MouseButton::Right,
                                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -447,16 +457,7 @@ impl Workspace {
                     )
                     .into_any_element()
             }
-            FileItem::File { ix, .. } => super::render_file_row(
-                &diff.files[*ix],
-                diff.tags.get(diff.files[*ix].path()),
-                *ix,
-                self.file == *ix,
-                self.review_box(*ix, cx).map(IntoElement::into_any_element),
-                self.review_state(*ix) == Some(super::reviewed::State::Done),
-                cx,
-            )
-            .into_any_element(),
+            FileItem::File { ix, .. } => self.render_file_row(*ix, counts, cx),
             FileItem::Dir {
                 path,
                 name,
@@ -501,6 +502,61 @@ impl Workspace {
                     .into_any_element()
             }
         }
+    }
+}
+
+impl Workspace {
+    /// A file of the flat list: its name over its folder, its +/− when `counts`.
+    fn render_file_row(&self, ix: usize, counts: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(file) = self.diff.as_ref().and_then(|d| d.files.get(ix)) else {
+            return div().into_any_element();
+        };
+        let tag = self.diff.as_ref().and_then(|d| d.tags.get(file.path()));
+        let done = self.review_state(ix) == Some(super::reviewed::State::Done);
+        let path = file.path();
+        let (dir, name) = match path.rsplit_once('/') {
+            Some((dir, name)) => (Some(dir.to_owned()), name.to_owned()),
+            None => (None, path.to_owned()),
+        };
+        let item = row(("file", ix), self.file == ix)
+            .h(px(40.))
+            .gap_2()
+            .when(done, |s| s.text_color(theme::muted()))
+            .children(self.review_box(ix, cx))
+            .child(change_badge(file))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(div().truncate().child(name))
+                    .children(dir.map(|d| {
+                        div()
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(theme::faint())
+                            .child(d)
+                    })),
+            )
+            .children(super::generated_tag(file))
+            .children(super::working::file_tag(tag))
+            .when(counts, |s| s.child(super::stats(file)))
+            .tip(path.to_owned())
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.file_context(ix, event.position, cx)
+                }),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| this.select_file(ix, cx)));
+        div()
+            .w_full()
+            .h(px(42.))
+            .px(px(6.))
+            .py(px(1.))
+            .child(item)
+            .into_any_element()
     }
 }
 

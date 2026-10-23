@@ -44,6 +44,7 @@ mod recents;
 mod request_page;
 mod requests;
 mod reviewed;
+mod room;
 mod roots;
 mod rows;
 mod select;
@@ -1533,6 +1534,8 @@ pub struct Workspace {
     offset: f32,
     /// Width of the diff body at the last paint.
     body_width: Rc<Shared<f32>>,
+    /// Each list's width as last drawn: its rows keep what it has room for (#79).
+    widths: room::Widths,
     /// Advance of one code character, measured on the first render.
     char_width: f32,
     commit_scroll: UniformListScrollHandle,
@@ -1720,6 +1723,7 @@ impl Workspace {
             stack: None,
             offset: 0.,
             body_width: Rc::new(Shared::new(0.)),
+            widths: Default::default(),
             char_width: 0.,
             commit_scroll: UniformListScrollHandle::new(),
             file_scroll: UniformListScrollHandle::new(),
@@ -4044,54 +4048,6 @@ impl Workspace {
             )
             .children(thumb)
     }
-}
-
-pub(super) fn render_file_row(
-    file: &FileDiff,
-    tag: Option<&&'static str>,
-    ix: usize,
-    selected: bool,
-    review: Option<gpui::AnyElement>,
-    done: bool,
-    cx: &mut Context<Workspace>,
-) -> impl IntoElement + use<> {
-    let path = file.path();
-    let (dir, name) = match path.rsplit_once('/') {
-        Some((dir, name)) => (Some(dir.to_owned()), name.to_owned()),
-        None => (None, path.to_owned()),
-    };
-    let item = row(("file", ix), selected)
-        .h(px(40.))
-        .gap_2()
-        .when(done, |s| s.text_color(theme::muted()))
-        .children(review)
-        .child(change_badge(file))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .child(div().truncate().child(name))
-                .children(dir.map(|d| {
-                    div()
-                        .truncate()
-                        .text_size(px(11.))
-                        .text_color(theme::faint())
-                        .child(d)
-                })),
-        )
-        .children(generated_tag(file))
-        .children(working::file_tag(tag))
-        .child(stats(file))
-        .on_mouse_down(
-            MouseButton::Right,
-            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                this.file_context(ix, event.position, cx)
-            }),
-        )
-        .on_click(cx.listener(move |this, _, _, cx| this.select_file(ix, cx)));
-    div().w_full().h(px(42.)).px(px(6.)).py(px(1.)).child(item)
 }
 
 /// "generated" beside a lock or generated file.

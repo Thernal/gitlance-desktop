@@ -1091,42 +1091,62 @@ impl Workspace {
         });
         // Where a note written here goes, and the way to change it (#77).
         let branch = self.page_branch();
+        // "Goes to" the chat; why, in its tooltip (#79).
         let route = self.route_of(branch.as_deref()).cloned().map(|chat| {
+            use super::hover::Hover;
             let (letter, hue) = self.chat_mark(&chat.session);
             let on = branch.clone().unwrap_or_default();
+            let name = if chat.title.is_empty() {
+                chat.agent.clone()
+            } else {
+                chat.title.clone()
+            };
+            let picked = self
+                .chat_routes
+                .get(on.as_str())
+                .or(self.chat_routes.get(""))
+                .is_some_and(|s| *s == chat.session);
+            let notes = match &branch {
+                Some(b) => format!("Notes on {b} go to {name}"),
+                None => format!("Notes go to {name}"),
+            };
+            let why = if picked {
+                format!("{notes}: you picked it.")
+            } else if branch.as_deref().is_some_and(|b| chat.branch == b) {
+                format!("{notes}, the chat working on that branch.")
+            } else {
+                format!("{notes}, the project's default chat: none works on that branch.")
+            };
             div()
+                .id("agents-route")
                 .mx(px(14.))
                 .mt(px(6.))
                 .flex()
-                .flex_wrap()
                 .items_center()
                 .gap(px(6.))
                 .text_size(px(12.))
                 .text_color(theme::muted())
-                .child(match &branch {
-                    Some(b) => format!("Notes on {b} go to"),
-                    None => "Notes go to".to_owned(),
-                })
+                .child("Goes to")
                 .child(chat_badge(letter, hue, false))
                 .child(
                     div()
+                        .min_w_0()
+                        .truncate()
                         .text_color(theme::text())
-                        .child(if chat.title.is_empty() {
-                            chat.agent.clone()
-                        } else {
-                            chat.title.clone()
-                        }),
+                        .child(name),
                 )
                 .child(
                     div()
                         .id("route-change")
+                        .flex_none()
                         .text_color(theme::accent())
                         .cursor_pointer()
-                        .child("Change…")
+                        .child("Change")
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.open_route_pick(on.clone(), cx)
                         })),
                 )
+                .tip(why)
         });
         // One list, newest first, each row its kind as a chip (#76, B1); the filter narrows it.
         let alive = |session: &str| self.chat_listens(session);
@@ -1217,10 +1237,12 @@ impl Workspace {
             actions: Vec::new(),
             body: div()
                 .id("agents-list")
+                .relative()
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
                 .py(px(6.))
+                .child(self.widths.measure("agents"))
                 .child(group_heading("Chats here".to_owned(), None))
                 .children(chats)
                 .children(route)
@@ -1292,6 +1314,7 @@ impl Workspace {
         kind: Kind,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        use super::hover::Hover;
         let id = c.id;
         let picked = self.agent_row == Some(id);
         let place = format!(
@@ -1300,6 +1323,32 @@ impl Workspace {
             c.line
         );
         let when = c.replies.last().map(|r| r.at).filter(|&at| at > 0);
+        // Its anatomy (#79): its state, file:line and the text (two lines) always; when while
+        // the window has 260 px; the chat's mark under 360 px leaves first. The tooltip holds the
+        // text in full and the chat.
+        let room = self.widths.room("agents");
+        let chat = c.sent.as_ref().filter(|s| !s.session.is_empty());
+        let mut tip = vec![format!("{}:{}", c.path, c.line), c.body.trim().to_owned()];
+        if let Some(s) = chat {
+            let to = self
+                .agent_chats
+                .iter()
+                .find(|ch| ch.session == s.session)
+                .map(|ch| {
+                    if ch.title.is_empty() {
+                        ch.agent.clone()
+                    } else {
+                        ch.title.clone()
+                    }
+                });
+            tip.push(match to {
+                Some(to) => format!("to {to}"),
+                None => "to a chat that is gone".to_owned(),
+            });
+        }
+        if let Some(at) = when {
+            tip.push(super::hover::full_date(at));
+        }
         let mut actions: Vec<gpui::AnyElement> = Vec::new();
         // Where a note its gone chat never took would go now (#77).
         let instead = self.route_of(c.branch.as_deref()).map(|chat| {
@@ -1393,7 +1442,7 @@ impl Workspace {
                     .text_size(px(11.))
                     .child(kind_chip(kind))
                     // The chat it went to (#77).
-                    .children(c.sent.as_ref().filter(|s| !s.session.is_empty()).map(|s| {
+                    .children(chat.filter(|_| room.third()).map(|s| {
                         let (letter, hue) = self.chat_mark(&s.session);
                         chat_badge(letter, hue, !self.chat_listens(&s.session))
                     }))
@@ -1406,7 +1455,7 @@ impl Workspace {
                             .text_color(theme::muted())
                             .child(place),
                     )
-                    .children(when.map(|at| {
+                    .children(when.filter(|_| room.second()).map(|at| {
                         div()
                             .flex_none()
                             .text_color(theme::faint())
@@ -1444,6 +1493,7 @@ impl Workspace {
                     .gap_2()
                     .children(actions)
             }))
+            .tip(tip.join("\n"))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.agent_row = Some(id);
                 this.jump_to(id, cx)

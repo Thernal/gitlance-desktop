@@ -13,7 +13,7 @@ use super::notifications::{Kind, Notice};
 use super::{Workspace, chip, format, icons, island, markdown, px, theme, words};
 use crate::git::{DiffLine, DiffSettings, LineKind, Repo};
 use crate::mr::Thread;
-use gpui::{AnyElement, ClickEvent, Context, Div, FontWeight, SharedString, Task, div, prelude::*};
+use gpui::{AnyElement, ClickEvent, Context, Div, FontWeight, Task, div, prelude::*};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -356,8 +356,10 @@ impl Workspace {
             .gap(px(super::gap()))
             .child(
                 island()
-                    .w(px(self.layout.sidebar.max(360.)))
+                    .w(px(super::roots::list_width(self.layout.sidebar.max(360.))))
                     .flex_none()
+                    .relative()
+                    .child(self.widths.measure("inbox"))
                     .child(
                         div()
                             .id("inbox-list")
@@ -385,17 +387,28 @@ impl Workspace {
             )
     }
 
-    /// One notice: unread dot, who did what and when, the request, the start of what was written.
+    /// One notice: unread dot, who did what, the request always; when, and the start of what was
+    /// written, while the list has 260 px (#79); all of it in its tooltip.
     fn render_inbox_row(&self, ix: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        use super::hover::Hover;
         let n = &self.notices.list[ix];
         let fresh = self.notice_unread(ix);
         let on = ix == self.notices.at;
-        let gist = crate::markdown::plain(&n.text);
-        let gist = gist
+        let room = self.widths.room("inbox");
+        let text = crate::markdown::plain(&n.text);
+        let gist = text
             .lines()
             .find(|l| !l.trim().is_empty())
             .unwrap_or("")
             .trim();
+        let mut tip = vec![
+            format!("{} {}", n.who, n.kind_verb()),
+            format!("{} {}", words::number(n.iid), n.title),
+            super::hover::full_date(n.created),
+        ];
+        if !text.trim().is_empty() {
+            tip.push(text.trim().to_owned());
+        }
         div()
             .id(("inbox-row", ix))
             .mx(px(6.))
@@ -435,14 +448,13 @@ impl Workspace {
                                     .when(fresh, |s| s.font_weight(FontWeight::SEMIBOLD))
                                     .child(format!("{} {}", n.who, n.kind_verb())),
                             )
-                            .child(
-                                super::hover::ago(
-                                    SharedString::from(format!("inbox-ago-{}", n.key)),
-                                    n.created,
-                                )
-                                .text_size(px(11.))
-                                .text_color(theme::faint()),
-                            ),
+                            .children(room.second().then(|| {
+                                div()
+                                    .flex_none()
+                                    .text_size(px(11.))
+                                    .text_color(theme::faint())
+                                    .child(format::ago(n.created))
+                            })),
                     )
                     .child(
                         div()
@@ -451,7 +463,7 @@ impl Workspace {
                             .text_color(theme::accent())
                             .child(format!("{} {}", words::number(n.iid), n.title)),
                     )
-                    .children((!gist.is_empty()).then(|| {
+                    .children((room.second() && !gist.is_empty()).then(|| {
                         div()
                             .truncate()
                             .text_size(px(12.))
@@ -459,6 +471,7 @@ impl Workspace {
                             .child(gist.to_owned())
                     })),
             )
+            .tip(tip.join("\n"))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.inbox_select(ix, cx)))
     }
 
