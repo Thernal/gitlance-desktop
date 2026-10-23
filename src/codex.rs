@@ -250,7 +250,7 @@ pub fn chats(project: &Path) -> Vec<Chat> {
         })
         .filter(|(_, _, cwd)| in_project(cwd))
         .collect();
-    sessions.sort_by(|a, b| b.0.cmp(&a.0));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.0));
     // One that resumed a session by name takes it first; the others the newest in their folder.
     terminals.sort_by_key(|(_, thread)| thread.is_none());
     let mut on: Vec<(String, PathBuf)> = Vec::new();
