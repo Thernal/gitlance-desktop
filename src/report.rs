@@ -273,8 +273,20 @@ pub fn keep_sent(list: &[Sent]) {
 }
 
 /// `body` (JSON) to `url` with curl, its answer as JSON; nothing secret goes, so on the command
-/// line is fine, the body on stdin.
+/// line is fine, the body on stdin. When nothing reached the relay — its name, a connection, TLS
+/// (curl 6, 7, 35) — it is sent once more a second later: the first send after launch was seen to
+/// fail so (2026-10-23), and a report that never arrived cannot arrive twice.
 fn post(url: &str, body: &Value) -> Result<Value> {
+    let out = post_once(url, body)?;
+    if matches!(out.status.code(), Some(6 | 7 | 35)) {
+        unreached(&out);
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        return answer(post_once(url, body)?);
+    }
+    answer(out)
+}
+
+fn post_once(url: &str, body: &Value) -> Result<std::process::Output> {
     let mut child = Command::new("curl")
         .args([
             "-sS",
@@ -298,7 +310,17 @@ fn post(url: &str, body: &Value) -> Result<Value> {
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(body.to_string().as_bytes())?;
     }
-    answer(child.wait_with_output()?)
+    Ok(child.wait_with_output()?)
+}
+
+/// curl's own reason in the app's log, when the relay could not be reached.
+fn unreached(out: &std::process::Output) {
+    let reason = String::from_utf8_lossy(&out.stderr);
+    crate::applog::line(&format!(
+        "report: curl {}: {}",
+        out.status.code().unwrap_or(-1),
+        reason.trim()
+    ));
 }
 
 fn get(url: &str) -> Result<Value> {
@@ -312,6 +334,7 @@ fn get(url: &str) -> Result<Value> {
 
 fn answer(out: std::process::Output) -> Result<Value> {
     if !out.status.success() {
+        unreached(&out);
         bail!("The reports can't be reached");
     }
     let text = String::from_utf8_lossy(&out.stdout);

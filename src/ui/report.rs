@@ -343,13 +343,6 @@ impl Workspace {
         let lines = crate::applog::tail(report::LOG_LINES).len();
         vec![
             Extra {
-                id: "version",
-                what: report::version(),
-                why: "always — which build it is",
-                on: true,
-                fixed: true,
-            },
-            Extra {
                 id: "system",
                 what: if r.system.is_empty() {
                     "The system and the machine".to_owned()
@@ -514,6 +507,19 @@ impl Workspace {
                     .flex_col()
                     .gap(px(2.))
                     .child(label("Sent with it"))
+                    // The build always goes: said, not a box to tick (the developer, 2026-10-23).
+                    .child(
+                        div()
+                            .py(px(4.))
+                            .text_size(px(12.))
+                            .child(report::version())
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(theme::faint())
+                                    .child("always — which build it is"),
+                            ),
+                    )
                     .children(self.report_extras().into_iter().map(|e| extra_row(e, cx)))
                     .into_any_element(),
             );
@@ -746,7 +752,7 @@ fn note(icon: &'static str, tone: gpui::Rgba, text: String) -> gpui::Div {
         .child(div().flex_1().min_w_0().child(text))
 }
 
-/// One extra with its box; the version's is ticked and stays so.
+/// One extra with its box; one that cannot go is greyed.
 fn extra_row(e: Extra, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
     let id = e.id;
     div()
