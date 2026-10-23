@@ -1962,15 +1962,16 @@ impl Workspace {
         let selecting = self.selecting(this.clone());
         let (fold, delete, raw) = (this.clone(), this.clone(), this.clone());
         let (resolve, reopen, editing, asking) = (this.clone(), this.clone(), this.clone(), this);
-        // A chat without a title is named by its agent.
+        // A chat by the name it was given, else its title; without one, by its agent.
         let chat = |s: &crate::review::Sent| {
-            if s.title.is_empty() {
+            let title = crate::labels::chat(&s.session).unwrap_or_else(|| s.title.clone());
+            if title.is_empty() {
                 self.agent_chats
                     .iter()
                     .find(|c| c.session == s.session)
                     .map_or_else(|| "its chat".to_owned(), |c| c.agent.clone())
             } else {
-                format!("“{}”", s.title)
+                format!("“{title}”")
             }
         };
         let status = match (&comment.state, &comment.sent) {

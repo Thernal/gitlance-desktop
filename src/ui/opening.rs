@@ -133,15 +133,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
         let ask = self.open_ask.as_ref()?;
-        let name = ask.path.file_name().map_or_else(
-            || ask.path.display().to_string(),
-            |n| n.to_string_lossy().into_owned(),
-        );
+        let name = crate::labels::project_name(&ask.path);
         let current = self
             .root
-            .as_ref()
-            .and_then(|r| r.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
+            .as_deref()
+            .map(crate::labels::project_name)
             .unwrap_or_default();
         let choice = |id: &'static str, label: &'static str, hint: String, new_tab: bool| {
             let on = ask.new_tab == new_tab;

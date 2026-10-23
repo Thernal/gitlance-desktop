@@ -320,6 +320,7 @@ impl Workspace {
         let here = self.space();
         let projects = self.menu_projects();
         let nested = !projects.is_empty();
+        let n_projects = projects.len();
         let row = |space: Space| {
             let id = space.id();
             let label = space.label();
@@ -670,10 +671,18 @@ impl Workspace {
             })
             .children(projects.into_iter().flat_map(|(ix, tab)| {
                 let mark = super::rail::initials(&tab.title);
-                let tint = super::rail::hue(&tab.title);
+                let tint = super::rail::project_hue(tab.root.as_deref(), &tab.title);
                 let active = tab.active;
+                let menu_tab = tab.clone();
                 let project = div()
                     .id(("menu-project", ix))
+                    // The rail's right click: name and colour, move, show, a window, close.
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                            this.project_menu(ix, n_projects, &menu_tab, e.position, cx)
+                        }),
+                    )
                     .h(px(32.))
                     .flex()
                     .flex_none()

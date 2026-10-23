@@ -268,10 +268,10 @@ impl Render for Shell {
 
 impl Workspace {
     pub(super) fn tab_title(&self) -> String {
-        self.root.as_ref().and_then(|r| r.file_name()).map_or_else(
-            || "New tab".to_owned(),
-            |n| n.to_string_lossy().into_owned(),
-        )
+        // Its own name when it has one (the developer, 2026-10-23), else its folder's.
+        self.root
+            .as_deref()
+            .map_or_else(|| "New tab".to_owned(), crate::labels::project_name)
     }
 
     pub(super) fn has_news(&self) -> bool {
@@ -313,11 +313,19 @@ impl Workspace {
                 .gap(px(4.))
                 .children(tabs.into_iter().enumerate().map(|(ix, tab)| {
                     let mark = super::rail::initials(&tab.title);
-                    let hue = super::rail::hue(&tab.title);
+                    let hue = super::rail::project_hue(tab.root.as_deref(), &tab.title);
                     let group: gpui::SharedString = format!("tab-{ix}").into();
+                    let (menu_tab, n) = (tab.clone(), self.tabs.borrow().len());
                     div()
                         .id(("tab", ix))
                         .group(group.clone())
+                        // The rail's right click: name and colour, move, show, a window, close.
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                                this.project_menu(ix, n, &menu_tab, e.position, cx)
+                            }),
+                        )
                         .flex_shrink(1.)
                         .min_w(px(60.))
                         .max_w(px(220.))

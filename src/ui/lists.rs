@@ -98,6 +98,7 @@ impl Workspace {
             Field::ThemeValue => (&self.theme_value, input::Look::default()),
             Field::Host => (&self.welcome.host, input::Look::default()),
             Field::CloneUrl => (&self.welcome.url, input::Look::default()),
+            Field::Label => (&self.label_name, input::Look::default()),
         };
         div()
             .id(id)
@@ -148,6 +149,20 @@ impl Workspace {
         let Some(field) = self.field else {
             return false;
         };
+        if field == Field::Label {
+            match input::edit(
+                &mut self.label_name,
+                &mut self.field_edit,
+                &event.keystroke,
+                cx,
+            ) {
+                Edit::Enter { .. } => self.save_label(cx),
+                Edit::Escape => self.close_label(cx),
+                Edit::Changed | Edit::Selected | Edit::Ignored => {}
+            }
+            cx.notify();
+            return true;
+        }
         if field == Field::ThemeValue {
             match input::edit(
                 &mut self.theme_value,
@@ -182,6 +197,7 @@ impl Workspace {
             Field::ThemeValue => &mut self.theme_value,
             Field::Host => &mut self.welcome.host,
             Field::CloneUrl => &mut self.welcome.url,
+            Field::Label => &mut self.label_name,
         };
         let welcome = self.root.is_none() && self.welcome.card.is_some();
         match input::edit(text, &mut self.field_edit, &event.keystroke, cx) {
@@ -237,6 +253,8 @@ pub enum Field {
     Host,
     /// The welcome's clone card: the repository's URL (#54).
     CloneUrl,
+    /// The name of a project or a chat being given (`labeling.rs`).
+    Label,
 }
 
 // ---- changed files ----------------------------------------------------------------------

@@ -177,10 +177,10 @@ impl Workspace {
     /// forward, the project, search and Settings — and the project's own quiet words, the fetch
     /// and the refresh status, before the gear.
     pub(super) fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let repo = self.root.as_ref().and_then(|r| r.file_name()).map_or_else(
-            || "GitLance".to_owned(),
-            |n| n.to_string_lossy().into_owned(),
-        );
+        let repo = self
+            .root
+            .as_deref()
+            .map_or_else(|| "GitLance".to_owned(), crate::labels::project_name);
         // In Tabs mode the tabs take the project's place (D21).
         let tabs = self.render_title_tabs(cx);
         let tabbed = tabs.is_some();
@@ -229,6 +229,17 @@ impl Workspace {
                 // The repository is a menu: open, refresh and the recent repositories.
                 div()
                     .id("repo-menu")
+                    // Its right click, the rail's: name and colour, show, a window, close.
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                            let tabs = this.tabs.borrow().clone();
+                            if let Some((ix, tab)) = tabs.iter().enumerate().find(|(_, t)| t.active)
+                            {
+                                this.project_menu(ix, tabs.len(), tab, e.position, cx)
+                            }
+                        }),
+                    )
                     .flex()
                     .items_center()
                     .gap_1()
@@ -692,7 +703,11 @@ impl Render for Workspace {
             self.close_theme_edit(cx);
         }
         let title = match &self.root {
-            Some(root) => format!("GitLance — {}", root.display()),
+            Some(root) => format!(
+                "GitLance — {} · {}",
+                crate::labels::project_name(root),
+                root.display()
+            ),
             None => "GitLance".to_owned(),
         };
         if title != self.title {
@@ -838,6 +853,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &OpenIn, _, cx| this.open_in(cx)))
             .on_action(cx.listener(|this, _: &RevealInFinder, _, cx| this.reveal_target(cx)))
             .on_action(cx.listener(|this, _: &ShowShortcuts, _, cx| this.toggle_shortcuts(cx)))
+            .on_action(cx.listener(|this, _: &NameProject, _, cx| {
+                if let Some(root) = this.root.clone() {
+                    this.open_label(labeling::Target::Project(root), cx)
+                }
+            }))
             .on_action(cx.listener(|this, _: &NextThread, _, cx| {
                 // ⇧N: a note on the agent's form in view, else the next discussion (#10 C).
                 match this.acting_agent_form() {
@@ -1103,6 +1123,7 @@ impl Render for Workspace {
             .children(self.render_find_files(cx))
             .children(self.render_open_ask(cx))
             .children(self.render_agent_pick(cx))
+            .children(self.render_label_card(cx))
             .children(self.render_create_quick(cx))
             .children(self.render_shortcuts(cx))
             .children(self.render_palette(cx))

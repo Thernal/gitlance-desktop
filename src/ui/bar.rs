@@ -334,9 +334,8 @@ impl Workspace {
     fn path_of(&self, space: Space, page: Option<&Page>) -> (Vec<Crumb>, String, bool) {
         let project = self
             .root
-            .as_ref()
-            .and_then(|r| r.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
+            .as_deref()
+            .map(crate::labels::project_name)
             .unwrap_or_default();
         let branch = |refname: &str| {
             self.branches

@@ -670,7 +670,11 @@ impl Workspace {
 
     /// Who an agent's answer is from: the chat's agent ("Claude"), and the chat's title.
     fn agent_of(&self, c: &crate::review::Comment) -> (String, String) {
-        let title = c.sent.as_ref().map(|s| s.title.clone()).unwrap_or_default();
+        let title = c
+            .sent
+            .as_ref()
+            .map(|s| crate::labels::chat(&s.session).unwrap_or_else(|| s.title.clone()))
+            .unwrap_or_default();
         let agent = c
             .sent
             .as_ref()

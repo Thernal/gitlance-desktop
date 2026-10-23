@@ -110,6 +110,8 @@ pub enum Kind {
 #[derive(Clone, Copy)]
 pub enum Cmd {
     Open,
+    /// The card naming the project and giving it a hue (`labeling.rs`).
+    NameProject,
     Refresh,
     Settings,
     Back,
@@ -208,6 +210,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Filter files by path", "⌥⌘P", Cmd::FilterFiles),
     ("Refresh", "⌘R", Cmd::Refresh),
     ("Open a repository…", "⌘O", Cmd::Open),
+    ("Name and colour this project…", "", Cmd::NameProject),
     ("Back", "⌘[", Cmd::Back),
     ("Forward", "⌘]", Cmd::Forward),
     ("Toggle split / unified", "⌥U", Cmd::Unified),
@@ -334,13 +337,7 @@ fn project_items(
     }
     let named: Vec<(String, &std::path::PathBuf)> = recent
         .iter()
-        .map(|p| {
-            let name = p.file_name().map_or_else(
-                || p.display().to_string(),
-                |n| n.to_string_lossy().into_owned(),
-            );
-            (name, p)
-        })
+        .map(|p| (crate::labels::project_name(p), p))
         .collect();
     // By the name first, then by the whole path as Go to file does: `work ibam` finds
     // ~/Desktop/Work/ABB/ibam, `abb` every project under ABB (the developer, 2026-10-23).
@@ -1518,6 +1515,7 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
     use super::*;
     match cmd {
         Cmd::Open => Box::new(Open),
+        Cmd::NameProject => Box::new(NameProject),
         Cmd::Refresh => Box::new(Refresh),
         Cmd::Settings => Box::new(OpenSettings),
         Cmd::Back => Box::new(GoBack),

@@ -72,7 +72,7 @@ impl Workspace {
         };
         let project = self.project.clone().unwrap_or_else(|| root.clone());
         let mut chats: Vec<PickChat> = Self::bus()
-            .map(|bus| bus.chats(&project))
+            .map(|bus| named(bus.chats(&project)))
             .unwrap_or_default()
             .into_iter()
             .map(|c| PickChat {
@@ -87,8 +87,8 @@ impl Workspace {
         for (session, title) in agents::claude_chats(&root) {
             if !chats.iter().any(|c| c.session == session) {
                 chats.push(PickChat {
+                    title: crate::labels::chat(&session).unwrap_or(title),
                     session,
-                    title,
                     agent: "Claude Code".into(),
                     listening: false,
                     limited: false,
@@ -1112,7 +1112,7 @@ impl Workspace {
     /// Reads this repository's chats again for the Agents window; whether they changed.
     pub(super) fn refresh_chats(&mut self) -> bool {
         let mut chats = match (self.project.as_ref().or(self.root.as_ref()), Self::bus()) {
-            (Some(root), Some(bus)) => bus.chats(root),
+            (Some(root), Some(bus)) => named(bus.chats(root)),
             _ => Vec::new(),
         };
         // A chat long gone with nothing of the review on it is not shown (#77).
@@ -1274,8 +1274,27 @@ impl Workspace {
                     super::hover::full_date(c.beat)
                 )
                 .into();
+                let (named_session, named_agent) = (c.session.clone(), c.agent.clone());
                 let row = div()
                     .id(("chat-row", ix))
+                    // Its right click names it (the developer, 2026-10-23: chats mixed up).
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                            use super::menu::{Act, Entry};
+                            this.open_menu(
+                                e.position,
+                                vec![vec![Entry::new(
+                                    "Name this chat…",
+                                    Act::NameChat {
+                                        session: named_session.clone(),
+                                        agent: named_agent.clone(),
+                                    },
+                                )]],
+                                cx,
+                            )
+                        }),
+                    )
                     .mx(px(6.))
                     .px(px(8.))
                     .py(px(6.))
@@ -2399,4 +2418,14 @@ fn limited(id: impl Into<gpui::ElementId>) -> gpui::Stateful<gpui::Div> {
         .child("limited")
         .tooltip_show_delay(super::hover::LONG)
         .tooltip(|_, cx| cx.new(|_| super::Tip(crate::codex::LIMITS)).into())
+}
+
+/// Chats by the names they were given (`crate::labels`), the rest by their first message.
+fn named(mut chats: Vec<agents::Chat>) -> Vec<agents::Chat> {
+    for c in &mut chats {
+        if let Some(name) = crate::labels::chat(&c.session) {
+            c.title = name;
+        }
+    }
+    chats
 }

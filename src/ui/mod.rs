@@ -26,6 +26,7 @@ mod inbox;
 mod input;
 mod keymap;
 mod keys;
+mod labeling;
 mod lists;
 mod markdown;
 mod md_page;
@@ -154,6 +155,7 @@ actions!(
         OpenIn,
         RevealInFinder,
         ShowShortcuts,
+        NameProject,
         ToggleThread,
         ToggleComments,
         ShowOverview,
@@ -1656,6 +1658,9 @@ pub struct Workspace {
     heights: room::Heights,
     /// What each fold was last drawn as (`Workspace::folding`).
     folds: motion::Folds,
+    /// The card naming a project or a chat (`labeling.rs`), and the name being typed.
+    label_edit: Option<labeling::LabelEdit>,
+    label_name: String,
     /// The tree folder opened last, and a count of openings: its rows fade in (`tree_row`).
     tree_opened: Option<(String, usize)>,
     /// What a narrow window folded, for the session (#80).
@@ -1869,6 +1874,8 @@ impl Workspace {
             widths: Default::default(),
             heights: Default::default(),
             folds: Default::default(),
+            label_edit: None,
+            label_name: String::new(),
             tree_opened: None,
             narrowed: Default::default(),
             compose_aside: false,

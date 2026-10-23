@@ -397,9 +397,8 @@ impl Workspace {
     fn render_code_tree(&self, cx: &mut Context<Self>) -> Div {
         let project = self
             .root
-            .as_ref()
-            .and_then(|r| r.file_name())
-            .map(|n| n.to_string_lossy().to_uppercase())
+            .as_deref()
+            .map(|r| crate::labels::project_name(r).to_uppercase())
             .unwrap_or_default();
         let rows = files::rows(&self.code.files, &self.code.open);
         let shown = match self.nav_page() {

@@ -293,6 +293,8 @@ impl Workspace {
             if self.done_card {
                 self.done_card = false;
                 cx.notify();
+            } else if self.label_edit.is_some() {
+                self.close_label(cx);
             } else if self.shortcuts {
                 self.shortcuts = false;
                 cx.notify();

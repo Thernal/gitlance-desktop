@@ -17,6 +17,7 @@ mod generated;
 mod git;
 mod github;
 mod highlight;
+mod labels;
 mod links;
 mod markdown;
 mod mcp;

@@ -59,6 +59,23 @@ pub fn hue(name: &str) -> Rgba {
     theme::code([3, 2, 1, 5, 8, 4, 7][sum % 7]).into()
 }
 
+/// Project `root`'s colour: the hue it was given (the developer, 2026-10-23), else one of its own
+/// by its folder's name, so naming it does not change it.
+pub fn project_hue(root: Option<&std::path::Path>, name: &str) -> Rgba {
+    let folder = root
+        .and_then(|r| r.file_name())
+        .map(|n| n.to_string_lossy().into_owned());
+    match root.and_then(|r| crate::labels::project(r).hue) {
+        Some(degrees) => hue_at(degrees),
+        None => hue(folder.as_deref().unwrap_or(name)),
+    }
+}
+
+/// A colour at `degrees` on the wheel, as bright as the code colours a project is given.
+pub fn hue_at(degrees: f32) -> Rgba {
+    gpui::hsla(degrees.rem_euclid(360.) / 360., 0.62, 0.62, 1.).into()
+}
+
 /// The rounded square with a project's initials on a tint of its colour.
 pub fn project_mark(mark: &str, hue: Rgba, size: f32) -> gpui::Div {
     div()
@@ -91,7 +108,7 @@ impl Workspace {
         let active = tabs.iter().position(|t| t.active);
         let items = tabs.into_iter().enumerate().map(|(ix, tab)| {
             let mark = initials(&tab.title);
-            let tint = hue(&tab.title);
+            let tint = project_hue(tab.root.as_deref(), &tab.title);
             let (drag_mark, drag_hue) = (mark.clone(), tint);
             // A long hover: the project's name, where it is, its unread count and key (#53).
             let place = tab
@@ -243,7 +260,7 @@ impl Workspace {
     }
 
     /// The right-click menu of project `ix` of `n`.
-    fn project_menu(
+    pub(super) fn project_menu(
         &mut self,
         ix: usize,
         n: usize,
@@ -280,7 +297,11 @@ impl Workspace {
                 },
                 Act::Reveal(root.clone()),
             ));
-            open.push(Entry::new("Open in a new window", Act::NewWindow(root)));
+            open.push(Entry::new(
+                "Open in a new window",
+                Act::NewWindow(root.clone()),
+            ));
+            moves.insert(0, Entry::new("Name and colour…", Act::NameProject(root)));
         }
         let close = vec![Entry::new("Close", Act::CloseProject(ix))];
         self.open_menu(at, vec![moves, open, close], cx);
