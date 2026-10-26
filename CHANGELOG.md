@@ -4,7 +4,7 @@ What is new in each release of GitLance. A release's notes on GitHub are its sec
 (`.github/release-notes.sh`); a release tag whose version has no section here does not build. Write what changed
 for someone using the app, not for someone reading the code; the commits follow anyway.
 
-## Unreleased
+## 1.1.0 — 2026-10-26
 
 - **A newer release is announced.** GitLance asks GitHub for its releases when it starts and every 6 hours, and
   when one is out, a card says what is new in it and in every release in between, with its commits. Download
