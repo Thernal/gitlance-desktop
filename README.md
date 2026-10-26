@@ -84,7 +84,7 @@ With a token, the requests of the repository's GitLab project or GitHub reposito
 - discussions on the lines — replies, reactions, editing and deleting your own notes, resolving (⇧N ⇧P walk
   them, r replies, x resolves, e edits);
 - pending comments and Submit review (⌘⇧↵): Comment, Approve (a), Request changes (GitLab 17+);
-- the pipeline or checks, approvals and reviewers, labels and milestone;
+- the pipeline or checks, approvals, and the reviewers with where each stands;
 - versions — what changed since the version you viewed, and a comment written on an earlier version drawn at
   its line now, with that line's history version by version;
 - creating one (⌥⌘M): the target's template, reviewers from CODEOWNERS, labels, milestone, draft, squash.

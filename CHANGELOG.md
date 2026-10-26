@@ -10,6 +10,8 @@ for someone using the app, not for someone reading the code; the commits follow 
 - **⌥↓ goes on down the list.** The next merge request is the first one below the open one that is not reviewed
   and not yours, counted from where the open one was — not from Reviewed, where reviewing it to the end moved it;
   with none below, it starts again at the top, once round.
+- A request's Overview lists its reviewers beside the description, and nothing else: the discussions are in the
+  Discussions window on the right.
 
 ## 1.0.1 — 2026-10-24
 

@@ -1,7 +1,7 @@
 //! A merge request's page (#73): the section tabs of its bar — Overview, Commits, Changes — and
 //! what the first two show; Changes is the diff, with one line of identity over it. Overview holds
 //! what the Details tool window held (#8), as a page: the identity and its facts, the description,
-//! and a column of who reviews, labels and milestone, and the discussions in short. A request you
+//! and a column of who reviews (#137: the discussions are the Discussions window's). A request you
 //! have never been inside opens on it, later ones on Changes (`nav::first_section`). Commits lists
 //! the request's commits with the version each came with; one opens as a level under it.
 
@@ -134,7 +134,7 @@ impl Workspace {
                                     .flex_col()
                                     .gap(px(20.))
                                     .text_size(px(12.))
-                                    .children(self.overview_facts(&d, cx)),
+                                    .children(self.overview_facts(&d)),
                             ),
                     ),
             )
@@ -286,10 +286,9 @@ impl Workspace {
             )
     }
 
-    /// Overview's column of facts: who reviews and how far, assignees, labels and milestone, the
-    /// discussions in short (a click shows one on Changes).
-    fn overview_facts(&self, d: &Details, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut out: Vec<AnyElement> = Vec::new();
+    /// Overview's column: who reviews and how far (#137; the discussions are the Discussions
+    /// window's).
+    fn overview_facts(&self, d: &Details) -> Vec<AnyElement> {
         let approved = self
             .requests
             .approvals
@@ -304,139 +303,26 @@ impl Workspace {
                 reviewers.push(name.clone());
             }
         }
-        if !reviewers.is_empty() {
-            out.push(
-                block(
-                    "Reviewers",
-                    reviewers.into_iter().map(|r| {
-                        let state = if approved.contains(&r) {
-                            ("✓ approved", theme::added())
-                        } else if d.changes_requested.contains(&r) {
-                            ("requested changes", theme::warning())
-                        } else {
-                            ("reviewing", theme::muted())
-                        };
-                        let login = self.login_of(&r);
-                        person(r, login, Some(state)).into_any_element()
-                    }),
-                )
-                .into_any_element(),
-            );
+        if reviewers.is_empty() {
+            return Vec::new();
         }
-        if !d.assignees.is_empty() {
-            out.push(
-                block(
-                    "Assignees",
-                    d.assignees
-                        .iter()
-                        .map(|a| person(a.clone(), self.login_of(a), None).into_any_element()),
-                )
-                .into_any_element(),
-            );
-        }
-        if !d.labels.is_empty() || d.milestone.is_some() {
-            let title = match (d.labels.is_empty(), d.milestone.is_some()) {
-                (false, true) => "Labels · Milestone",
-                (false, false) => "Labels",
-                _ => "Milestone",
-            };
-            let chips = d
-                .labels
-                .iter()
-                .map(|l| {
-                    let color = l.color.map_or(theme::muted(), gpui::rgb);
-                    chip(l.name.clone(), color)
-                })
-                .chain(d.milestone.as_ref().map(|(name, due)| {
-                    chip(
-                        match due {
-                            Some(due) => format!("{name} · due {due}"),
-                            None => name.clone(),
-                        },
-                        theme::muted(),
-                    )
-                }));
-            out.push(
-                block(
-                    title,
-                    [div()
-                        .flex()
-                        .flex_wrap()
-                        .gap(px(6.))
-                        .children(chips)
-                        .into_any_element()],
-                )
-                .into_any_element(),
-            );
-        }
-        let threads = &self.requests.threads;
-        let drafts = &self.requests.drafts;
-        if !threads.is_empty() || !drafts.is_empty() {
-            let open = threads.iter().filter(|t| !t.resolved).count();
-            let title = format!("Discussions · {}", open + drafts.len());
-            let place = |path: &Option<String>, line: Option<u32>| {
-                path.as_ref().map(|p| {
-                    let name = p.rsplit('/').next().unwrap_or(p);
-                    match line {
-                        Some(line) => format!("on {name}:{line}"),
-                        None => format!("on {name}"),
-                    }
-                })
-            };
-            let thread = |n: usize, t: &crate::mr::Thread, cx: &mut Context<Self>| {
-                let first = t.notes.first()?;
-                let at = t.path.clone().zip(
-                    t.new_line
-                        .map(|l| (l, false))
-                        .or(t.old_line.map(|l| (l, true))),
-                );
-                Some(
-                    discussion_row(
-                        SharedString::from(format!("overview-thread-{n}")),
-                        &first.author,
-                        place(&t.path, t.new_line.or(t.old_line)),
-                        t.resolved.then_some("resolved"),
-                        &first.body,
-                    )
-                    .when_some(at, |s, (path, (line, old))| {
-                        s.cursor_pointer().on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| {
-                                this.show_section(Section::Changes, cx);
-                                this.jump_to_line(&path, line, old, cx)
-                            },
-                        ))
-                    })
-                    .into_any_element(),
-                )
-            };
-            // The open ones first, then your notes not submitted, then what was resolved.
-            let mut rows: Vec<AnyElement> = threads
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| !t.resolved)
-                .filter_map(|(n, t)| thread(n, t, cx))
-                .collect();
-            rows.extend(drafts.iter().enumerate().map(|(n, draft)| {
-                discussion_row(
-                    SharedString::from(format!("overview-draft-{n}")),
-                    "You",
-                    place(&draft.path, draft.new_line.or(draft.old_line)),
-                    Some("pending, not submitted"),
-                    &draft.body,
-                )
-                .into_any_element()
-            }));
-            rows.extend(
-                threads
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, t)| t.resolved)
-                    .filter_map(|(n, t)| thread(n, t, cx)),
-            );
-            rows.truncate(10);
-            out.push(block(&title, rows).into_any_element());
-        }
-        out
+        vec![
+            block(
+                "Reviewers",
+                reviewers.into_iter().map(|r| {
+                    let state = if approved.contains(&r) {
+                        ("✓ approved", theme::added())
+                    } else if d.changes_requested.contains(&r) {
+                        ("requested changes", theme::warning())
+                    } else {
+                        ("reviewing", theme::muted())
+                    };
+                    let login = self.login_of(&r);
+                    person(r, login, Some(state)).into_any_element()
+                }),
+            )
+            .into_any_element(),
+        ]
     }
 
     /// A request's Commits: one line of identity, then its commits, each with the version it came
@@ -842,71 +728,6 @@ fn person(name: String, login: Option<String>, state: Option<(&'static str, Rgba
                 .child(format!("@{l}"))
         })))
         .children(state.map(|(word, color)| div().text_color(color).child(word)))
-}
-
-fn chip(text: String, color: Rgba) -> Div {
-    div()
-        .px(px(8.))
-        .h(px(20.))
-        .flex()
-        .items_center()
-        .rounded_full()
-        .border_1()
-        .border_color(Rgba { a: 0.45, ..color })
-        .bg(Rgba { a: 0.18, ..color })
-        .text_size(px(11.))
-        .text_color(theme::text())
-        .child(text)
-}
-
-/// A discussion in short: who, where, its state, and the first lines of its first note.
-fn discussion_row(
-    id: SharedString,
-    who: &str,
-    place: Option<String>,
-    state: Option<&'static str>,
-    body: &str,
-) -> gpui::Stateful<Div> {
-    // Plain words: its code marks would show as backticks.
-    let text: String = body
-        .lines()
-        .take(3)
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace('`', "");
-    div()
-        .id(id)
-        .flex()
-        .items_start()
-        .gap(px(8.))
-        .py(px(6.))
-        .border_t_1()
-        .border_color(theme::island_border())
-        .child(super::discussion::avatar(who, false, 16.))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_x(px(4.))
-                        .text_color(theme::muted())
-                        .child(
-                            div()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme::text())
-                                .child(who.to_owned()),
-                        )
-                        .children(place)
-                        .children(state.map(|s| div().text_color(theme::faint()).child(s))),
-                )
-                .child(div().line_clamp(2).text_color(theme::muted()).child(text)),
-        )
 }
 
 fn mono(text: &str) -> Div {
