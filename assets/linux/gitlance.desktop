@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=GitLance
-Comment=Review commits and force-pushed branch versions without an IDE
+Comment=Review commits, branch versions and merge requests without an IDE
 Exec=gitlance %f
 Icon=gitlance
 Categories=Development;RevisionControl;
