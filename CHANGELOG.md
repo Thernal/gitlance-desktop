@@ -6,6 +6,11 @@ for someone using the app, not for someone reading the code; the commits follow 
 
 ## Unreleased
 
+- **A newer release is announced.** GitLance asks GitHub for its releases when it starts and every 6 hours, and
+  when one is out, a card says what is new in it and in every release in between, with its commits. Download
+  opens the release page; Skip this version keeps quiet until the next one. After that, a mark in the title bar
+  opens the card again. Settings → General turns it off; GitLance → Check for Updates… asks right away. Nothing
+  is downloaded or installed by itself.
 - Every release now says what is new in it, followed by its commits by kind.
 - **⌥↓ goes on down the list.** The next merge request is the first one below the open one that is not reviewed
   and not yours, counted from where the open one was — not from Reviewed, where reviewing it to the end moved it;

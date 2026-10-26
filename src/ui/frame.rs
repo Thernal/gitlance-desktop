@@ -335,6 +335,7 @@ impl Workspace {
                     .items_center()
                     .justify_end()
                     .gap_3()
+                    .children(self.render_update_mark(cx))
                     .children(self.render_fetch(cx))
                     .children(self.render_status(cx))
                     .child(
@@ -698,6 +699,7 @@ impl Render for Workspace {
         words::set(self.web.as_ref().is_some_and(|w| w.github));
         markdown::set_me(self.requests.login.as_deref());
         self.take_error(cx);
+        self.take_update_news(cx);
         // Settings closed (esc, Done, a place) while a theme was edited: its preview ends too.
         if !self.settings_open && self.theme_edit.is_some() {
             self.close_theme_edit(cx);
@@ -771,6 +773,7 @@ impl Render for Workspace {
                     || self.agent_pick.is_some()
                     || self.reaction_grid.is_some()
                     || self.report_typing()
+                    || self.update_card.is_some()
                 {
                     if self.palette.is_some() || self.ffind.is_some() {
                         "Workspace Typing Palette"
@@ -779,6 +782,8 @@ impl Render for Workspace {
                         || self.typing_description()
                         || self.submit.is_some()
                         || self.report_typing()
+                        // The new version's card scrolls with ↑ ↓ (#135).
+                        || self.update_card.is_some()
                     {
                         // ↑ ↓ belong to the field: they move its caret or its line.
                         "Workspace Typing Caret"
@@ -822,6 +827,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::focus_diff))
             .on_action(cx.listener(Self::zen_one_file))
             .on_action(cx.listener(Self::report_problem))
+            .on_action(cx.listener(Self::check_for_updates))
             .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::next_change))
@@ -1124,6 +1130,7 @@ impl Render for Workspace {
             .children(self.render_open_ask(cx))
             .children(self.render_agent_pick(cx))
             .children(self.render_label_card(cx))
+            .children(self.render_update_card(cx))
             .children(self.render_create_quick(cx))
             .children(self.render_shortcuts(cx))
             .children(self.render_palette(cx))

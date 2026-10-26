@@ -17,6 +17,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # A report's picture goes to the relay as base64 (#118; already in the dependency graph).
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
+# Which release is newer than this build (#135; already in the dependency graph).
+semver = "1"
 # Folder icons by the user's rules (#95; already in the dependency graph).
 regex = "1"
 # The working tree's changes from the file system (FSEvents on macOS), so git is asked only then (#87).

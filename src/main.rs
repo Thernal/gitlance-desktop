@@ -34,6 +34,7 @@ mod symbols;
 mod textedit;
 mod themes;
 mod ui;
+mod updates;
 mod watch;
 mod worddiff;
 

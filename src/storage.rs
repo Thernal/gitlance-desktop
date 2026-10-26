@@ -369,6 +369,8 @@ pub struct Settings {
     pub flat: bool,
     /// Panels, menus and folds move instead of jumping (#56).
     pub animations: bool,
+    /// Ask GitHub whether a newer GitLance is out (#135).
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -389,6 +391,7 @@ impl Default for Settings {
             projects: Projects::Rail,
             flat: false,
             animations: true,
+            check_updates: true,
         }
     }
 }
@@ -426,6 +429,7 @@ impl Settings {
                 "projects" => settings.projects = Projects::from_key(value).unwrap_or_default(),
                 "flat" => settings.flat = value == "true",
                 "animations" => settings.animations = value != "false",
+                "check_updates" => settings.check_updates = value != "false",
                 "ui_zoom" => {
                     settings.ui_zoom = value.parse().map_or(100, |z: u16| {
                         z.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX)
@@ -458,6 +462,7 @@ impl std::fmt::Display for Settings {
         writeln!(f, "projects={}", self.projects.key())?;
         writeln!(f, "flat={}", self.flat)?;
         writeln!(f, "animations={}", self.animations)?;
+        writeln!(f, "check_updates={}", self.check_updates)?;
         writeln!(f, "zoom={}", self.zoom)?;
         writeln!(f, "ui_zoom={}", self.ui_zoom)?;
         if let Some(editor) = self.editor {
@@ -572,6 +577,7 @@ mod tests {
             projects: Projects::Menu,
             flat: true,
             animations: false,
+            check_updates: false,
         };
         assert_eq!(Settings::parse(&settings.to_string()), settings);
     }

@@ -256,6 +256,9 @@ impl Workspace {
         if self.agent_pick.is_some() {
             return self.agent_pick_key(event, cx);
         }
+        if self.update_card.is_some() {
+            return self.update_card_key(event, cx);
+        }
         if self.submit.is_some() {
             return self.submit_key(event, cx);
         }
@@ -295,6 +298,8 @@ impl Workspace {
                 cx.notify();
             } else if self.label_edit.is_some() {
                 self.close_label(cx);
+            } else if self.update_card.is_some() {
+                self.close_update_card(cx);
             } else if self.shortcuts {
                 self.shortcuts = false;
                 cx.notify();

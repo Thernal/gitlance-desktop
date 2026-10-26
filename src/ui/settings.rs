@@ -261,6 +261,16 @@ impl Workspace {
             },
         ));
 
+        let updates = switch("check-updates", s.check_updates).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.change_settings(
+                    |this| this.settings.check_updates = !this.settings.check_updates,
+                    cx,
+                );
+            },
+        ));
+        let update_status = self.render_update_status(cx);
+
         let gitlab = self.render_gitlab_settings(cx);
         let section = self.settings_section;
         // The theme editor takes the page's height: its tokens scroll beside a preview that stays.
@@ -353,6 +363,17 @@ impl Workspace {
                     "Where a repository goes when another one is open: ask each time, in place of the open one, or in a new tab beside it.",
                     open_in,
                 ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(item(
+                            "Check for updates",
+                            "Asks GitHub for GitLance's releases when the app starts and every 6 hours; a newer one opens a card with what is new in it, once, then waits in the title bar. Nothing is downloaded or installed.",
+                            updates,
+                        ))
+                        .child(div().pt(px(6.)).child(update_status)),
+                )
                 .into_any_element(),
             Section::Repository => column()
                 .child(item(

@@ -125,6 +125,7 @@ pub enum Cmd {
     FocusDiff,
     ZenOneFile,
     ReportProblem,
+    CheckForUpdates,
     Unified,
     CycleMode,
     Rendered,
@@ -257,6 +258,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Diff only", "⌘.", Cmd::FocusDiff),
     ("Diff only, one file at a time", "⌥⌘.", Cmd::ZenOneFile),
     ("Report a problem", "⌥⌘/", Cmd::ReportProblem),
+    ("Check for updates", "", Cmd::CheckForUpdates),
     ("New tab", "⌘T", Cmd::NewTab),
     ("Settings", "⌘,", Cmd::Settings),
 ];
@@ -1529,6 +1531,7 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::FocusDiff => Box::new(FocusDiff),
         Cmd::ZenOneFile => Box::new(ZenOneFile),
         Cmd::ReportProblem => Box::new(ReportProblem),
+        Cmd::CheckForUpdates => Box::new(CheckForUpdates),
         Cmd::Unified => Box::new(ToggleUnified),
         Cmd::CycleMode => Box::new(CycleMode),
         Cmd::Wrap => Box::new(ToggleWrap),

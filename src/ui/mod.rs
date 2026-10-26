@@ -61,6 +61,7 @@ mod submit;
 mod theme;
 mod toast;
 mod tools;
+mod updates;
 mod watch;
 mod welcome;
 mod words;
@@ -125,6 +126,7 @@ actions!(
         FocusDiff,
         ZenOneFile,
         ReportProblem,
+        CheckForUpdates,
         CopySelection,
         SelectAll,
         NextChange,
@@ -486,6 +488,22 @@ pub fn run(path: Option<PathBuf>) {
                 }
             })
             .detach();
+            // A newer GitLance (#135): asked at launch and every 6 hours while Settings says so —
+            // looked at each minute, so turning it on asks soon. A snapshot asks only its fixture.
+            cx.spawn(async move |cx| {
+                loop {
+                    if Settings::load().check_updates && crate::updates::due() {
+                        cx.background_executor()
+                            .spawn(async { crate::updates::check() })
+                            .await;
+                        cx.update(|cx| cx.refresh_windows());
+                    }
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(60))
+                        .await;
+                }
+            })
+            .detach();
             if !cfg!(feature = "snapshot") || std::env::var_os("GITLANCE_SNAPSHOT").is_none() {
                 crate::platform::set_icon();
             }
@@ -559,6 +577,8 @@ fn window_size() -> (f32, f32) {
 fn menus(options: &ViewOptions) -> Vec<Menu> {
     vec![
         Menu::new("GitLance").items([
+            MenuItem::action("Check for Updates…", CheckForUpdates),
+            MenuItem::separator(),
             MenuItem::action("Settings…", OpenSettings),
             MenuItem::separator(),
             MenuItem::action("Quit GitLance", Quit),
@@ -911,6 +931,20 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                         }
                         "settings" => {
                             this.open_settings(cx);
+                            continue;
+                        }
+                        "settings-general" => {
+                            this.open_settings(cx);
+                            this.settings_section = settings::Section::General;
+                            continue;
+                        }
+                        // A newer release's card (#135), from GITLANCE_RELEASES_FIXTURE.
+                        "update" | "update-commits" => {
+                            crate::updates::check();
+                            this.open_update_card(cx);
+                            if name.trim() == "update-commits" {
+                                this.unfold_update_commits();
+                            }
                             continue;
                         }
                         "swipe" | "onion" => {
@@ -1661,6 +1695,9 @@ pub struct Workspace {
     /// The card naming a project or a chat (`labeling.rs`), and the name being typed.
     label_edit: Option<labeling::LabelEdit>,
     label_name: String,
+    /// The card of a newer GitLance (#135), and a check asked for by hand running.
+    update_card: Option<updates::UpdateCard>,
+    update_checking: bool,
     /// The tree folder opened last, and a count of openings: its rows fade in (`tree_row`).
     tree_opened: Option<(String, usize)>,
     /// What a narrow window folded, for the session (#80).
@@ -1876,6 +1913,8 @@ impl Workspace {
             folds: Default::default(),
             label_edit: None,
             label_name: String::new(),
+            update_card: None,
+            update_checking: false,
             tree_opened: None,
             narrowed: Default::default(),
             compose_aside: false,
@@ -3140,6 +3179,11 @@ impl Workspace {
     /// ⌥⌘/, Help → Report a Problem…: the report's tool window (#118).
     fn report_problem(&mut self, _: &ReportProblem, _: &mut Window, cx: &mut Context<Self>) {
         self.open_report(cx);
+    }
+
+    /// GitLance → Check for Updates…, ⌘K (#135).
+    fn check_for_updates(&mut self, _: &CheckForUpdates, _: &mut Window, cx: &mut Context<Self>) {
+        self.check_updates_now(cx);
     }
 
     /// ⌥⌘.: zen with one file at a time, at a reading width (#55); outside zen it enters zen so.

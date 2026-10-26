@@ -199,6 +199,10 @@ kind and the compare link (`.github/release-notes.sh`); a tag whose version has 
 builds. Run by hand from the Actions tab, `release.yml` only builds; the files stay on the run. `release-notes.yml`
 (by hand) writes the notes of releases already made again from `CHANGELOG.md`.
 
+The app asks GitHub for the releases when it starts and every 6 hours (Settings → General → Check for updates):
+a newer one opens a card with what is new, once, then waits as a mark in the title bar; GitLance → Check for
+Updates… asks at once. It downloads and installs nothing — Download opens the release page.
+
 The builds are not signed or notarized. On macOS the first open is refused: right-click the app →
 Open, or System Settings → Privacy & Security → Open Anyway (or `xattr -dr com.apple.quarantine
 /Applications/GitLance.app`). On Windows, SmartScreen asks: More info → Run anyway.
