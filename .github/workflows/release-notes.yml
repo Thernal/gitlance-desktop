@@ -1,0 +1,38 @@
+name: Release notes
+
+# Writes the notes of releases already made, as release.yml does for a new one (#135): a release's section of
+# CHANGELOG.md, then its commits (.github/release-notes.sh). For a section changed after its release, and for
+# the releases from before the notes existed. Run by hand: Actions → Release notes → Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: Versions to rewrite, separated by spaces; empty rewrites every release
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    name: Rewrite the notes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rewrite
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSIONS: ${{ inputs.versions }}
+        run: |
+          if [ -z "$VERSIONS" ]; then
+            VERSIONS=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
+              --jq '.[].tagName' | sed -n 's|^release/v||p')
+          fi
+          for v in $VERSIONS; do
+            .github/release-notes.sh "$v" > "$RUNNER_TEMP/notes.md"
+            gh release edit "release/v$v" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
+            echo "release/v$v: notes written"
+          done

@@ -26,6 +26,11 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME, Cargo.toml $crate"
             exit 1
           fi
+          # A release says what is new in it (#135): its section of CHANGELOG.md, before anything builds.
+          if [ "$GITHUB_REF_TYPE" = tag ] && ! .github/release-notes.sh --check "$crate"; then
+            echo "::error::CHANGELOG.md has no section for $crate"
+            exit 1
+          fi
           echo "version=$crate" >> "$GITHUB_OUTPUT"
 
   macos:
@@ -140,6 +145,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The tags and history: the notes list the commits since the release before (#135).
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -151,5 +160,6 @@ jobs:
         run: |
           pre=
           case "$VERSION" in *-*) pre=--prerelease ;; esac
+          .github/release-notes.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
-            --title "GitLance $VERSION" --generate-notes $pre
+            --title "GitLance $VERSION" --notes-file "$RUNNER_TEMP/notes.md" $pre
