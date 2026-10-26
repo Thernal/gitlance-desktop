@@ -7,6 +7,9 @@ for someone using the app, not for someone reading the code; the commits follow 
 ## Unreleased
 
 - Every release now says what is new in it, followed by its commits by kind.
+- **⌥↓ goes on down the list.** The next merge request is the first one below the open one that is not reviewed
+  and not yours, counted from where the open one was — not from Reviewed, where reviewing it to the end moved it;
+  with none below, it starts again at the top, once round.
 
 ## 1.0.1 — 2026-10-24
 

@@ -63,6 +63,9 @@ pub struct Requests {
     pub listed_at: Option<i64>,
     /// The request of the open branch, when it is one's source branch.
     pub current: Option<u64>,
+    /// The open request and the group it was in when it was opened: ⌥↓ goes on from its place
+    /// there, not from Reviewed, where reviewing it to the end moved it (#136).
+    pub walk: Option<(u64, Group)>,
     /// Its discussions are being read: Discussions shimmers instead of saying there are none.
     pub reading: bool,
     pub threads: Vec<Thread>,
@@ -323,6 +326,11 @@ impl Workspace {
         }
         self.requests.current = iid;
         if let Some(iid) = iid {
+            if self.requests.walk.is_none_or(|(walked, _)| walked != iid)
+                && let Some(m) = self.requests.find(iid)
+            {
+                self.requests.walk = Some((iid, self.group_of(m)));
+            }
             self.mark_opened(iid);
         }
         self.requests.reading = false;
@@ -540,23 +548,35 @@ impl Workspace {
         self.select_request(next, cx);
     }
 
-    /// The next request to review after the open one, going round the list: one that needs your
-    /// review or was pushed since your review first — one just reviewed has moved down to
-    /// Reviewed, below them —, then a new one nobody asked you for; never one of yours (#81).
+    /// The next request to review below the open one, going round the list once: the first that
+    /// is not reviewed at its head and not yours (#81). Counted from where the open one was when
+    /// it was opened — reviewed to the end, it has moved down to Reviewed (#136).
     fn next_request(&self) -> Option<&Mr> {
-        let shown = self.shown_requests();
+        let mut shown = self.shown_requests();
+        let walk = self
+            .requests
+            .walk
+            .filter(|(iid, _)| Some(*iid) == self.requests.current);
+        if let Some((walked, was)) = walk
+            && self.requests.view == mr::MrState::Opened
+        {
+            shown.sort_by_key(|m| {
+                let group = if m.iid == walked {
+                    was
+                } else {
+                    self.group_of(m)
+                };
+                (group, std::cmp::Reverse(m.updated))
+            });
+        }
         let at = shown
             .iter()
             .position(|m| Some(m.iid) == self.requests.current);
-        let tiers: Vec<Option<u8>> = shown
+        let open: Vec<bool> = shown
             .iter()
-            .map(|m| match self.group_of(m) {
-                Group::Asks | Group::Updated => Some(0),
-                Group::New => Some(1),
-                Group::Reviewed | Group::Yours => None,
-            })
+            .map(|m| matches!(self.group_of(m), Group::Asks | Group::Updated | Group::New))
             .collect();
-        next_to_review(&tiers, at).map(|ix| shown[ix])
+        next_to_review(&open, at).map(|ix| shown[ix])
     }
 
     /// After branch `self.branch` in the branch list, the next branch of the same kind (local or
@@ -2245,15 +2265,12 @@ pub(super) fn pipeline_word(p: &Pipeline) -> (&'static str, String, gpui::Rgba) 
 
 /// The row to review after row `at`, going round: the nearest of the lowest tier; a row of no
 /// tier is never one.
-fn next_to_review(tiers: &[Option<u8>], at: Option<usize>) -> Option<usize> {
-    let n = tiers.len();
+fn next_to_review(open: &[bool], at: Option<usize>) -> Option<usize> {
+    let n = open.len();
     let start = at.map_or(0, |a| a + 1);
     (0..n)
         .map(|step| (start + step) % n)
-        .filter(|&ix| Some(ix) != at)
-        .filter_map(|ix| tiers[ix].map(|tier| (tier, ix)))
-        .min_by_key(|&(tier, _)| tier)
-        .map(|(_, ix)| ix)
+        .find(|&ix| Some(ix) != at && open[ix])
 }
 
 /// A group's heading in a tool window's list; `keys` says how to walk it.
@@ -2325,27 +2342,20 @@ mod tests {
     fn the_next_request_to_review_goes_round_to_the_top() {
         // 0 to review, 1 reviewed, 2 current, 3 reviewed: past the end, back to 0.
         assert_eq!(
-            next_to_review(&[Some(0), None, Some(0), None], Some(2)),
+            next_to_review(&[true, false, true, false], Some(2)),
             Some(0)
         );
-        assert_eq!(next_to_review(&[None, Some(0), None], Some(0)), Some(1));
-        assert_eq!(next_to_review(&[None, Some(0)], None), Some(1));
+        assert_eq!(next_to_review(&[false, true, false], Some(0)), Some(1));
+        assert_eq!(next_to_review(&[false, true], None), Some(1));
         // Only the current one is left: nowhere to go.
-        assert_eq!(next_to_review(&[None, Some(0), None], Some(1)), None);
+        assert_eq!(next_to_review(&[false, true, false], Some(1)), None);
+        assert_eq!(next_to_review(&[false, false, false], Some(1)), None);
     }
 
     #[test]
-    fn a_request_waiting_for_you_comes_before_the_others() {
-        // 0 updated, 1 current (just reviewed), 2 nobody asked you, 3 yours: back up to 0.
-        assert_eq!(
-            next_to_review(&[Some(0), None, Some(1), None], Some(1)),
-            Some(0)
-        );
-        // None waits for you: the others, never yours.
-        assert_eq!(
-            next_to_review(&[None, None, Some(1), None], Some(1)),
-            Some(2)
-        );
-        assert_eq!(next_to_review(&[None, None, None], Some(1)), None);
+    fn the_one_below_comes_before_the_top() {
+        // 0 needs review, 1 current, 2 reviewed, 3 new to you: on down to 3, not back up to 0
+        // (#136).
+        assert_eq!(next_to_review(&[true, true, false, true], Some(1)), Some(3));
     }
 }
