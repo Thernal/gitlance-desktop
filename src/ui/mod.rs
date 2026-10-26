@@ -938,6 +938,12 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.settings_section = settings::Section::General;
                             continue;
                         }
+                        // Fetch in the background's switch (#141).
+                        "settings-repository" => {
+                            this.open_settings(cx);
+                            this.settings_section = settings::Section::Repository;
+                            continue;
+                        }
                         // A newer release's card (#135), from GITLANCE_RELEASES_FIXTURE.
                         "update" | "update-commits" => {
                             crate::updates::check();
@@ -2000,13 +2006,14 @@ impl Workspace {
                         }
                         this.watch.watch(git_dir, fingerprint);
                         this.start_working_poll(cx);
-                        this.start_fetching(cx);
                         this.load_requests(cx);
                         // The documents this repository reads as Source (#11).
                         this.page.load(&crate::review::key(&root));
                         // Its requests list's folds and the requests opened (#81).
                         this.roots.load(&crate::review::key(&root));
                         this.root = Some(root);
+                        // Once the root is this repository's: it reads whether fetch is off for it (#141).
+                        this.start_fetching(cx);
                         this.branches = branches;
                         let refresh = keep.is_some();
                         let (refname, commit) = keep.unzip();
