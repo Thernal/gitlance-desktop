@@ -464,8 +464,12 @@ impl Workspace {
         self.build_stack(cx);
     }
 
-    /// Files marked or unmarked reviewed fold or open as their mark says again.
+    /// Files marked or unmarked reviewed fold or open as their mark says again. Only with Fold
+    /// reviewed files on does the mark say anything: else a file the reader folded stays so (#144).
     pub(super) fn review_changed(&mut self, ixs: &[usize]) {
+        if !self.options.fold_reviewed {
+            return;
+        }
         let Some(stack) = self.stack.as_mut() else {
             return;
         };

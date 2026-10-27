@@ -17,6 +17,9 @@ for someone using the app, not for someone reading the code; the commits follow 
   before it. It now comes back as it was, with only its own changes beside it; the working tree too.
 - **The menu scrolls.** With many merge requests or branches open under it, the rows that did not fit were cut off
   at the window's bottom; the menu now scrolls, and brings the page on screen into view when you go to it.
+- **v opens the file it moves to.** A generated or lock file it went to stayed folded, and the file it marked
+  opened again when you had folded it; the next file now opens at its first lines, and the one marked stays as
+  you left it unless View → Fold reviewed files folds it.
 
 ## 1.1.0 — 2026-10-26
 

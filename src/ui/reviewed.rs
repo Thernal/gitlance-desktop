@@ -593,6 +593,17 @@ impl Workspace {
             .map(|step| order[(at + step) % order.len().max(1)])
             .find(|&ix| self.review_state(ix) != Some(State::Done));
         if let Some(ix) = next.filter(|&ix| ix != self.file) {
+            // It is read next: a generated file folded opens too, as its "Show it anyway" (#144).
+            if let Some(path) = self
+                .diff
+                .as_ref()
+                .and_then(|d| d.files.get(ix))
+                .filter(|f| self.generated_folded(f))
+                .map(|f| f.path().to_owned())
+            {
+                self.unfolded.insert(path);
+                self.sync_stack();
+            }
             self.select_file(ix, cx);
         }
     }
