@@ -4,7 +4,7 @@ What is new in each release of GitLance. A release's notes on GitHub are its sec
 (`.github/release-notes.sh`); a release tag whose version has no section here does not build. Write what changed
 for someone using the app, not for someone reading the code; the commits follow anyway.
 
-## Unreleased
+## 1.2.0 — 2026-10-27
 
 - **The background fetch runs from the start.** A repository just opened showed Fetch in the background off and
   fetched nothing until it loaded again; it is on from the first moment now, as it has been meant to be since 1.0.1.

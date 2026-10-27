@@ -1,6 +1,6 @@
 [package]
 name = "gitlance"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2024"
 description = "Review commits, branch versions and merge requests, and send line comments to your coding agent — without an IDE and without worktrees."
 license = "MIT"
