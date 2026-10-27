@@ -1533,6 +1533,8 @@ pub struct Workspace {
     requests: requests::Requests,
     /// What the roots of Branches and Merge requests read for their rows and previews (#72).
     roots: roots::Roots,
+    /// The menu's scroll (#146).
+    places: spaces::Places,
     /// A merge request's diff to show once its branch has loaded: base, head, request.
     pending_compare: Option<PendingCompare>,
     /// The merge request whose diff is open (or was last opened from the list).
@@ -1823,6 +1825,7 @@ impl Workspace {
             shell: None,
             requests: Default::default(),
             roots: Default::default(),
+            places: Default::default(),
             pending_compare: None,
             open_request: None,
             gitlab_check: None,

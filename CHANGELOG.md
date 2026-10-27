@@ -15,6 +15,8 @@ for someone using the app, not for someone reading the code; the commits follow 
 - **A comparison stays as you left it.** Its Swap, Direct and Use origin/… were undone when you came back to it
   from another space, and its side panel listed the commits and versions of the branch or merge request opened
   before it. It now comes back as it was, with only its own changes beside it; the working tree too.
+- **The menu scrolls.** With many merge requests or branches open under it, the rows that did not fit were cut off
+  at the window's bottom; the menu now scrolls, and brings the page on screen into view when you go to it.
 
 ## 1.1.0 — 2026-10-26
 

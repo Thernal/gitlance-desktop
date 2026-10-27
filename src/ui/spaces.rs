@@ -9,7 +9,11 @@
 use super::nav::{Item, Page};
 use super::requests::Scope;
 use super::{Workspace, icons, px, theme};
-use gpui::{ClickEvent, Context, FontWeight, MouseButton, SharedString, div, prelude::*};
+use gpui::{
+    ClickEvent, Context, FontWeight, MouseButton, SharedString, canvas, div, point, prelude::*,
+};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 /// The menu's width, open and folded to icons.
 const OPEN: f32 = 216.;
@@ -133,6 +137,18 @@ impl Missing {
             Missing::Git => "Not a git repository · git init",
         }
     }
+}
+
+/// The menu's scroll (#146): its rows scroll once they are taller than the window — many
+/// requests open under Merge requests —, and the row of the page on screen comes into view when
+/// that page changes.
+#[derive(Default)]
+pub struct Places {
+    scroll: gpui::ScrollHandle,
+    /// The row last brought into view, by what it shows.
+    revealed: RefCell<String>,
+    /// The next frame brings the row on screen into view.
+    reveal: Rc<Cell<bool>>,
 }
 
 /// What is open under a space, as its row in the menu.
@@ -306,6 +322,39 @@ impl Workspace {
     }
 
     /// The menu; None without a repository and in zen.
+    /// The row on screen, `key`, in the menu: when it is not the one last brought into view, the
+    /// next frame scrolls the menu the least that shows it whole (#146). Drawn inside the row.
+    fn reveal_row(&self, key: String) -> impl IntoElement + use<> {
+        if *self.places.revealed.borrow() != key {
+            self.places.revealed.replace(key);
+            self.places.reveal.set(true);
+        }
+        let (scroll, reveal) = (self.places.scroll.clone(), self.places.reveal.clone());
+        canvas(
+            move |row, window, _| {
+                if !reveal.replace(false) {
+                    return;
+                }
+                let view = scroll.bounds();
+                let by = if row.top() < view.top() {
+                    view.top() - row.top()
+                } else if row.bottom() > view.bottom() {
+                    view.bottom() - row.bottom()
+                } else {
+                    return;
+                };
+                let (y, max) = (scroll.offset().y + by, scroll.max_offset().y);
+                scroll.set_offset(point(scroll.offset().x, y.clamp(-max, gpui::px(0.))));
+                window.request_animation_frame();
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
+
     pub(super) fn render_spaces(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         // Zen just began: it slides away (#56, 16).
         if self.root.is_none() || (self.zen.is_some() && !self.motion.recent("zen")) {
@@ -390,7 +439,10 @@ impl Workspace {
                 } else {
                     theme::muted()
                 })
-                .when(on, |s| s.bg(theme::selected()))
+                .when(on, |s| {
+                    s.bg(theme::selected())
+                        .child(self.reveal_row(id.to_owned()))
+                })
                 .when(missing.is_some(), |s| s.opacity(0.5))
                 .when(missing != Some(Missing::Remote), |s| {
                     s.cursor_pointer()
@@ -542,11 +594,13 @@ impl Workspace {
                         .text_size(px(12.))
                         .cursor_pointer()
                         .when(on, |s| {
-                            s.border_l_2()
+                            s.relative()
+                                .border_l_2()
                                 .border_color(theme::accent())
                                 .rounded_r(px(super::ROW_RADIUS))
                                 .bg(theme::selected())
                                 .text_color(theme::text())
+                                .child(self.reveal_row(format!("{id}:{}", open.tip)))
                         })
                         .when(!on, |s| {
                             s.border_l_1()
@@ -649,7 +703,9 @@ impl Workspace {
             .px(px(EDGE))
             .pt(px(4.))
             .pb(px(4.))
-            .overflow_hidden()
+            // Taller than the window, it scrolls (#146).
+            .overflow_y_scroll()
+            .track_scroll(&self.places.scroll)
             .when(nested, |s| {
                 s.child(if folded {
                     div()
