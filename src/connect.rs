@@ -223,6 +223,13 @@ pub enum Refused {
     Other(String),
 }
 
+/// `text` as one word of the command GitLab Shell splits as a shell does: in single quotes, a quote
+/// in it closed, escaped and opened again. Bare, "GitLance (Mac)" is two words and its `(` refused:
+/// "invalid command line string".
+fn shell_word(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
 /// GitLab Shell's answer to `personal_access_token`: `Token:` and `Expires:`, or its refusal.
 fn made(answer: &str) -> Result<Made, Refused> {
     let field = |name: &str| {
@@ -268,7 +275,12 @@ pub fn make(ssh: &Ssh, name: &str, scope: &str) -> Result<Made, Refused> {
             .replace("{scope}", scope),
         None => {
             let mut ssh = ssh.command();
-            ssh.args(["personal_access_token", name, scope, &DAYS.to_string()]);
+            ssh.args([
+                "personal_access_token",
+                &shell_word(name),
+                scope,
+                &DAYS.to_string(),
+            ]);
             run(ssh, None)
                 .ok_or_else(|| Refused::Other("ssh did not answer".to_owned()))?
                 .1
@@ -503,6 +515,18 @@ mod tests {
             Some("glpat-x1")
         );
         assert_eq!(credential_password("protocol=https\nhost=h\n"), None);
+    }
+
+    #[test]
+    fn a_token_name_goes_to_gitlab_shell_as_one_word() {
+        assert_eq!(
+            shell_word("GitLance (011570-MAC)"),
+            "'GitLance (011570-MAC)'"
+        );
+        assert_eq!(
+            shell_word("GitLance (Ann's Mac)"),
+            r"'GitLance (Ann'\''s Mac)'"
+        );
     }
 
     #[test]
