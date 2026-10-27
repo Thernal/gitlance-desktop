@@ -33,7 +33,9 @@ To review a merge request, read it with get_request — its diff as GitLab or Gi
 and the pending comments already there — and leave each remark with add_pending_comment on a line the diff shows. When you have looked at several, \
 gather them with gather_requests, each with a line on what you did there, so the reviewer finds them together. \
 When you finish work the reviewer should read, open it for them with open_changes: your branch against its base, \
-or the working tree. \
+or the working tree. Where a change needs explaining — why this way, what you left alone, what to look at closely — \
+give notes on its lines and a summary, with open_changes or alone with annotate_changes; answers to them come back as \
+review comments. \
 Pending comments are seen by the reviewer alone; the reviewer edits, deletes or keeps them and submits the review: \
 never submit, approve or publish anything yourself. \
 GitLance shows the reviewer what you did only while it runs. When your work needs the reviewer to look and a tool \
@@ -43,6 +45,20 @@ answers once it is there. Do not start it for anything else."
 }
 
 fn tools() -> Value {
+    // A note on a line of the changes, for annotate_changes and open_changes (#151).
+    let notes = json!({
+        "type": "array",
+        "description": "Notes on lines of the changes: a file they change and a line of its new side (the working tree's, or the head's)",
+        "items": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "The file, from the repository's root"},
+                "line": {"type": "integer", "description": "The line's number in the file as the changes leave it"},
+                "text": {"type": "string", "description": "The note, in markdown: why, what was left alone, what to check"}
+            },
+            "required": ["path", "line", "text"]
+        }
+    });
     json!([
         {
             "name": "list_comments",
@@ -145,7 +161,7 @@ fn tools() -> Value {
         },
         {
             "name": "open_changes",
-            "description": "Open what you changed for the reviewer, as a row under Branches in GitLance: two refs or commits compared (head against base, since their merge base unless direct), or the working tree. Nothing on their screen moves; a note offers to show it. Answers what it opened, or why it could not.",
+            "description": "Open what you changed for the reviewer, as a row under Branches in GitLance: two refs or commits compared (head against base, since their merge base unless direct), or the working tree. Nothing on their screen moves; a note offers to show it. With notes and a summary, they show on the diff as annotate_changes leaves them. Answers what it opened, or why it could not.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -153,8 +169,27 @@ fn tools() -> Value {
                     "head": {"type": "string", "description": "The changes; the branch checked out here when left out"},
                     "direct": {"type": "boolean", "description": "Compare the two as they are, not since their merge base"},
                     "working_tree": {"type": "boolean", "description": "The uncommitted changes instead of two refs"},
-                    "unstaged": {"type": "boolean", "description": "With working_tree: only what is not staged"}
+                    "unstaged": {"type": "boolean", "description": "With working_tree: only what is not staged"},
+                    "summary": {"type": "string", "description": "Optional: what the changes do, in a few sentences, shown over the diff"},
+                    "notes": notes
                 }
+            }
+        },
+        {
+            "name": "annotate_changes",
+            "description": "Explain your changes to the reviewer with notes on their lines — why this way, what you left alone, what to look at closely — and a short summary of the whole. They show on the diff in GitLance, apart from the reviewer's comments, whenever the reviewer opens these changes; a note answered comes back to you as an ordinary review comment. Kept on the reviewer's Mac, never sent to GitLab or GitHub. Name the changes as open_changes does: the working tree, or a head (your branch) against its base. Notes again on the same changes replace your earlier ones.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "base": {"type": "string", "description": "What the changes are compared against; the project's main line when left out"},
+                    "head": {"type": "string", "description": "The changes; the branch checked out here when left out"},
+                    "direct": {"type": "boolean", "description": "Compare the two as they are, not since their merge base"},
+                    "working_tree": {"type": "boolean", "description": "The uncommitted changes instead of two refs"},
+                    "unstaged": {"type": "boolean", "description": "With working_tree: only what is not staged"},
+                    "summary": {"type": "string", "description": "What the changes do, in a few sentences, shown over the diff"},
+                    "notes": notes
+                },
+                "required": ["notes"]
             }
         },
         {
@@ -199,6 +234,7 @@ fn call(bus: &Bus, exe: &str, name: &str, args: &Value) -> Result<String, String
         "add_pending_comment" => return requests::add_pending_comment(bus, &here, &root, args),
         "gather_requests" => return requests::gather_requests(bus, &here, &root, args),
         "open_changes" => return changes::open_changes(bus, &here, &root, args),
+        "annotate_changes" => return changes::annotate_changes(bus, &here, &root, args),
         _ => {}
     }
     let comments = bus.comments(&root);
@@ -391,7 +427,7 @@ mod tests {
                 .contains("\"/x/GitLance\" agent-watch")
         );
         let list = handle(&bus, "", &json!({"id": 2, "method": "tools/list"})).unwrap();
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 9);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 10);
         assert!(handle(&bus, "", &json!({"method": "notifications/initialized"})).is_none());
         let unknown = handle(&bus, "", &json!({"id": 3, "method": "nope"})).unwrap();
         assert_eq!(unknown["error"]["code"], -32601);

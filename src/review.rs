@@ -47,6 +47,9 @@ pub struct Comment {
     /// Put away once it was read, addressed or resolved: out of the lists and off its line (#76).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
+    /// Written as an answer to the agent's own note on this line (#151): that note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answers: Option<String>,
 }
 
 /// A small form an agent asks with (#10 C, Design `design/next/agent-answer/kinds.html`).
@@ -244,12 +247,19 @@ pub enum Place {
 /// Finds `comment`'s line in a side of a file: where it was if it still reads the same, else the one
 /// line that does; ambiguous or missing means outdated.
 pub fn place<'a>(comment: &Comment, count: u32, line: impl Fn(u32) -> &'a str) -> Place {
-    if comment.line >= 1 && comment.line <= count && line(comment.line) == comment.code {
-        return Place::Line(comment.line);
+    find_line(comment.line, &comment.code, count, line)
+}
+
+/// Line `at` reading `code`, found again in a side of `count` lines: there if it still reads the
+/// same, else the one line that does; ambiguous or missing means outdated. An agent's notes on its
+/// changes are found the same way (#151).
+pub fn find_line<'a>(at: u32, code: &str, count: u32, line: impl Fn(u32) -> &'a str) -> Place {
+    if at >= 1 && at <= count && line(at) == code {
+        return Place::Line(at);
     }
-    let mut found = (1..=count).filter(|&n| line(n) == comment.code);
+    let mut found = (1..=count).filter(|&n| line(n) == code);
     match (found.next(), found.next()) {
-        (Some(only), None) if !comment.code.trim().is_empty() => Place::Line(only),
+        (Some(only), None) if !code.trim().is_empty() => Place::Line(only),
         _ => Place::Outdated,
     }
 }

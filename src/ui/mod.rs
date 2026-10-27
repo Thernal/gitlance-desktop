@@ -2,6 +2,7 @@
 
 mod agent;
 mod agent_events;
+mod agent_notes;
 mod annotate;
 mod appearance;
 mod bar;
@@ -1224,6 +1225,11 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
             ws.update(cx, |this, cx| this.snapshot_changes(cx));
             wait(1500).await;
         }
+        // Answer on the first of an agent's notes on the file the keys reached (#151).
+        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("note-answer")) {
+            ws.update(cx, |this, cx| this.snapshot_answer_note(cx));
+            wait(800).await;
+        }
         // Open in's ▾ under its button, on the page the keys reached (#78).
         if std::env::var("GITLANCE_SNAPSHOT_MENU").as_deref() == Ok("open-in") {
             ws.update(cx, |this, cx| {
@@ -1635,6 +1641,11 @@ pub struct Workspace {
     /// shown (#46).
     agent_lines: std::collections::HashMap<u64, u32>,
     agent_task: Option<Task<()>>,
+    /// Agents' notes on the lines of their changes (#151), and where those whose line changed
+    /// since went, by note id.
+    agent_notes: Vec<crate::notes::Notes>,
+    note_lines: std::collections::HashMap<u64, u32>,
+    note_task: Option<Task<()>>,
     tabs: shell::TabModel,
     diff: Option<Diff>,
     file: usize,
@@ -1892,6 +1903,9 @@ impl Workspace {
             since_on_open: None,
             agent_lines: Default::default(),
             agent_task: None,
+            agent_notes: Vec::new(),
+            note_lines: Default::default(),
+            note_task: None,
             tabs: Default::default(),
             diff: None,
             file: 0,
@@ -2028,6 +2042,7 @@ impl Workspace {
                         if this.root.as_ref() != Some(&root) {
                             this.code = Default::default();
                             this.comments = crate::review::load(&project);
+                            this.agent_notes = crate::notes::load(&project);
                             this.answers_stamp = None;
                             this.marks_stamp = None;
                             this.compose = None;
@@ -2424,6 +2439,7 @@ impl Workspace {
                         // The files of the diff it replaces are gone.
                         this.stack = None;
                         this.map_agent_comments(cx);
+                        this.map_agent_notes(cx);
                         this.index_review();
                         // A request opens at its first file not reviewed (#72); anything else at
                         // the first file as the island lists it (a tree sorts folders first), so
@@ -4394,6 +4410,7 @@ impl Workspace {
                     return workspace.render_request_thread(ix, indent, this.clone());
                 }
                 Row::Draft(ix) => return workspace.render_draft(ix, indent, this.clone()),
+                Row::Note(id) => return workspace.render_agent_note(id, indent, this.clone()),
                 Row::Composer if workspace.compose.is_none() && active => {
                     return workspace.render_goline_row(indent, this.clone());
                 }

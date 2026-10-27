@@ -90,6 +90,8 @@ pub struct Compose {
     /// Written on a file read in Code, at its commit (None: the working tree) — a note on a plain
     /// line, under it in the file (#75).
     file: Option<Option<git2::Oid>>,
+    /// The agent's note it answers, carried into the comment (#151).
+    pub(super) answers: Option<String>,
 }
 
 impl Compose {
@@ -340,6 +342,8 @@ impl Workspace {
         } else {
             Vec::new()
         };
+        // An agent's notes on its changes, on the new side (#151).
+        let notes = self.notes_in(path, data);
         // The prompt of `c` hangs under the marked line, like the composer that follows it.
         let go = if active && compose.is_none() && self.goline.is_some() {
             self.goline_target()
@@ -350,6 +354,7 @@ impl Workspace {
             && compose.is_none()
             && theirs.is_empty()
             && drafts.is_empty()
+            && notes.is_empty()
             && go.is_none()
         {
             return rows;
@@ -365,6 +370,15 @@ impl Workspace {
                 _ => continue,
             };
             for (old, line) in cells.into_iter().flatten() {
+                // Why the line is as it is comes before what is said about it.
+                if !old {
+                    out.extend(
+                        notes
+                            .iter()
+                            .filter(|(_, n)| *n == line)
+                            .map(|(id, _)| Row::Note(*id)),
+                    );
+                }
                 out.extend(
                     here.iter()
                         .filter(|(_, o, n)| *o == old && *n == line)
@@ -489,6 +503,7 @@ impl Workspace {
             closed: None,
             page: Some(ix),
             file: None,
+            answers: None,
         });
         self.reset_field_edit();
         self.remeasure_pages();
@@ -524,6 +539,7 @@ impl Workspace {
             closed: None,
             page: None,
             file: Some(view.rev()),
+            answers: None,
         });
         self.reset_field_edit();
         cx.notify();
@@ -563,6 +579,7 @@ impl Workspace {
             closed: None,
             page: None,
             file: Some(self.code.at()),
+            answers: None,
         });
         self.reset_field_edit();
         cx.notify();
@@ -654,6 +671,7 @@ impl Workspace {
             closed: None,
             page: None,
             file: None,
+            answers: None,
         });
         self.refresh_rows();
         cx.notify();
@@ -730,6 +748,7 @@ impl Workspace {
             closed: None,
             page: None,
             file: None,
+            answers: None,
         });
         self.reset_field_edit();
         self.refresh_rows();
@@ -862,6 +881,7 @@ impl Workspace {
             closed: None,
             page: None,
             file: None,
+            answers: None,
         });
         self.reset_field_edit();
         self.thread_at = Some(ix);
@@ -905,6 +925,7 @@ impl Workspace {
             closed: None,
             page: None,
             file: None,
+            answers: None,
         });
         self.reset_field_edit();
         self.inbox_view.reply = Some((iid, discussion));
@@ -996,6 +1017,7 @@ impl Workspace {
             closed: None,
             page: None,
             file: None,
+            answers: None,
         });
         self.reset_field_edit();
         self.refresh_rows();
@@ -1219,6 +1241,7 @@ impl Workspace {
                 None => self.shown_head().map(|id| id.to_string()),
             },
             branch: self.page_branch(),
+            answers: compose.answers,
             ..Default::default()
         });
         self.save_comments();
@@ -3100,7 +3123,12 @@ impl Workspace {
             if let Some(at) = self.row_of_line(line, old) {
                 let under = self.rows[at + 1..]
                     .iter()
-                    .take_while(|r| matches!(r, Row::Request(_) | Row::Draft(_) | Row::Thread(_)))
+                    .take_while(|r| {
+                        matches!(
+                            r,
+                            Row::Request(_) | Row::Draft(_) | Row::Thread(_) | Row::Note(_)
+                        )
+                    })
                     .count();
                 self.reveal_rows(at..at + 1 + under);
                 cx.notify();

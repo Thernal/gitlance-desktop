@@ -57,6 +57,8 @@ pub enum Row {
     Request(usize),
     /// Draft `0` of the open merge request (a pending comment of one's own) under the line above.
     Draft(usize),
+    /// An agent's note `0` on its change, under the line above (#151).
+    Note(u64),
     /// The box for writing a new comment under the line above.
     Composer,
     /// One line of a unified diff; its text is from the old side when `old`.
@@ -616,9 +618,12 @@ pub fn matching_rows(data: &FileData, rows: &[Row], terms: &crate::search::Terms
     rows.iter()
         .enumerate()
         .filter(|(_, row)| match **row {
-            Row::Gap { .. } | Row::Thread(_) | Row::Request(_) | Row::Draft(_) | Row::Composer => {
-                false
-            }
+            Row::Gap { .. }
+            | Row::Thread(_)
+            | Row::Request(_)
+            | Row::Draft(_)
+            | Row::Note(_)
+            | Row::Composer => false,
             Row::Split { left, right } => hit(true, left) || hit(false, right),
             Row::Unified { cell, old, .. } => hit(old, Some(cell)),
         })

@@ -147,6 +147,15 @@ pub enum What {
     },
     /// The working tree, or what is not staged in it (`open_changes`, #149).
     WorkingTree { unstaged: bool },
+    /// Notes on lines of `changes` (a `Compare` or a `WorkingTree`) and their summary
+    /// (`annotate_changes`, #151); with `open`, the changes are opened under Branches as well
+    /// (`open_changes` with notes).
+    Notes {
+        changes: Box<What>,
+        summary: String,
+        notes: Vec<crate::notes::Note>,
+        open: bool,
+    },
 }
 
 /// Something an agent left on a request that the app tells apart from the reviewer's own: a
@@ -824,6 +833,12 @@ pub fn brief(root: &Path, comments: &[&Comment]) -> String {
                 "\nThis note is on a discussion of the merge request (the reviewer's own, not posted):\n{thread}\n"
             ));
         }
+        if let Some(note) = &c.answers {
+            out.push_str(&format!(
+                "\nThis answers your own note on this line:\n> {}\n",
+                note.trim().replace('\n', "\n> ")
+            ));
+        }
         for r in &c.replies {
             out.push_str(&format!("\n> Your earlier answer: {}\n", r.body));
         }
@@ -930,9 +945,13 @@ mod tests {
             ..Default::default()
         });
         comments[0].thread = Some("> Ember: is this cleared?".into());
+        comments[0].answers = Some("Kept as it was.\nThe test covers it.".into());
         let text = brief(Path::new("/nope"), &[&comments[0]]);
         assert!(text.contains("The reviewer answered:\nPicked: In both cases\nand on sign-out"));
         assert!(text.contains("> Ember: is this cleared?"));
+        assert!(text.contains(
+            "This answers your own note on this line:\n> Kept as it was.\n> The test covers it."
+        ));
         let confirm = review::Form {
             kind: review::FormKind::Confirm,
             ..Default::default()

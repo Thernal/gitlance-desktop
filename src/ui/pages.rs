@@ -145,6 +145,7 @@ impl Workspace {
                                 .child(div().h(px(gap()))),
                         )
                     }))
+                    .children(self.render_notes_summary(cx))
                     .child(self.render_diff(cx))
                     .children(self.render_zen_keys()),
             )

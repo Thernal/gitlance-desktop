@@ -42,6 +42,10 @@ for someone using the app, not for someone reading the code; the commits follow 
   faded and saying what it waits for, and becomes the real one when GitLab or GitHub answers; nothing else
   reloads. If the host refuses, it is taken back and says why, your text back in its field. The Inbox's reply,
   resolve and Mark done do the same.
+- **An agent can explain its changes.** Its notes sit under the lines they are about, in the agent's colour and
+  apart from your comments, with its summary over the diff, wherever you open those changes: the working tree,
+  its branch, a comparison or a merge request of that branch. Answer on a note writes a comment for the agent on
+  that line; dismiss one, or all of them. They stay on this Mac and never go to GitLab or GitHub.
 
 ## 1.1.0 — 2026-10-26
 

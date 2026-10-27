@@ -34,24 +34,12 @@ impl Workspace {
                     self.agent_left(event.agent, iid, ids.len().max(1), cx)
                 }
                 What::Gathered { iids } => self.agent_gathered(event.agent, iids, cx),
-                What::Compare {
-                    base,
-                    base_id,
-                    head,
-                    head_id,
-                    direct,
-                } => {
-                    let (Ok(a), Ok(b)) =
-                        (git2::Oid::from_str(&base_id), git2::Oid::from_str(&head_id))
-                    else {
-                        continue;
-                    };
-                    let page = Page::Compare((base, a), (head, b), !direct);
-                    self.agent_changes(event.agent, page, None, cx);
+                What::Compare { .. } | What::WorkingTree { .. } => {
+                    if let Some((page, unstaged)) = changes_page(&event.what) {
+                        self.agent_changes(event.agent, page, unstaged, 0, cx);
+                    }
                 }
-                What::WorkingTree { unstaged } => {
-                    self.agent_changes(event.agent, Page::WorkingTree, Some(unstaged), cx)
-                }
+                What::Notes { .. } => self.take_agent_notes(event, cx),
                 What::Open => {}
             }
         }
@@ -111,22 +99,20 @@ impl Workspace {
     }
 
     /// `agent` opened its changes (#149): `page` a row under Branches, quietly, and a toast that
-    /// shows it — the working tree with what is staged or not as the agent asked.
-    fn agent_changes(
+    /// shows it — the working tree with what is staged or not as the agent asked; `notes` it left
+    /// on them (#151) told as well.
+    pub(super) fn agent_changes(
         &mut self,
         agent: String,
         page: Page,
         unstaged: Option<bool>,
+        notes: usize,
         cx: &mut Context<Self>,
     ) {
         let Some(item) = page.item() else {
             return;
         };
-        // What it is, so that two are told apart.
-        let what = match &page {
-            Page::Compare(base, head, _) => format!("{} … {}", base.0, head.0),
-            _ => "the working tree".to_owned(),
-        };
+        let what = changes_said(&page);
         self.open_quietly(page);
         self.save_nav();
         let act = Act::Show {
@@ -134,7 +120,13 @@ impl Workspace {
             unstaged,
             agent: agent.clone(),
         };
-        let say = move |_| format!("{agent} opened its changes: {what}");
+        let say = move |_| match notes {
+            0 => format!("{agent} opened its changes: {what}"),
+            n => {
+                let notes = super::plural(n, "note");
+                format!("{agent} opened its changes with {notes}: {what}")
+            }
+        };
         self.toast_act(act, 1, say, cx);
     }
 
@@ -250,5 +242,34 @@ impl Workspace {
     /// The Review on a gathering's toast: its first request, opened from its row.
     pub(super) fn review_gathered(&mut self, iid: u64, cx: &mut Context<Self>) {
         self.show_open(&Item::Request(iid), cx);
+    }
+}
+
+/// The page of an agent's changes (`What::Compare` or `What::WorkingTree`), and for the working
+/// tree whether only what is not staged.
+pub(super) fn changes_page(what: &What) -> Option<(Page, Option<bool>)> {
+    match what {
+        What::Compare {
+            base,
+            base_id,
+            head,
+            head_id,
+            direct,
+        } => {
+            let a = git2::Oid::from_str(base_id).ok()?;
+            let b = git2::Oid::from_str(head_id).ok()?;
+            let page = Page::Compare((base.clone(), a), (head.clone(), b), !direct);
+            Some((page, None))
+        }
+        What::WorkingTree { unstaged } => Some((Page::WorkingTree, Some(*unstaged))),
+        _ => None,
+    }
+}
+
+/// What changes `page` shows, so that two are told apart.
+pub(super) fn changes_said(page: &Page) -> String {
+    match page {
+        Page::Compare(base, head, _) => format!("{} … {}", base.0, head.0),
+        _ => "the working tree".to_owned(),
     }
 }

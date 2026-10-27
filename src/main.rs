@@ -23,6 +23,7 @@ mod markdown;
 mod mcp;
 mod mddiff;
 mod mr;
+mod notes;
 mod platform;
 mod rank;
 mod report;

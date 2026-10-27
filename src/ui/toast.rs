@@ -40,13 +40,19 @@ pub(super) enum Act {
         unstaged: Option<bool>,
         agent: String,
     },
+    /// Opens under Branches the changes `agent` left notes on, and shows them (#151).
+    Notes {
+        page: super::nav::Page,
+        unstaged: Option<bool>,
+        agent: String,
+    },
 }
 
 impl Act {
     fn label(&self) -> &'static str {
         match self {
             Act::Review { .. } | Act::Gathered { .. } => "Review",
-            Act::Show { .. } => "Show",
+            Act::Show { .. } | Act::Notes { .. } => "Show",
         }
     }
 }
@@ -205,6 +211,7 @@ impl Workspace {
             Act::Review { iid, agent } => self.review_agent(iid, &agent, cx),
             Act::Gathered { iid, .. } => self.review_gathered(iid, cx),
             Act::Show { item, unstaged, .. } => self.show_changes(&item, unstaged, cx),
+            Act::Notes { page, unstaged, .. } => self.show_agent_notes(page, unstaged, cx),
         }
     }
 
