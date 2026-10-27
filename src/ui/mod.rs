@@ -11,6 +11,7 @@ mod branch_page;
 mod code;
 mod comments;
 mod complete;
+mod connecting;
 mod create;
 mod diff_view;
 mod discussion;
@@ -941,6 +942,12 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.settings_section = settings::Section::General;
                             continue;
                         }
+                        // The token's source, and one made with the SSH key (#142).
+                        "settings-requests" => {
+                            this.open_settings(cx);
+                            this.settings_section = settings::Section::Requests;
+                            continue;
+                        }
                         // Fetch in the background's switch (#141).
                         "settings-repository" => {
                             this.open_settings(cx);
@@ -1223,6 +1230,11 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
         // Changes sent on the request open, to see them waiting or refused (#139).
         if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("changes")) {
             ws.update(cx, |this, cx| this.snapshot_changes(cx));
+            wait(1500).await;
+        }
+        // Make the token pressed on the connect panel's offer, with GITLANCE_SSH_FIXTURE (#142).
+        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("ssh-make")) {
+            ws.update(cx, |this, cx| this.make_ssh_token("api", cx));
             wait(1500).await;
         }
         // Answer on the first of an agent's notes on the file the keys reached (#151).
@@ -1566,6 +1578,8 @@ pub struct Workspace {
     open_request: Option<PendingCompare>,
     /// What the last "Test" of the GitLab connection in Settings found.
     gitlab_check: Option<Result<String, String>>,
+    /// A host without a token connected without a paste (#142).
+    connecting: connecting::Connecting,
     /// The card for a new merge request, while it is open.
     newreq: Option<create::NewRequest>,
     /// The keyboard card is open.
@@ -1867,6 +1881,7 @@ impl Workspace {
             pending_compare: None,
             open_request: None,
             gitlab_check: None,
+            connecting: Default::default(),
             newreq: None,
             shortcuts: greet,
             zoom_applied: false,

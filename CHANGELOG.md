@@ -50,6 +50,14 @@ for someone using the app, not for someone reading the code; the commits follow 
   and labels if it knows them, and a note offers Open: the New merge request card for its branch, filled in, for
   you to check, edit and create. Nothing is created until you do, and GitLance never pushes; a branch only on
   your Mac says to push it first, as before.
+- **Connect GitLab with your SSH key.** Merge requests no longer wait for a token pasted from GitLab's site. A
+  token git already keeps for the host, in the remote's URL or its credential helper, is used for the session
+  when GitLab takes it, and never copied. Otherwise, when your SSH key reaches GitLab, Merge requests offer
+  Connect: a token for this computer made with the key, for 30 days and renewed before it ends (or Read only,
+  or Not now); Settings → Merge requests has Use SSH key. A host key not yet known is never accepted for you,
+  and nothing asks for a password.
+- **Less text.** A pending comment no longer says who sees it, Submit review just counts them, and the connect
+  panel and Settings → Merge requests say in a line which token they need.
 
 ## 1.1.0 — 2026-10-26
 

@@ -374,13 +374,9 @@ impl Workspace {
                             .text_size(px(12.))
                             .text_color(theme::muted())
                             .child(if drafts == 0 {
-                                "No pending comments — the verdict and the summary go out alone."
-                                    .to_owned()
+                                "No pending comments".to_owned()
                             } else {
-                                format!(
-                                    "{} — pending, only you see them until now",
-                                    plural(drafts, "comment")
-                                )
+                                plural(drafts, "pending comment")
                             }),
                     )
                     .children(pending),

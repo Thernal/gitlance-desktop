@@ -2102,7 +2102,7 @@ impl Workspace {
             }
         };
         let status = match (&comment.state, &comment.sent) {
-            (State::Draft, _) => "draft · stays on this Mac until you send it".to_owned(),
+            (State::Draft, _) => "draft".to_owned(),
             (State::Sent, Some(s)) if s.session.is_empty() => "sent to a new chat".to_owned(),
             (State::Sent, Some(s)) if s.delivered => format!("with {}", chat(s)),
             (State::Sent, Some(s)) => format!("sent to {} · waits for it to listen", chat(s)),

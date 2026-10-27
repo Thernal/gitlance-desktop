@@ -235,13 +235,16 @@ pub fn note(
             author.to_owned()
         })
         .when_some(card, |s, card| s.card(move |w, cx| card(w, cx)));
-    let stamp = div()
-        .id(SharedString::from(format!("who-time-{key}")))
-        .flex_none()
-        .text_size(px(12.))
-        .text_color(theme::muted())
-        .child(format!("· {time}"))
-        .when_some(when, |s, t| s.tip(super::hover::full_date(t)));
+    // None for a pending comment: its pill says so.
+    let stamp = (!time.is_empty()).then(|| {
+        div()
+            .id(SharedString::from(format!("who-time-{key}")))
+            .flex_none()
+            .text_size(px(12.))
+            .text_color(theme::muted())
+            .child(format!("· {time}"))
+            .when_some(when, |s, t| s.tip(super::hover::full_date(t)))
+    });
     div()
         .relative()
         .flex()
@@ -283,7 +286,7 @@ pub fn note(
                                 .text_color(theme::muted())
                                 .child(r)
                         }))
-                        .child(stamp)
+                        .children(stamp)
                         // As tall as the name's line: the reaction bar coming on a hover
                         // overhangs it rather than pushing the note down.
                         .children(action.map(|a| {

@@ -25,6 +25,7 @@ impl Workspace {
             .read_from_clipboard()
             .and_then(|c| c.text())
             .unwrap_or_default();
+        self.connecting.error = None;
         let token = text.trim();
         if token.len() < 8 || token.contains(char::is_whitespace) {
             self.gitlab_check = Some(Err(
@@ -50,6 +51,7 @@ impl Workspace {
             return;
         };
         self.gitlab_check = None;
+        self.connecting.error = None;
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -69,15 +71,20 @@ impl Workspace {
         let remote = self.web.as_ref()?;
         let host = crate::mr::host(remote);
         let source = crate::mr::token_source(remote).map(|(_, from)| from);
-        let status = match (&self.gitlab_check, source) {
-            (Some(Ok(who)), _) => (format!("Connected as {who}"), theme::added()),
-            (Some(Err(e)), _) => (e.clone(), theme::removed()),
-            (None, Some(from)) => (format!("Token from {from}"), theme::muted()),
-            (None, None) => (
-                "No token for this host yet — merge requests stay hidden.".to_owned(),
-                theme::warning(),
-            ),
-        };
+        // A token being made over SSH, or why not, comes first; then one GitLance made (#142).
+        let made = self.ssh_settings_made();
+        let status =
+            self.ssh_settings_busy()
+                .unwrap_or_else(|| match (&self.gitlab_check, source, made) {
+                    (Some(Ok(who)), _, _) => (format!("Connected as {who}"), theme::added()),
+                    (Some(Err(e)), _, _) => (e.clone(), theme::removed()),
+                    (None, _, Some(made)) => (made, theme::muted()),
+                    (None, Some(from), None) => (format!("Token from {from}"), theme::muted()),
+                    (None, None, None) => (
+                        "No token for this host yet — merge requests stay hidden.".to_owned(),
+                        theme::warning(),
+                    ),
+                });
         Some(
             div()
                 .flex()
@@ -87,9 +94,9 @@ impl Workspace {
                 .child(item(
                     "Merge requests",
                     if remote.github {
-                        "The host is read from this repository's origin remote — github.com or GitHub Enterprise. A classic token with the repo scope reads and reviews pull requests (private ones too); without one, GitLance uses the GitHub CLI's (gh auth login). It is kept per host in ~/.config/gitlance/tokens, for you only, and sent to curl on its stdin."
+                        "The token for this repository's host: a classic one with the repo scope, or the GitHub CLI's (gh auth login)."
                     } else {
-                        "The host is read from this repository's origin remote, so any GitLab works — gitlab.com or your own. The token needs the api scope (to comment, reply and resolve); read_api is enough to only read. It is kept per host in ~/.config/gitlance/tokens, for you only, and sent to curl on its stdin."
+                        "The token for this repository's host: api, or read_api to only read."
                     },
                     div()
                         .flex()
@@ -105,6 +112,8 @@ impl Workspace {
                                             this.use_clipboard_token(cx)
                                         })),
                                 )
+                                // Or one made with the SSH key (#142).
+                                .children(self.ssh_settings_chip(cx))
                                 .child(chip("gitlab-test", "Test", false).on_click(cx.listener(
                                     |this, _: &ClickEvent, _, cx| this.test_gitlab(cx),
                                 ))),

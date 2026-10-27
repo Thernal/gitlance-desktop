@@ -169,7 +169,7 @@ pub struct Push {
 }
 
 /// Where the token for a GitLab host comes from, best first: `GITLAB_TOKEN`, the token saved by this
-/// app for that host, then the shared `~/.config/gitlab-token`.
+/// app for that host, the shared `~/.config/gitlab-token`, then one found in git this run (#142).
 pub fn token_source(remote: &WebRemote) -> Option<(String, &'static str)> {
     if remote.github {
         return github::token_source(remote);
@@ -187,12 +187,21 @@ pub fn token_source(remote: &WebRemote) -> Option<(String, &'static str)> {
             .ok()
             .and_then(clean)
     {
-        return Some((t, "saved by this app"));
+        return Some((t, "Settings"));
     }
     std::fs::read_to_string(home.join(".config/gitlab-token"))
         .ok()
         .and_then(clean)
         .map(|t| (t, "~/.config/gitlab-token"))
+        .or_else(|| crate::connect::found_token(&api_host(remote)))
+}
+
+/// `https://host` of the remote's host: what its tokens are kept by.
+pub fn api_host(remote: &WebRemote) -> String {
+    if remote.github {
+        return format!("https://{}", github::host(remote));
+    }
+    api(remote).map(|(h, _)| h).unwrap_or_default()
 }
 
 pub fn token(remote: &WebRemote) -> Option<String> {
@@ -279,21 +288,41 @@ pub fn me(remote: &WebRemote) -> Result<String> {
 /// What the token can do and until when (GitLab: "api, read_repository · expires 2027-09-01");
 /// `None` where the host does not say (GitHub).
 pub fn token_info(remote: &WebRemote) -> Option<String> {
-    if remote.github || fixture().is_some() {
-        return None;
-    }
-    let me = call(remote, "/personal_access_tokens/self", "GET", &[]).ok()?;
-    let scopes: Vec<&str> = me["scopes"]
-        .as_array()?
-        .iter()
-        .filter_map(Value::as_str)
-        .collect();
+    let (scopes, expires) = token_check(remote)?;
     let mut out = scopes.join(", ");
-    match me["expires_at"].as_str() {
+    match expires {
         Some(day) => out.push_str(&format!(" · expires {day}")),
         None => out.push_str(" · never expires"),
     }
     Some(out)
+}
+
+/// The token's scopes and the day it ends (GitLab); `None` where the host does not say (GitHub: a
+/// fine-grained token has nothing to read, so what it may do is found by trying).
+fn token_check(remote: &WebRemote) -> Option<(Vec<String>, Option<String>)> {
+    if remote.github {
+        return None;
+    }
+    if let Some(dir) = fixture() {
+        let scopes = std::fs::read_to_string(dir.join("scopes.txt")).ok()?;
+        return Some((scopes.split_whitespace().map(str::to_owned).collect(), None));
+    }
+    let me = call(remote, "/personal_access_tokens/self", "GET", &[]).ok()?;
+    let scopes = me["scopes"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    Some((scopes, me["expires_at"].as_str().map(str::to_owned)))
+}
+
+/// Revokes the token in use: the one a renewed token replaces (#142).
+pub fn revoke_token(remote: &WebRemote) -> Result<()> {
+    if remote.github || fixture().is_some() {
+        return Ok(());
+    }
+    call(remote, "/personal_access_tokens/self", "DELETE", &[]).map(|_| ())
 }
 
 /// Whether merge requests can be read for this remote at all.

@@ -60,7 +60,7 @@ fn owner_name(remote: &WebRemote) -> Result<(String, String)> {
 }
 
 /// Where the token comes from, best first: `GITHUB_TOKEN` / `GH_TOKEN`, the token saved by this app
-/// for the host, then the GitHub CLI's own (`gh auth token`).
+/// for the host, the GitHub CLI's own (`gh auth token`), then one found in git this run (#142).
 pub fn token_source(remote: &WebRemote) -> Option<(String, &'static str)> {
     let clean = |t: String| {
         let t = t.trim().to_owned();
@@ -79,19 +79,21 @@ pub fn token_source(remote: &WebRemote) -> Option<(String, &'static str)> {
         }
     }
     if let Some(t) = crate::mr::saved_token(&format!("https://{}", host(remote))).and_then(clean) {
-        return Some((t, "saved by this app"));
+        return Some((t, "Settings"));
     }
-    let gh = gh_program()?;
-    let out = Command::new(gh)
-        .args(["auth", "token", "--hostname", &host(remote)])
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-        .and_then(clean)
+    gh_program()
+        .and_then(|gh| {
+            Command::new(gh)
+                .args(["auth", "token", "--hostname", &host(remote)])
+                .stderr(Stdio::null())
+                .output()
+                .ok()
+        })
+        .filter(|out| out.status.success())
+        .and_then(|out| clean(String::from_utf8_lossy(&out.stdout).into_owned()))
         .map(|t| (t, "the GitHub CLI (gh)"))
+        // One found in git this run (#142).
+        .or_else(|| crate::connect::found_token(&format!("https://{}", host(remote))))
 }
 
 /// The GitHub CLI: on the PATH, or where Homebrew puts it (an app opened from the Finder does not

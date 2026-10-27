@@ -379,6 +379,12 @@ impl Repo {
         WebRemote::parse(remote.url().ok()?)
     }
 
+    /// The URL of the remote `web_remote` reads, as git has it.
+    pub fn web_remote_url(&self) -> Option<String> {
+        let remote = self.inner.find_remote(&self.web_remote_name()?).ok()?;
+        remote.url().ok().map(str::to_owned)
+    }
+
     /// The name of the remote `web_remote` reads: `origin`, else the first one.
     pub fn web_remote_name(&self) -> Option<String> {
         let remotes = self.inner.remotes().ok()?;

@@ -269,8 +269,10 @@ impl Workspace {
         if !available {
             self.requests.list.clear();
             self.requests.error = None;
-            return;
+            // A token git keeps, or one made with the SSH key (#142).
+            return self.look_for_token(cx);
         }
+        self.renew_ssh_token(cx);
         self.requests.loading = true;
         // Who the token is, once: the menu counts the requests asking for them.
         let known = self.requests.login.is_some();
@@ -1579,12 +1581,10 @@ impl Workspace {
                     .min_w_0()
                     .truncate()
                     // An agent's says who wrote it (#150).
-                    .child(match self.draft_agent(id) {
-                        Some(agent) => format!(
-                            "· {agent} wrote it · only you see it until you submit the review"
-                        ),
-                        None => "· only you see it until you submit the review".to_owned(),
-                    }),
+                    .children(
+                        self.draft_agent(id)
+                            .map(|agent| format!("· {agent} wrote it")),
+                    ),
             )
             .children(super::markdown::has_markdown(&d.body).then(|| {
                 self.rich_switch(("draft-rich", ix))
@@ -1625,7 +1625,7 @@ impl Workspace {
                         &self.me,
                         true,
                         None,
-                        waits.unwrap_or("pending").to_owned(),
+                        waits.unwrap_or_default().to_owned(),
                         super::markdown::body(
                             &d.body,
                             self.settings.rich_comments,
@@ -2335,6 +2335,7 @@ impl Workspace {
         };
         let host = mr::host(&remote);
         let page = mr::token_page(&remote);
+        let offering = self.ssh_offering();
         let field = self.field_box(
             "token-field",
             super::lists::Field::Token,
@@ -2372,53 +2373,57 @@ impl Workspace {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(super::words::say("Connect GitLab to see merge requests").into_owned()),
             )
-            .child(
-                div()
-                    .max_w(px(420.))
-                    .text_size(px(13.))
-                    .line_height(px(19.))
-                    .text_center()
-                    .text_color(theme::muted())
-                    .child(if remote.github {
-                        format!(
-                            "GitLance reads the pull requests of {host} with a token of yours (the repo scope), or the GitHub CLI's once you sign in with gh auth login. It writes nothing unless you post a comment or a review."
+            .when(!offering, |panel| {
+                panel.child(
+                    div()
+                        .max_w(px(420.))
+                        .text_size(px(13.))
+                        .line_height(px(19.))
+                        .text_center()
+                        .text_color(theme::muted())
+                        .child(if remote.github {
+                            "Needs a token with the repo scope, or gh auth login."
+                        } else {
+                            "Needs a token with the api scope."
+                        }),
+                )
+            })
+            // What git or the SSH key offer, over the paste steps or in their place (#142).
+            .children(self.render_ssh_offer(cx))
+            .when(!offering, |panel| {
+                panel.child(
+                    div()
+                        .w(px(360.))
+                        .pt(px(8.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .id("token-create")
+                                .h(px(28.))
+                                .px(px(10.))
+                                .flex()
+                                .items_center()
+                                .rounded(px(super::ROW_RADIUS))
+                                .border_1()
+                                .border_color(theme::island_border())
+                                .text_size(px(13.))
+                                .text_color(theme::accent())
+                                .cursor_pointer()
+                                .hover(|s| s.bg(theme::hover()))
+                                .child(format!("1 · Create a token on {host} ↗"))
+                                .on_click(
+                                    cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&page)),
+                                ),
                         )
-                    } else {
-                        format!(
-                            "GitLance reads the merge requests of {host} with a personal access token of yours (the api scope). It stays on this Mac and writes nothing unless you post a comment or a review."
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .w(px(360.))
-                    .pt(px(8.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .child(
-                        div()
-                            .id("token-create")
-                            .h(px(28.))
-                            .px(px(10.))
-                            .flex()
-                            .items_center()
-                            .rounded(px(super::ROW_RADIUS))
-                            .border_1()
-                            .border_color(theme::island_border())
-                            .text_size(px(13.))
-                            .text_color(theme::accent())
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme::hover()))
-                            .child(format!("1 · Create a token on {host} ↗"))
-                            .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&page))),
-                    )
-                    .child(step("2 · Paste it here and press ↵".to_owned()))
-                    .child(field)
-                    .children(note.map(|(text, color)| {
-                        div().text_size(px(12.)).text_color(color).child(text)
-                    })),
-            )
+                        .child(step("2 · Paste it here and press ↵".to_owned()))
+                        .child(field)
+                        .children(note.map(|(text, color)| {
+                            div().text_size(px(12.)).text_color(color).child(text)
+                        })),
+                )
+            })
             .child(
                 div()
                     .pt(px(4.))

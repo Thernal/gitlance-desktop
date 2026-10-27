@@ -66,6 +66,28 @@ pub fn line(m: &gpui::Modifiers) -> bool {
     MAC && m.platform
 }
 
+/// This computer's name as its owner gave it ("Ann's MacBook Pro"), for what GitLance makes in
+/// its name (#142); the host name where there is no other.
+pub fn computer_name() -> String {
+    let asked = |program: &str, args: &[&str]| {
+        std::process::Command::new(program)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+            .filter(|n| !n.is_empty())
+    };
+    let named = if MAC {
+        asked("scutil", &["--get", "ComputerName"])
+    } else {
+        std::env::var("COMPUTERNAME").ok()
+    };
+    named
+        .or_else(|| asked("hostname", &[]))
+        .unwrap_or_else(|| "this computer".to_owned())
+}
+
 /// The folder for what GitLance remembers between runs.
 pub fn data_dir() -> Option<PathBuf> {
     os::data_dir()
