@@ -45,6 +45,20 @@ pub fn alive(pid: u32) -> bool {
     r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+/// Starts GitLance, `exe`, on `project`, detached from the caller (#153).
+pub fn launch(exe: &std::path::Path, project: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    std::process::Command::new(exe)
+        .arg(project)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map(|_| ())
+}
+
 /// The desktop's terminal (`x-terminal-emulator`, else GNOME's or KDE's).
 pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io::Result<()> {
     let command = format!(

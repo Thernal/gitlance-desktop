@@ -35,6 +35,12 @@ pub struct Shell {
     saved: String,
     /// The first window keeps the session; one opened from the rail does not.
     primary: bool,
+    /// The projects this window last said it has open, and when (#153).
+    said: Vec<PathBuf>,
+    said_at: i64,
+    /// Projects opened for an agent whose tabs are still loading (a tab has its root once loaded),
+    /// with when: not opened twice meanwhile.
+    opening: Vec<(PathBuf, i64)>,
 }
 
 impl Shell {
@@ -62,7 +68,33 @@ impl Shell {
             model,
             saved: String::new(),
             primary,
+            said: Vec::new(),
+            said_at: 0,
+            opening: Vec::new(),
         };
+        // Agents read whether this window is there and what it has open; the first window opens
+        // what they ask for (#153).
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
+                    .await;
+                if this
+                    .update_in(cx, |this, window, cx| this.agents_beat(window, cx))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        })
+        .detach();
+        let key = cx.entity_id().as_u64();
+        cx.on_release(move |_, _| {
+            if let Some(bus) = crate::agents::Bus::new() {
+                bus.absent(std::process::id(), key);
+            }
+        })
+        .detach();
         // An explicit path opens just that; otherwise the tabs of the last session come back.
         let (tabs, active) = if path.is_some() {
             (Vec::new(), 0)
@@ -84,6 +116,15 @@ impl Shell {
 
     /// Wraps a new workspace into the shell and shows it.
     fn attach(&mut self, ws: Entity<Workspace>, window: &mut Window, cx: &mut Context<Self>) {
+        self.wrap(ws, cx);
+        self.active = self.tabs.len() - 1;
+        self.focus_active(window, cx);
+        self.mark_shown();
+        cx.notify();
+    }
+
+    /// Wraps a new workspace into the shell as its last tab, the one on screen staying.
+    fn wrap(&mut self, ws: Entity<Workspace>, cx: &mut Context<Self>) {
         let weak = cx.weak_entity();
         let model = self.model.clone();
         let shown = ws.update(cx, |w, _| {
@@ -94,10 +135,77 @@ impl Shell {
         self.shown.insert(ws.entity_id(), shown);
         cx.observe(&ws, |_, _, cx| cx.notify()).detach();
         self.tabs.push(ws);
-        self.active = self.tabs.len() - 1;
-        self.focus_active(window, cx);
         self.mark_shown();
         cx.notify();
+    }
+
+    /// Each tab's project: its main working tree, else its folder.
+    fn projects(&self, cx: &gpui::App) -> Vec<PathBuf> {
+        self.tabs
+            .iter()
+            .filter_map(|t| {
+                let w = t.read(cx);
+                w.project.clone().or_else(|| w.root.clone())
+            })
+            .collect()
+    }
+
+    /// Every 2 s: this window says it is there and what it has open (#153); the first window also
+    /// opens a project an agent asked for, or acted on, that no window has, as a tab behind the one
+    /// on screen — its workspace then takes the agent's event.
+    fn agents_beat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(bus) = crate::agents::Bus::new() else {
+            return;
+        };
+        let mut projects = self.projects(cx);
+        let now = crate::agents::now();
+        // Said again when it changes, and every 10 s so it stays fresh.
+        if projects != self.said || now - self.said_at >= 10 {
+            let presence = crate::agents::Presence {
+                pid: std::process::id(),
+                projects: projects.clone(),
+                beat: now,
+            };
+            if bus.present(cx.entity_id().as_u64(), &presence).is_ok() {
+                self.said = projects.clone();
+                self.said_at = now;
+            }
+        }
+        if !self.primary {
+            return;
+        }
+        let pid = std::process::id();
+        self.opening
+            .retain(|(path, at)| !projects.contains(path) && now - at < 30);
+        let elsewhere: Vec<PathBuf> = bus
+            .running()
+            .into_iter()
+            .filter(|p| p.pid == pid)
+            .flat_map(|p| p.projects)
+            .chain(self.opening.iter().map(|(path, _)| path.clone()))
+            .collect();
+        for event in bus.events() {
+            let project = event.project.clone();
+            if !projects.contains(&project) && !elsewhere.contains(&project) {
+                if !project.is_dir() {
+                    bus.take_event(&event.uid);
+                    continue;
+                }
+                let ws = cx.new(|cx| Workspace::new(Some(project.clone()), false, window, cx));
+                self.wrap(ws, cx);
+                projects.push(project.clone());
+                self.opening.push((project.clone(), now));
+                let said = format!(
+                    "{} opened {} in a tab",
+                    event.agent,
+                    crate::labels::project_name(&project)
+                );
+                self.tabs[self.active].update(cx, |w, cx| w.toast_info(said.into(), cx));
+            }
+            if event.what == crate::agents::What::Open {
+                bus.take_event(&event.uid);
+            }
+        }
     }
 
     /// Tells each tab whether it is the one on screen (no workspace is touched: one may be

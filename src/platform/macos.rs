@@ -114,6 +114,37 @@ pub fn alive(pid: u32) -> bool {
     r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+/// Starts GitLance, `exe`, on `project` (#153): inside its app bundle through Launch Services, in
+/// the background so it takes no keys from the reviewer; a bare program detached from the caller.
+pub fn launch(exe: &std::path::Path, project: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    if let Some(app) = exe
+        .ancestors()
+        .find(|a| a.extension().is_some_and(|x| x == "app"))
+    {
+        let status = Command::new("open")
+            .args(["-g", "-a"])
+            .arg(app)
+            .arg("--args")
+            .arg(project)
+            .status()?;
+        return if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other("macOS did not start it"))
+        };
+    }
+    Command::new(exe)
+        .arg(project)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map(|_| ())
+}
+
 /// Terminal.app, through AppleScript: a new window that runs the command in a login shell.
 pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io::Result<()> {
     let command = format!(

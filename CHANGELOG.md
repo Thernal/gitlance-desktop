@@ -23,6 +23,9 @@ for someone using the app, not for someone reading the code; the commits follow 
 - **Send one pending comment now.** A comment kept for the review (⇧⌘↵) can go on its own, the others still
   pending: Send this now beside its Delete, and on its row in Discussions and Submit review. On GitLab; GitHub
   sends pending comments only with the review.
+- **An agent can open GitLance.** Its MCP server's new `open_gitlance` starts GitLance on the agent's repository,
+  or opens the repository in a tab behind the one you are on when GitLance runs without it, with a note saying
+  which agent did. Agents are told to do it only when their work needs you to look.
 
 ## 1.1.0 — 2026-10-26
 

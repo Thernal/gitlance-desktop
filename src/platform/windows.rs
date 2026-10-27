@@ -52,6 +52,22 @@ pub fn alive(pid: u32) -> bool {
         .unwrap_or(true)
 }
 
+/// Starts GitLance, `exe`, on `project`, detached from the caller's console (#153).
+pub fn launch(exe: &std::path::Path, project: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Stdio;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    std::process::Command::new(exe)
+        .arg(project)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+        .spawn()
+        .map(|_| ())
+}
+
 /// A new console window in `dir`.
 pub fn open_terminal(dir: &std::path::Path, program: &str, arg: &str) -> std::io::Result<()> {
     std::process::Command::new("cmd")

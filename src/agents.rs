@@ -100,6 +100,58 @@ pub struct ReportDraft {
     pub at: i64,
 }
 
+/// A window of GitLance while it runs (#153): its process and the projects open in its tabs. The
+/// MCP server reads them to know whether what an agent does is seen, and when `open_gitlance` is
+/// done.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Presence {
+    pub pid: u32,
+    /// Each tab's project: its main working tree.
+    pub projects: Vec<PathBuf>,
+    /// When the window last said it is there.
+    pub beat: i64,
+}
+
+/// How long a window may go quiet and still count as there: it says so every few seconds.
+const PRESENT: i64 = 60;
+
+/// What an agent asks the app to show (#153): written by the MCP server, taken once by the app.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Event {
+    pub uid: String,
+    /// The project it is about: its main working tree.
+    pub project: PathBuf,
+    /// Who: "Claude Code", "Codex", "An agent".
+    pub agent: String,
+    pub at: i64,
+    pub what: What,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum What {
+    /// The project in a tab (`open_gitlance`).
+    Open,
+}
+
+impl Event {
+    /// What the agent running this asks about `project`.
+    pub fn new(project: PathBuf, what: What) -> Self {
+        Self {
+            uid: uid(),
+            project,
+            agent: agent_name(),
+            at: now(),
+            what,
+        }
+    }
+}
+
+/// The agent running this, by name, for what it leaves: "Claude Code", else "An agent".
+pub fn agent_name() -> String {
+    whoami().map_or_else(|| "An agent".to_owned(), |(name, ..)| name)
+}
+
 /// The folder all of this lives in.
 #[derive(Clone, Debug)]
 pub struct Bus {
@@ -164,14 +216,73 @@ impl Bus {
 
     /// Says the chat is listening (again).
     pub fn listen(&self, chat: &Chat) -> std::io::Result<()> {
-        let file = self.chat_file(&chat.session);
-        if let Some(dir) = file.parent() {
-            std::fs::create_dir_all(dir)?;
+        write_whole(&self.chat_file(&chat.session), chat)
+    }
+
+    fn presence_file(&self, pid: u32, window: u64) -> PathBuf {
+        self.dir.join("apps").join(format!("{pid}-{window}.json"))
+    }
+
+    /// Says window `window` of the app is there with its projects (#153).
+    pub fn present(&self, window: u64, presence: &Presence) -> std::io::Result<()> {
+        write_whole(&self.presence_file(presence.pid, window), presence)
+    }
+
+    /// The window is gone.
+    pub fn absent(&self, pid: u32, window: u64) {
+        let _ = std::fs::remove_file(self.presence_file(pid, window));
+    }
+
+    /// The app's windows that are there: their process alive and their word fresh. The files of a
+    /// process that is gone are cleared.
+    pub fn running(&self) -> Vec<Presence> {
+        let Ok(entries) = std::fs::read_dir(self.dir.join("apps")) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let Some(p) = std::fs::read_to_string(entry.path())
+                .ok()
+                .and_then(|t| serde_json::from_str::<Presence>(&t).ok())
+            else {
+                continue;
+            };
+            if !crate::platform::alive(p.pid) {
+                let _ = std::fs::remove_file(entry.path());
+            } else if now() - p.beat <= PRESENT {
+                out.push(p);
+            }
         }
-        // Written beside and renamed, so a reader never sees half a file.
-        let tmp = file.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_string(chat).unwrap_or_default())?;
-        std::fs::rename(tmp, file)
+        out
+    }
+
+    /// Keeps an agent's event for the app to take (#153).
+    pub fn event(&self, event: &Event) -> std::io::Result<()> {
+        let file = self
+            .dir
+            .join("events")
+            .join(format!("{}.json", safe(&event.uid)));
+        write_whole(&file, event)
+    }
+
+    /// The events not taken yet, oldest first.
+    pub fn events(&self) -> Vec<Event> {
+        let Ok(entries) = std::fs::read_dir(self.dir.join("events")) else {
+            return Vec::new();
+        };
+        let mut out: Vec<Event> = entries
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .filter_map(|e| serde_json::from_str(&std::fs::read_to_string(e.path()).ok()?).ok())
+            .collect();
+        out.sort_by_key(|e| e.at);
+        out
+    }
+
+    /// Takes event `uid`: true for the one taker only, so two windows never both act on it.
+    pub fn take_event(&self, uid: &str) -> bool {
+        let file = self.dir.join("events").join(format!("{}.json", safe(uid)));
+        std::fs::remove_file(file).is_ok()
     }
 
     pub fn stop(&self, session: &str) {
@@ -276,6 +387,16 @@ impl Chat {
     pub fn limited(&self) -> bool {
         self.watcher == 0 && self.agent == "Codex"
     }
+}
+
+/// `value` as `file`, written beside and renamed, so a reader never sees half a file.
+fn write_whole(file: &Path, value: &impl Serialize) -> std::io::Result<()> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = file.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_string(value).unwrap_or_default())?;
+    std::fs::rename(tmp, file)
 }
 
 fn safe(name: &str) -> String {
@@ -873,6 +994,54 @@ mod tests {
         assert!(bus.chats(Path::new("/other")).is_empty());
         bus.stop("s1");
         assert!(bus.chats(&root).is_empty());
+    }
+
+    #[test]
+    fn a_window_is_there_while_its_process_lives_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let bus = Bus::at(dir.path().join("agents"));
+        let here = Presence {
+            pid: std::process::id(),
+            projects: vec!["/p".into()],
+            beat: now(),
+        };
+        bus.present(1, &here).unwrap();
+        // A process that has ended: this test binary run once more, only to list the tests.
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let gone = child.id();
+        child.wait().unwrap();
+        let ended = Presence {
+            pid: gone,
+            ..here.clone()
+        };
+        bus.present(2, &ended).unwrap();
+        // Alive but quiet for long: not there, kept.
+        let quiet = Presence {
+            beat: now() - 120,
+            ..here.clone()
+        };
+        bus.present(3, &quiet).unwrap();
+        assert_eq!(bus.running(), vec![here]);
+        let files = std::fs::read_dir(dir.path().join("agents/apps")).unwrap();
+        assert_eq!(files.count(), 2, "the ended process's file is cleared");
+        bus.absent(std::process::id(), 1);
+        assert!(bus.running().is_empty());
+    }
+
+    #[test]
+    fn an_event_is_taken_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let bus = Bus::at(dir.path().join("agents"));
+        let event = Event::new("/p".into(), What::Open);
+        bus.event(&event).unwrap();
+        assert_eq!(bus.events(), vec![event.clone()]);
+        assert!(bus.take_event(&event.uid));
+        assert!(!bus.take_event(&event.uid));
+        assert!(bus.events().is_empty());
     }
 
     #[test]

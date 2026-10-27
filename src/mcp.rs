@@ -5,7 +5,8 @@
 use crate::agents::{self, Answer, Bus, Kind};
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 const PROTOCOL: &str = "2025-06-18";
 
@@ -22,7 +23,10 @@ watcher again. Read each comment for what it wants: a question gets an answer (r
 `form`: a plan to approve, a confirm, versions of code …); after explaining, you may offer the fix as a confirm. \
 Never claim a comment is resolved: the reviewer confirms each one in GitLance. \
 When GitLance itself fails (one of these tools, or the app), you may draft a report of it with report_problem; it only \
-opens in the app for the reviewer to check and send."
+opens in the app for the reviewer to check and send. \
+GitLance shows the reviewer what you did only while it runs. When your work needs the reviewer to look and a tool \
+says GitLance is not running, call open_gitlance: it starts GitLance on this repository (or opens it in a tab) and \
+answers once it is there. Do not start it for anything else."
     )
 }
 
@@ -79,6 +83,11 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "open_gitlance",
+            "description": "Start GitLance on this repository, or open the repository in a tab when GitLance runs without it. Answers once it is there. Only when your work needs the reviewer to look and GitLance is not showing it.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
             "name": "report_problem",
             "description": "Draft a report of a problem in GitLance itself (an error from the app or from these tools, something it did wrong) for its developers. Nothing is sent: the report opens in GitLance with your text, and the reviewer checks it and sends it, or not. Only GitLance's own problems, never the reviewer's code.",
             "inputSchema": {
@@ -103,9 +112,11 @@ fn repo() -> Result<(PathBuf, PathBuf), String> {
         .map_err(|_| format!("{} is not in a git repository", cwd.display()))
 }
 
-fn call(bus: &Bus, name: &str, args: &Value) -> Result<String, String> {
-    if name == "report_problem" {
-        return draft_report(bus, args);
+fn call(bus: &Bus, exe: &str, name: &str, args: &Value) -> Result<String, String> {
+    match name {
+        "report_problem" => return draft_report(bus, args),
+        "open_gitlance" => return open_app(bus, exe, Duration::from_secs(30)),
+        _ => {}
     }
     let (here, root) = repo()?;
     let comments = bus.comments(&root);
@@ -162,7 +173,7 @@ fn draft_report(bus: &Bus, args: &Value) -> Result<String, String> {
     if title.is_empty() {
         return Err("title is missing".to_owned());
     }
-    let agent = agents::whoami().map_or_else(|| "An agent".to_owned(), |(name, ..)| name);
+    let agent = agents::agent_name();
     let folder = std::env::current_dir()
         .ok()
         .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()));
@@ -180,6 +191,40 @@ fn draft_report(bus: &Bus, args: &Value) -> Result<String, String> {
     Ok("The report opens in GitLance for the reviewer to check; nothing was sent.".to_owned())
 }
 
+/// `open_gitlance` (#153): GitLance on this project — opened in a tab when the app runs without
+/// it, started on it when the app does not run — answered once one of its windows says it is there.
+fn open_app(bus: &Bus, exe: &str, wait: Duration) -> Result<String, String> {
+    let (_, project) = repo()?;
+    let name = crate::labels::project_name(&project);
+    let shows = |bus: &Bus| bus.running().iter().any(|p| p.projects.contains(&project));
+    if shows(bus) {
+        return Ok(format!("GitLance has {name} open."));
+    }
+    let started = bus.running().is_empty();
+    if started {
+        crate::platform::launch(Path::new(exe), &project)
+            .map_err(|e| format!("GitLance could not be started: {e}"))?;
+    } else {
+        bus.event(&agents::Event::new(project.clone(), agents::What::Open))
+            .map_err(|e| e.to_string())?;
+    }
+    let until = Instant::now() + wait;
+    while Instant::now() < until {
+        if shows(bus) {
+            return Ok(if started {
+                format!("GitLance started on {name}. Call the tool you wanted again.")
+            } else {
+                format!("GitLance opened {name} in a tab. Call the tool you wanted again.")
+            });
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err(format!(
+        "GitLance did not show {name} within {} s; the reviewer may have to open it.",
+        wait.as_secs()
+    ))
+}
+
 /// The answer to one request, or `None` for a notification.
 fn handle(bus: &Bus, exe: &str, message: &Value) -> Option<Value> {
     let id = message.get("id")?.clone();
@@ -195,7 +240,7 @@ fn handle(bus: &Bus, exe: &str, message: &Value) -> Option<Value> {
         "tools/call" => {
             let params = &message["params"];
             let name = params["name"].as_str().unwrap_or_default();
-            match call(bus, name, &params["arguments"]) {
+            match call(bus, exe, name, &params["arguments"]) {
                 Ok(text) => json!({"content": [{"type": "text", "text": text}]}),
                 Err(text) => json!({"content": [{"type": "text", "text": text}], "isError": true}),
             }
@@ -254,10 +299,36 @@ mod tests {
                 .contains("\"/x/GitLance\" agent-watch")
         );
         let list = handle(&bus, "", &json!({"id": 2, "method": "tools/list"})).unwrap();
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 4);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 5);
         assert!(handle(&bus, "", &json!({"method": "notifications/initialized"})).is_none());
         let unknown = handle(&bus, "", &json!({"id": 3, "method": "nope"})).unwrap();
         assert_eq!(unknown["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn gitlance_is_opened_on_this_project_only_when_it_does_not_show_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bus = Bus::at(dir.path().to_path_buf());
+        let (_, project) = repo().unwrap();
+        let window = |projects: Vec<PathBuf>| agents::Presence {
+            pid: std::process::id(),
+            projects,
+            beat: agents::now(),
+        };
+        bus.present(1, &window(vec![project.clone()])).unwrap();
+        let shown = open_app(&bus, "", Duration::ZERO).unwrap();
+        assert!(shown.contains("has"), "{shown}");
+        assert!(bus.events().is_empty());
+        // Running without it: the app is asked to open it, and the answer waits for that.
+        bus.present(1, &window(Vec::new())).unwrap();
+        let waited = open_app(&bus, "", Duration::from_millis(600)).unwrap_err();
+        assert!(waited.contains("did not show"), "{waited}");
+        let events = bus.events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            (&events[0].project, &events[0].what),
+            (&project, &agents::What::Open)
+        );
     }
 
     #[test]
