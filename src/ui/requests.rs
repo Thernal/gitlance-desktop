@@ -522,7 +522,7 @@ impl Workspace {
             let read = cx
                 .background_executor()
                 .spawn(async move {
-                    super::fetch::fetch_request(&root, iid, github, head.as_deref())?;
+                    crate::git::fetch::fetch_request(&root, iid, github, head.as_deref())?;
                     Repo::open(&root)
                         .and_then(|r| r.branches())
                         .map_err(|e| format!("{e:#}"))
@@ -915,10 +915,10 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move {
                     if base {
-                        super::fetch::fetch_branch(&root, &target)?;
+                        crate::git::fetch::fetch_branch(&root, &target)?;
                     }
                     if head {
-                        super::fetch::fetch_request(&root, iid, github, sha.as_deref())?;
+                        crate::git::fetch::fetch_request(&root, iid, github, sha.as_deref())?;
                     }
                     Repo::open(&root)
                         .and_then(|r| r.branches())
@@ -1519,7 +1519,13 @@ impl Workspace {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .child("· only you see it until you submit the review"),
+                    // An agent's says who wrote it (#150).
+                    .child(match self.draft_agent(id) {
+                        Some(agent) => format!(
+                            "· {agent} wrote it · only you see it until you submit the review"
+                        ),
+                        None => "· only you see it until you submit the review".to_owned(),
+                    }),
             )
             .children(super::markdown::has_markdown(&d.body).then(|| {
                 self.rich_switch(("draft-rich", ix))
@@ -1637,26 +1643,13 @@ impl Workspace {
 
     /// ⌥N / ⌥P: the next or previous of one's pending comments, across the files of the request.
     pub(super) fn step_draft(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let Some(diff) = self.diff.as_ref().filter(|_| self.showing_request()) else {
+        if !self.showing_request() {
             return;
-        };
-        let mut order: Vec<(usize, u32, usize)> = self
-            .requests
-            .drafts
-            .iter()
-            .enumerate()
-            .filter_map(|(ix, d)| {
-                let file = diff
-                    .files
-                    .iter()
-                    .position(|f| Some(f.path()) == d.path.as_deref())?;
-                Some((file, d.new_line.or(d.old_line)?, ix))
-            })
-            .collect();
+        }
+        let order = self.draft_order();
         if order.is_empty() {
             return;
         }
-        order.sort_unstable();
         let at = self
             .draft_at
             .and_then(|d| order.iter().position(|&(_, _, ix)| ix == d));
@@ -1675,6 +1668,36 @@ impl Workspace {
             self.jump_to_line(&path, line, old, cx);
         }
         cx.notify();
+    }
+
+    /// A pending comment in one line, an agent's after its name (#150).
+    pub(super) fn draft_line(&self, d: &mr::Draft) -> String {
+        match self.draft_agent(d.id) {
+            Some(agent) => format!("{agent}: {}", self.one_line(&d.body)),
+            None => self.one_line(&d.body),
+        }
+    }
+
+    /// The pending comments on lines of the diff loaded, in its order: (file, line, index).
+    pub(super) fn draft_order(&self) -> Vec<(usize, u32, usize)> {
+        let Some(diff) = self.diff.as_ref() else {
+            return Vec::new();
+        };
+        let mut order: Vec<(usize, u32, usize)> = self
+            .requests
+            .drafts
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, d)| {
+                let file = diff
+                    .files
+                    .iter()
+                    .position(|f| Some(f.path()) == d.path.as_deref())?;
+                Some((file, d.new_line.or(d.old_line)?, ix))
+            })
+            .collect();
+        order.sort_unstable();
+        order
     }
 
     fn discard_draft(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -1917,7 +1940,7 @@ impl Workspace {
                 ("comment-draft", ix),
                 theme::warning(),
                 where_,
-                self.one_line(&d.body),
+                self.draft_line(d),
             )
             .relative()
             .group("pending-row")

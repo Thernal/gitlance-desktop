@@ -1244,6 +1244,7 @@ impl Workspace {
                 &body,
                 draft,
             )
+            .map(|_| ())
         });
     }
 

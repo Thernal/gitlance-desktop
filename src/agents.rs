@@ -132,6 +132,19 @@ pub struct Event {
 pub enum What {
     /// The project in a tab (`open_gitlance`).
     Open,
+    /// Pending comments written on request `iid` (`add_pending_comment`, #150).
+    Pending { iid: u64, ids: Vec<u64> },
+}
+
+/// Something an agent left on a request that the app tells apart from the reviewer's own (#150):
+/// a pending comment it wrote.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Mark {
+    pub agent: String,
+    pub iid: u64,
+    /// The pending comment's id, as the host lists it.
+    pub draft: u64,
+    pub at: i64,
 }
 
 impl Event {
@@ -256,6 +269,32 @@ impl Bus {
         out
     }
 
+    fn marks_file(&self, project: &Path) -> PathBuf {
+        self.dir
+            .join("marks")
+            .join(format!("{}.jsonl", review::key(project)))
+    }
+
+    /// Notes that an agent left `mark` in `project` (#150).
+    pub fn mark(&self, project: &Path, mark: &Mark) -> std::io::Result<()> {
+        append_line(&self.marks_file(project), mark)
+    }
+
+    pub fn marks(&self, project: &Path) -> Vec<Mark> {
+        std::fs::read_to_string(self.marks_file(project))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()
+    }
+
+    /// When the marks last changed, to read them only then.
+    pub fn marks_stamp(&self, project: &Path) -> Option<std::time::SystemTime> {
+        std::fs::metadata(self.marks_file(project))
+            .and_then(|m| m.modified())
+            .ok()
+    }
+
     /// Keeps an agent's event for the app to take (#153).
     pub fn event(&self, event: &Event) -> std::io::Result<()> {
         let file = self
@@ -329,17 +368,7 @@ impl Bus {
     }
 
     pub fn answer(&self, root: &Path, answer: &Answer) -> std::io::Result<()> {
-        let file = self.answers_file(root);
-        if let Some(dir) = file.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let mut line = serde_json::to_string(answer).unwrap_or_default();
-        line.push('\n');
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(file)?
-            .write_all(line.as_bytes())
+        append_line(&self.answers_file(root), answer)
     }
 
     pub fn answers(&self, root: &Path) -> Vec<Answer> {
@@ -387,6 +416,20 @@ impl Chat {
     pub fn limited(&self) -> bool {
         self.watcher == 0 && self.agent == "Codex"
     }
+}
+
+/// `value` as one more line of `file`.
+fn append_line(file: &Path, value: &impl Serialize) -> std::io::Result<()> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut line = serde_json::to_string(value).unwrap_or_default();
+    line.push('\n');
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file)?
+        .write_all(line.as_bytes())
 }
 
 /// `value` as `file`, written beside and renamed, so a reader never sees half a file.

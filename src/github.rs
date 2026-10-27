@@ -119,7 +119,7 @@ pub fn token_page(remote: &WebRemote) -> String {
 
 /// `GITLANCE_MR_FIXTURE=<dir>` reads GitHub's answers from `<dir>/github/`.
 fn fixture() -> Option<std::path::PathBuf> {
-    std::env::var_os("GITLANCE_MR_FIXTURE").map(|d| std::path::PathBuf::from(d).join("github"))
+    crate::mr::fixture().map(|d| d.join("github"))
 }
 
 fn read_fixture(name: &str) -> Option<Result<Value>> {
@@ -872,7 +872,7 @@ pub fn post_discussion(
     place: &Place<'_>,
     body: &str,
     draft: bool,
-) -> Result<()> {
+) -> Result<Option<u64>> {
     let (line, side) = match (place.new_line, place.old_line) {
         (Some(n), _) => (n, "RIGHT"),
         (None, Some(o)) => (o, "LEFT"),
@@ -891,7 +891,7 @@ pub fn post_discussion(
             .map(|(l, s)| format!("from {l} {s} "))
             .unwrap_or_default()
     ))? {
-        return Ok(());
+        return Ok(None);
     }
     let sha = check_head(remote, number, head)?;
     if !draft {
@@ -906,7 +906,7 @@ pub fn post_discussion(
             &format!("pulls/{number}/comments"),
             Some(&comment),
         )?;
-        return Ok(());
+        return Ok(None);
     }
     let (pr, review) = pending_review(remote, number)?;
     let review = match review {
@@ -920,13 +920,14 @@ pub fn post_discussion(
             s(&data["addPullRequestReview"]["pullRequestReview"]["id"])
         }
     };
-    graphql(
+    let data = graphql(
         remote,
-        "mutation($review: ID!, $path: String!, $line: Int!, $side: DiffSide!, $startLine: Int, $startSide: DiffSide, $body: String!) { addPullRequestReviewThread(input: { pullRequestReviewId: $review, path: $path, line: $line, side: $side, startLine: $startLine, startSide: $startSide, body: $body }) { thread { id } } }",
+        "mutation($review: ID!, $path: String!, $line: Int!, $side: DiffSide!, $startLine: Int, $startSide: DiffSide, $body: String!) { addPullRequestReviewThread(input: { pullRequestReviewId: $review, path: $path, line: $line, side: $side, startLine: $startLine, startSide: $startSide, body: $body }) { thread { id comments(first: 1) { nodes { databaseId } } } } }",
         json!({ "review": review, "path": place.path, "line": line, "side": side,
                 "startLine": start.map(|(l, _)| l), "startSide": start.map(|(_, s)| s), "body": body }),
     )?;
-    Ok(())
+    // The pending comment's id, as `drafts` lists it (#150).
+    Ok(data["addPullRequestReviewThread"]["thread"]["comments"]["nodes"][0]["databaseId"].as_u64())
 }
 
 /// The thread's node id and its first comment's id (`parse_threads`), or an issue comment's.

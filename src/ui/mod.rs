@@ -1,6 +1,7 @@
 //! The GitLance window: branches, versions and commits on the left, the diff on the right.
 
 mod agent;
+mod agent_events;
 mod annotate;
 mod appearance;
 mod bar;
@@ -1212,6 +1213,11 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                 }
             }
         }
+        // The newest toast's button pressed: where an agent's news leads (#150).
+        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("toast-act")) {
+            ws.update(cx, |this, cx| this.press_toast(cx));
+            wait(2500).await;
+        }
         // Open in's ▾ under its button, on the page the keys reached (#78).
         if std::env::var("GITLANCE_SNAPSHOT_MENU").as_deref() == Ok("open-in") {
             ws.update(cx, |this, cx| {
@@ -1494,6 +1500,10 @@ pub struct Workspace {
     agent_pick: Option<agent::AgentPick>,
     /// When the agents' answers were last read (`agent.rs`).
     answers_stamp: Option<std::time::SystemTime>,
+    /// What agents left in this project, to tell it apart (`agent_events.rs`, #150), and when it
+    /// was last read.
+    agent_marks: Vec<crate::agents::Mark>,
+    marks_stamp: Option<std::time::SystemTime>,
     /// Codex's sessions looked at and handed their comments, in the background (#18).
     codex_beat: Option<Task<()>>,
     /// The chats of this repository, for the Agents window (read while it is open).
@@ -1783,6 +1793,8 @@ impl Workspace {
             open_ask: None,
             agent_pick: None,
             answers_stamp: None,
+            agent_marks: Vec::new(),
+            marks_stamp: None,
             codex_beat: None,
             agent_chats: Vec::new(),
             agents_filter: Default::default(),
@@ -2007,6 +2019,7 @@ impl Workspace {
                             this.code = Default::default();
                             this.comments = crate::review::load(&project);
                             this.answers_stamp = None;
+                            this.marks_stamp = None;
                             this.compose = None;
                         }
                         this.watch.watch(git_dir, fingerprint);
@@ -2065,6 +2078,7 @@ impl Workspace {
             self.code = Default::default();
             self.comments = crate::review::load(&root);
             self.answers_stamp = None;
+            self.marks_stamp = None;
             self.compose = None;
         }
         // Nothing of git's to watch or fetch; the poll only brings the agents' answers.

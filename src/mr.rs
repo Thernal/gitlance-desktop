@@ -307,9 +307,20 @@ pub fn fixture_on() -> bool {
 }
 
 /// `GITLANCE_MR_FIXTURE=<dir>` reads `mrs.json` and `discussions-<iid>.json` from a directory
-/// instead of the network (for UI checks).
-fn fixture() -> Option<std::path::PathBuf> {
+/// instead of the network (for UI checks); a test sets its own (`TEST_FIXTURE`).
+pub(crate) fn fixture() -> Option<std::path::PathBuf> {
+    #[cfg(test)]
+    if let Some(dir) = TEST_FIXTURE.with(|f| f.borrow().clone()) {
+        return Some(dir);
+    }
     std::env::var_os("GITLANCE_MR_FIXTURE").map(Into::into)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's fixture, on its thread only: tests run side by side in one process.
+    pub(crate) static TEST_FIXTURE: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Every open request: page after page, until one comes short (#114).
@@ -1076,8 +1087,9 @@ fn line_range(path: &str, (start, end): (DiffLine, DiffLine)) -> Vec<(String, St
 }
 
 /// Posts `body` as a new discussion on a line of merge request `iid`, whose head the reviewer sees
-/// as `head`. Refuses when GitLab's head is another commit: the line numbers would not mean the
-/// same thing there.
+/// as `head`, or keeps it pending (`draft`): then the pending comment's id comes back (#150).
+/// Refuses when GitLab's head is another commit: the line numbers would not mean the same thing
+/// there.
 pub fn post_discussion(
     remote: &WebRemote,
     iid: u64,
@@ -1085,7 +1097,7 @@ pub fn post_discussion(
     place: &Place<'_>,
     body: &str,
     draft: bool,
-) -> Result<()> {
+) -> Result<Option<u64>> {
     if remote.github {
         return github::post_discussion(remote, iid, head, place, body, draft);
     }
@@ -1102,7 +1114,11 @@ pub fn post_discussion(
             place.range_text()
         ));
         std::fs::write(file, text)?;
-        return Ok(());
+        return if draft {
+            fixture_draft(&dir, iid, place, body).map(Some)
+        } else {
+            Ok(None)
+        };
     }
     let mr = get(remote, &format!("merge_requests/{iid}"))?;
     let refs = mr.get("diff_refs").filter(|r| !r.is_null());
@@ -1138,8 +1154,36 @@ pub fn post_discussion(
         .unwrap_or_default();
     form.extend(range.iter().map(|(k, v)| (k.as_str(), v.clone())));
     let endpoint = if draft { "draft_notes" } else { "discussions" };
-    request(remote, &format!("merge_requests/{iid}/{endpoint}"), &form)?;
-    Ok(())
+    let made = request(remote, &format!("merge_requests/{iid}/{endpoint}"), &form)?;
+    Ok(made.get("id").and_then(Value::as_u64).filter(|_| draft))
+}
+
+/// A pending comment kept in the fixture's `drafts-<iid>.json`, as GitLab would list it, so the app
+/// shows what was written (#150); its id, after the ones there.
+fn fixture_draft(dir: &std::path::Path, iid: u64, place: &Place<'_>, body: &str) -> Result<u64> {
+    let file = dir.join(format!("drafts-{iid}.json"));
+    let mut drafts: Vec<Value> = std::fs::read_to_string(&file)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let id = drafts
+        .iter()
+        .filter_map(|d| d.get("id").and_then(Value::as_u64))
+        .max()
+        .unwrap_or(9000)
+        + 1;
+    drafts.push(serde_json::json!({
+        "id": id,
+        "note": body,
+        "position": {
+            "new_path": place.path,
+            "old_path": place.old_path,
+            "new_line": place.new_line,
+            "old_line": place.old_line,
+        },
+    }));
+    std::fs::write(file, serde_json::to_string_pretty(&drafts)?)?;
+    Ok(id)
 }
 
 /// A line of the audit trail that UI checks read back: what the app would have sent.
@@ -2107,8 +2151,7 @@ mod tests {
     fn a_comment_is_recorded_in_the_fixture() {
         let dir = std::env::temp_dir().join(format!("gitlance-mr-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        // SAFETY: only this test sets the variable.
-        unsafe { std::env::set_var("GITLANCE_MR_FIXTURE", &dir) };
+        TEST_FIXTURE.with(|f| *f.borrow_mut() = Some(dir.clone()));
         let remote = WebRemote {
             base: "https://git.example.com/g/p".into(),
             github: false,
@@ -2134,7 +2177,7 @@ mod tests {
         assert!(posted.contains("412 a.rs Some(3) None Why?"));
         assert!(posted.contains("delete-note 412 7"));
         assert!(posted.contains("publish-draft 412 9001"));
-        unsafe { std::env::remove_var("GITLANCE_MR_FIXTURE") };
+        TEST_FIXTURE.with(|f| *f.borrow_mut() = None);
         let _ = std::fs::remove_dir_all(dir);
     }
 

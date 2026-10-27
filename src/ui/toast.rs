@@ -1,6 +1,7 @@
 //! Errors as desktop notifications: toasts stacked at the top right, newest at the bottom, each with
 //! ✕ and gone after a few seconds. Code still reports an error by setting `Workspace::error`; each
-//! frame moves it here. A deleted draft's toast says so and offers Undo instead (#76).
+//! frame moves it here. A deleted draft's toast says so and offers Undo instead (#76); what an
+//! agent left offers to go and see it (`Act`, #150).
 
 use super::{Tip, Workspace, icons, px, theme};
 use gpui::{ClickEvent, Context, SharedString, Task, div, prelude::*};
@@ -16,12 +17,29 @@ struct Toast {
     text: SharedString,
     /// The draft it deleted: Undo puts it back (#76).
     undo: Option<crate::review::Comment>,
+    /// Its button, and what it adds up: news of the same `Act` still showing joins this (#150).
+    act: Option<(Act, usize)>,
     /// News, not an error: no alert mark (#77).
     info: bool,
     /// Dismissed: drawn on its way out until it is removed (#56, 8).
     leaving: bool,
     /// Dismisses it when `SHOWN` is up; dropping it (✕, the same text again) cancels that.
     _timer: Task<()>,
+}
+
+/// What a toast's button does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Act {
+    /// Opens request `iid` at the first pending comment `agent` left on it (#150).
+    Review { iid: u64, agent: String },
+}
+
+impl Act {
+    fn label(&self) -> &'static str {
+        match self {
+            Act::Review { .. } => "Review",
+        }
+    }
 }
 
 #[derive(Default)]
@@ -40,12 +58,36 @@ impl Workspace {
 
     /// Shows `text`; the same text already showing starts over at the bottom instead.
     fn toast(&mut self, text: SharedString, cx: &mut Context<Self>) {
-        self.toast_with(text, None, false, cx);
+        self.toast_with(text, None, None, false, cx);
     }
 
     /// News that is not an error: a chat began or stopped listening (#77).
     pub(super) fn toast_info(&mut self, text: SharedString, cx: &mut Context<Self>) {
-        self.toast_with(text, None, true, cx);
+        self.toast_with(text, None, None, true, cx);
+    }
+
+    /// News with a button doing `act`, about `count` things: a toast of the same act still showing
+    /// goes, its count added to this one's, and `say` words the sum (#150).
+    pub(super) fn toast_act(
+        &mut self,
+        act: Act,
+        count: usize,
+        say: impl Fn(usize) -> String,
+        cx: &mut Context<Self>,
+    ) {
+        let before: usize = self
+            .toasts
+            .list
+            .iter()
+            .filter_map(|t| t.act.as_ref().filter(|(a, _)| !t.leaving && *a == act))
+            .map(|(_, n)| n)
+            .sum();
+        self.toasts
+            .list
+            .retain(|t| t.act.as_ref().is_none_or(|(a, _)| *a != act));
+        let count = before + count;
+        self.toast_with(say(count).into(), None, Some((act, count)), true, cx);
+        cx.notify();
     }
 
     /// The news of `text` is over: its toast goes now.
@@ -70,7 +112,7 @@ impl Workspace {
     ) {
         let name = comment.path.rsplit('/').next().unwrap_or(&comment.path);
         let text = format!("Draft deleted · {name}:{}", comment.line).into();
-        self.toast_with(text, Some(comment), true, cx);
+        self.toast_with(text, Some(comment), None, true, cx);
         cx.notify();
     }
 
@@ -78,6 +120,7 @@ impl Workspace {
         &mut self,
         text: SharedString,
         undo: Option<crate::review::Comment>,
+        act: Option<(Act, usize)>,
         info: bool,
         cx: &mut Context<Self>,
     ) {
@@ -96,6 +139,7 @@ impl Workspace {
             id,
             text,
             undo,
+            act,
             info,
             leaving: false,
             _timer: timer,
@@ -120,6 +164,32 @@ impl Workspace {
         self.save_comments();
         self.refresh_rows();
         self.dismiss(id, cx);
+    }
+
+    /// The button of toast `id`: what it says to do, done, and the toast goes.
+    fn act(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some((act, _)) = self
+            .toasts
+            .list
+            .iter()
+            .find(|t| t.id == id)
+            .and_then(|t| t.act.clone())
+        else {
+            return;
+        };
+        self.dismiss(id, cx);
+        match act {
+            Act::Review { iid, agent } => self.review_agent(iid, &agent, cx),
+        }
+    }
+
+    /// The newest toast's button, pressed (the snapshot checks).
+    #[cfg(feature = "snapshot")]
+    pub(super) fn press_toast(&mut self, cx: &mut Context<Self>) {
+        let newest = self.toasts.list.iter().rev().find(|t| t.act.is_some());
+        if let Some(id) = newest.map(|t| t.id) {
+            self.act(id, cx);
+        }
     }
 
     /// It slides out, then it is gone.
@@ -155,6 +225,11 @@ impl Workspace {
             let id = t.id;
             let leaving = t.leaving;
             let undo = t.undo.is_some();
+            let button = if undo {
+                Some("Undo")
+            } else {
+                t.act.as_ref().map(|(a, _)| a.label())
+            };
             let info = t.info;
             let toast = div()
                 .id(("toast", id as usize))
@@ -186,17 +261,23 @@ impl Workspace {
                         .text_color(theme::text())
                         .child(super::keys::text(&t.text).into_owned()),
                 )
-                .children(undo.then(|| {
+                .children(button.map(|label| {
                     div()
-                        .id(("toast-undo", id as usize))
+                        .id(("toast-button", id as usize))
                         .flex_none()
                         .px(px(6.))
                         .rounded(px(6.))
                         .text_color(theme::accent())
                         .cursor_pointer()
                         .hover(|s| s.bg(theme::hover()))
-                        .child("Undo")
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.undo(id, cx)))
+                        .child(label)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            if undo {
+                                this.undo(id, cx)
+                            } else {
+                                this.act(id, cx)
+                            }
+                        }))
                 }))
                 .child(
                     div()

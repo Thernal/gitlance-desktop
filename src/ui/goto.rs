@@ -12,6 +12,8 @@ use gpui::Context;
 pub enum Spot {
     Note(u64),
     Line(links::DiffLine),
+    /// The first of these pending comments in the diff's order: an agent's (#150).
+    Drafts(Vec<u64>),
 }
 
 impl Workspace {
@@ -173,7 +175,17 @@ impl Workspace {
                     let line = t.new_line.or(t.old_line)?;
                     Some((ix, t.path.clone()?, line, t.new_line.is_none()))
                 })
-                .map(|(ix, path, line, old)| (Some(ix), path, line, old)),
+                .map(|(ix, path, line, old)| (Some(ix), None, path, line, old)),
+            Spot::Drafts(ids) => self
+                .draft_order()
+                .into_iter()
+                .map(|(.., ix)| ix)
+                .find(|&ix| ids.contains(&self.requests.drafts[ix].id))
+                .and_then(|ix| {
+                    let d = &self.requests.drafts[ix];
+                    let line = d.new_line.or(d.old_line)?;
+                    Some((None, Some(ix), d.path.clone()?, line, d.new_line.is_none()))
+                }),
             Spot::Line(l) => self.diff.as_ref().and_then(|d| {
                 let file = d
                     .files
@@ -184,16 +196,19 @@ impl Workspace {
                     (None, Some(o)) => (o, true),
                     _ => (1, false),
                 };
-                Some((None, file.path().to_owned(), line, old))
+                Some((None, None, file.path().to_owned(), line, old))
             }),
         };
-        let Some((thread, path, line, old)) = place else {
+        let Some((thread, draft, path, line, old)) = place else {
             if last {
                 self.spot = None;
                 self.error = Some(
                     match spot {
                         Spot::Note(_) => "That comment is not on a line of this merge request.",
                         Spot::Line(_) => "That file is not in this merge request's diff.",
+                        Spot::Drafts(_) => {
+                            "Those pending comments are not on this merge request any more."
+                        }
                     }
                     .into(),
                 );
@@ -201,6 +216,11 @@ impl Workspace {
             return;
         };
         self.spot = None;
+        if let Some(ix) = draft {
+            // ⌥N goes on from it; the diff, not the overview, is where it is.
+            self.draft_at = Some(ix);
+            self.show_section(super::nav::Section::Changes, cx);
+        }
         if let Some(ix) = thread {
             self.thread_at = Some(ix);
             if !self.mr_open(ix) {

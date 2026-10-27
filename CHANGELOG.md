@@ -26,6 +26,10 @@ for someone using the app, not for someone reading the code; the commits follow 
 - **An agent can open GitLance.** Its MCP server's new `open_gitlance` starts GitLance on the agent's repository,
   or opens the repository in a tab behind the one you are on when GitLance runs without it, with a note saying
   which agent did. Agents are told to do it only when their work needs you to look.
+- **An agent can review a merge request with you.** Through GitLance's MCP server it reads the request as GitLab
+  or GitHub compares it and leaves pending comments on its lines, with GitLance's own token; a line not in the
+  diff is refused. They show at once, marked with the agent's name, and a note offers Review, which opens the
+  first. They stay pending, only yours to send, delete or submit.
 
 ## 1.1.0 — 2026-10-26
 

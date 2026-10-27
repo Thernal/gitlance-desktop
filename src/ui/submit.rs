@@ -298,7 +298,7 @@ impl Workspace {
                         .truncate()
                         .text_size(px(12.))
                         .text_color(theme::muted())
-                        .child(self.one_line(&d.body)),
+                        .child(self.draft_line(d)),
                 )
                 .relative()
                 .group("submit-pending-row")

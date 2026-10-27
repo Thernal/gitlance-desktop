@@ -2,6 +2,7 @@
 //! rewritten branch. Nothing here changes the index, the working tree, refs, reflogs or objects.
 
 mod diff;
+pub mod fetch;
 mod versions;
 
 #[cfg(test)]

@@ -1097,6 +1097,8 @@ impl Workspace {
         else {
             return;
         };
+        // What agents left on requests, and what they ask to show (#150).
+        self.agent_events(&root, &bus, cx);
         let stamp = bus.answers_stamp(&root);
         if stamp.is_none() || stamp == self.answers_stamp {
             return;

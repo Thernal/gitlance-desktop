@@ -1,6 +1,9 @@
 //! `GitLance mcp`: the MCP server an agent runs in its chat (stdio, one JSON-RPC message per line).
 //! It reads the review comments GitLance sent for the repository the agent works in and records
-//! the agent's answers (`crate::agents`); it never writes the comments or the repository.
+//! the agent's answers (`crate::agents`); it never writes the comments or the repository. It also
+//! reads a merge request and keeps the agent's pending comments on it (`requests`, #150).
+
+mod requests;
 
 use crate::agents::{self, Answer, Bus, Kind};
 use serde_json::{Value, json};
@@ -24,6 +27,10 @@ watcher again. Read each comment for what it wants: a question gets an answer (r
 Never claim a comment is resolved: the reviewer confirms each one in GitLance. \
 When GitLance itself fails (one of these tools, or the app), you may draft a report of it with report_problem; it only \
 opens in the app for the reviewer to check and send. \
+To review a merge request, read it with get_request — its diff as GitLab or GitHub compares it, its discussions \
+and the pending comments already there — and leave each remark with add_pending_comment on a line the diff shows. \
+Pending comments are seen by the reviewer alone; the reviewer edits, deletes or keeps them and submits the review: \
+never submit, approve or publish anything yourself. \
 GitLance shows the reviewer what you did only while it runs. When your work needs the reviewer to look and a tool \
 says GitLance is not running, call open_gitlance: it starts GitLance on this repository (or opens it in a tab) and \
 answers once it is there. Do not start it for anything else."
@@ -83,6 +90,34 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "get_request",
+            "description": "Read a merge request of this repository as GitLance shows it: title, description, source and target, the diff GitLab or GitHub compares (each line with its old and new number), the discussions, and the pending comments already there. A long diff lists the files it leaves out: ask for them with paths.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "iid": {"type": "integer", "description": "The request's number (!123, #123)"},
+                    "paths": {"type": "array", "items": {"type": "string"}, "description": "Optional: only these files' diff"}
+                },
+                "required": ["iid"]
+            }
+        },
+        {
+            "name": "add_pending_comment",
+            "description": "Leave a pending comment on a line of a merge request's diff, as the reviewer's own pending comments are written. Only the reviewer sees it until they submit the review; they can edit or delete it. A line not in the diff is refused with the lines that are. Answers the comment's id and place.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "iid": {"type": "integer"},
+                    "path": {"type": "string", "description": "The file, as get_request names it"},
+                    "line": {"type": "integer", "description": "The line's new number; for a removed line its old number, with old: true"},
+                    "old": {"type": "boolean", "description": "line is an old number: a removed line"},
+                    "start_line": {"type": "integer", "description": "Optional: a range from this line down to line, on the same side"},
+                    "body": {"type": "string", "description": "The comment, in markdown"}
+                },
+                "required": ["iid", "path", "line", "body"]
+            }
+        },
+        {
             "name": "open_gitlance",
             "description": "Start GitLance on this repository, or open the repository in a tab when GitLance runs without it. Answers once it is there. Only when your work needs the reviewer to look and GitLance is not showing it.",
             "inputSchema": {"type": "object", "properties": {}}
@@ -119,6 +154,11 @@ fn call(bus: &Bus, exe: &str, name: &str, args: &Value) -> Result<String, String
         _ => {}
     }
     let (here, root) = repo()?;
+    match name {
+        "get_request" => return requests::get_request(bus, &here, &root, args),
+        "add_pending_comment" => return requests::add_pending_comment(bus, &here, &root, args),
+        _ => {}
+    }
     let comments = bus.comments(&root);
     // A chat's own notes, and those sent to no chat in particular (#77).
     let me = agents::whoami().map(|(_, session, ..)| session);
@@ -189,6 +229,16 @@ fn draft_report(bus: &Bus, args: &Value) -> Result<String, String> {
     };
     bus.draft_report(&draft).map_err(|e| e.to_string())?;
     Ok("The report opens in GitLance for the reviewer to check; nothing was sent.".to_owned())
+}
+
+/// What a tool adds when the reviewer cannot see its work yet: GitLance is not running (#153).
+fn unseen(bus: &Bus) -> &'static str {
+    if bus.running().is_empty() {
+        "\n\nGitLance is not running, so the reviewer does not see this yet; it waits there. If they should \
+         look now, call open_gitlance."
+    } else {
+        ""
+    }
 }
 
 /// `open_gitlance` (#153): GitLance on this project — opened in a tab when the app runs without
@@ -299,7 +349,7 @@ mod tests {
                 .contains("\"/x/GitLance\" agent-watch")
         );
         let list = handle(&bus, "", &json!({"id": 2, "method": "tools/list"})).unwrap();
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 5);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 7);
         assert!(handle(&bus, "", &json!({"method": "notifications/initialized"})).is_none());
         let unknown = handle(&bus, "", &json!({"id": 3, "method": "nope"})).unwrap();
         assert_eq!(unknown["error"]["code"], -32601);
