@@ -134,16 +134,22 @@ pub enum What {
     Open,
     /// Pending comments written on request `iid` (`add_pending_comment`, #150).
     Pending { iid: u64, ids: Vec<u64> },
+    /// Requests put under Merge requests, in this order (`gather_requests`, #148).
+    Gathered { iids: Vec<u64> },
 }
 
-/// Something an agent left on a request that the app tells apart from the reviewer's own (#150):
-/// a pending comment it wrote.
+/// Something an agent left on a request that the app tells apart from the reviewer's own: a
+/// pending comment it wrote (#150), or its line on the request when it gathered it (#148).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mark {
     pub agent: String,
     pub iid: u64,
     /// The pending comment's id, as the host lists it.
-    pub draft: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<u64>,
+    /// What it did there, as it said when it gathered the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     pub at: i64,
 }
 

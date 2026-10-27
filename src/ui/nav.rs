@@ -964,11 +964,35 @@ impl Workspace {
 
     /// An open item's row in the menu: back to it, as it was left.
     pub(super) fn show_open(&mut self, item: &Item, cx: &mut Context<Self>) {
+        // One an agent gathered starts where its comments are (#148).
+        if let Item::Request(iid) = item
+            && self.agent_fresh.remove(iid)
+        {
+            return self.open_gathered(*iid, cx);
+        }
         let Some(page) = self.nav.opened(item).map(|o| o.page.clone()) else {
             return;
         };
         self.nav.from = None;
         self.show(item.space(), Some(page), cx);
+    }
+
+    /// Request `iid` open under Merge requests without loading it, on Changes, after the others
+    /// (#148); one open already stays as it is. Whether it was added.
+    pub(super) fn open_quietly(&mut self, iid: u64) -> bool {
+        let item = Item::Request(iid);
+        if self.nav.opened(&item).is_some() {
+            return false;
+        }
+        self.nav.open.push(Opened {
+            item,
+            page: Page::Request(iid),
+            commit: None,
+            place: None,
+            paths: Vec::new(),
+            section: Section::Changes,
+        });
+        true
     }
 
     /// × on an open item, or ⌘W on the one on screen: it leaves the menu; on screen, its space's
@@ -1106,7 +1130,7 @@ impl Workspace {
         self.root.as_ref().map(|r| crate::review::key(r))
     }
 
-    fn save_nav(&self) {
+    pub(super) fn save_nav(&self) {
         let Some(repo) = self.nav_repo() else {
             return;
         };

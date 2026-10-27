@@ -165,6 +165,8 @@ struct OpenRow {
     drafts: bool,
     /// Notifications of it not read yet.
     news: bool,
+    /// The agent that gathered it (#148): its mark, and how many of its pending comments wait.
+    agent: Option<(char, gpui::Rgba, usize)>,
 }
 
 impl Space {
@@ -227,6 +229,7 @@ impl Workspace {
                     on: here,
                     drafts: false,
                     news: false,
+                    agent: None,
                 }],
                 _ => Vec::new(),
             };
@@ -260,15 +263,29 @@ impl Workspace {
                             .map(|s| format!(" · {}", s.word().to_lowercase()))
                             .unwrap_or_default();
                         let label = format!("{} {title}{state}", super::words::number(*iid));
+                        // Gathered by an agent: its line under the title (#148).
+                        let gathered = self.gathered(*iid);
+                        let tip = match gathered.and_then(|g| g.note.as_deref().map(|n| (g, n))) {
+                            Some((g, note)) if !note.is_empty() => {
+                                format!("{label}\n{}: {note}", g.agent)
+                            }
+                            Some((g, _)) => format!("{label}\nGathered by {}", g.agent),
+                            None => label.clone(),
+                        };
+                        let agent = gathered.map(|g| {
+                            let (letter, hue) = self.agent_mark(&g.agent);
+                            (letter, hue, self.agent_waiting(*iid, &g.agent))
+                        });
                         OpenRow {
                             item: Some(open.item.clone()),
                             icon: "pull-request",
-                            tip: label.clone(),
+                            tip,
                             label,
                             mono: false,
                             on,
                             drafts,
                             news: self.notices.unread_of(*iid),
+                            agent,
                         }
                     }
                     Item::Branch(refname) => {
@@ -286,6 +303,7 @@ impl Workspace {
                             on,
                             drafts,
                             news: false,
+                            agent: None,
                         }
                     }
                 }
@@ -631,6 +649,26 @@ impl Workspace {
                             .flex_1()
                             .when(open.mono, |s| s.font_family(theme::CODE_FONT)),
                         )
+                        .children(open.agent.map(|(letter, hue, waiting)| {
+                            div()
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .child(
+                                    super::agent::chat_badge(letter, hue, false)
+                                        .size(px(14.))
+                                        .text_size(px(8.)),
+                                )
+                                .when(waiting > 0, |s| {
+                                    s.child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(theme::faint())
+                                            .child(waiting.to_string()),
+                                    )
+                                })
+                        }))
                         .children(open.drafts.then(|| dot(theme::agent(), "Unsent drafts")))
                         .children(open.news.then(|| dot(theme::accent(), "New activity")))
                         .child(

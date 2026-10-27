@@ -1504,6 +1504,9 @@ pub struct Workspace {
     /// was last read.
     agent_marks: Vec<crate::agents::Mark>,
     marks_stamp: Option<std::time::SystemTime>,
+    /// Requests an agent gathered under Merge requests not opened since: the first open goes to
+    /// its comments (#148).
+    agent_fresh: HashSet<u64>,
     /// Codex's sessions looked at and handed their comments, in the background (#18).
     codex_beat: Option<Task<()>>,
     /// The chats of this repository, for the Agents window (read while it is open).
@@ -1795,6 +1798,7 @@ impl Workspace {
             answers_stamp: None,
             agent_marks: Vec::new(),
             marks_stamp: None,
+            agent_fresh: HashSet::new(),
             codex_beat: None,
             agent_chats: Vec::new(),
             agents_filter: Default::default(),

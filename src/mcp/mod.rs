@@ -28,7 +28,8 @@ Never claim a comment is resolved: the reviewer confirms each one in GitLance. \
 When GitLance itself fails (one of these tools, or the app), you may draft a report of it with report_problem; it only \
 opens in the app for the reviewer to check and send. \
 To review a merge request, read it with get_request — its diff as GitLab or GitHub compares it, its discussions \
-and the pending comments already there — and leave each remark with add_pending_comment on a line the diff shows. \
+and the pending comments already there — and leave each remark with add_pending_comment on a line the diff shows. When you have looked at several, \
+gather them with gather_requests, each with a line on what you did there, so the reviewer finds them together. \
 Pending comments are seen by the reviewer alone; the reviewer edits, deletes or keeps them and submits the review: \
 never submit, approve or publish anything yourself. \
 GitLance shows the reviewer what you did only while it runs. When your work needs the reviewer to look and a tool \
@@ -118,6 +119,27 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "gather_requests",
+            "description": "Put the merge requests you worked on under Merge requests in GitLance's menu, in this order, each with a line on what you did there, for the reviewer to read one by one. Answers which are there and which numbers are not merge requests of this project.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "requests": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "iid": {"type": "integer", "description": "The request's number"},
+                                "note": {"type": "string", "description": "What you did there: \"5 pending comments\", \"looked, nothing to say\""}
+                            },
+                            "required": ["iid"]
+                        }
+                    }
+                },
+                "required": ["requests"]
+            }
+        },
+        {
             "name": "open_gitlance",
             "description": "Start GitLance on this repository, or open the repository in a tab when GitLance runs without it. Answers once it is there. Only when your work needs the reviewer to look and GitLance is not showing it.",
             "inputSchema": {"type": "object", "properties": {}}
@@ -157,6 +179,7 @@ fn call(bus: &Bus, exe: &str, name: &str, args: &Value) -> Result<String, String
     match name {
         "get_request" => return requests::get_request(bus, &here, &root, args),
         "add_pending_comment" => return requests::add_pending_comment(bus, &here, &root, args),
+        "gather_requests" => return requests::gather_requests(bus, &here, &root, args),
         _ => {}
     }
     let comments = bus.comments(&root);
@@ -349,7 +372,7 @@ mod tests {
                 .contains("\"/x/GitLance\" agent-watch")
         );
         let list = handle(&bus, "", &json!({"id": 2, "method": "tools/list"})).unwrap();
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 7);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 8);
         assert!(handle(&bus, "", &json!({"method": "notifications/initialized"})).is_none());
         let unknown = handle(&bus, "", &json!({"id": 3, "method": "nope"})).unwrap();
         assert_eq!(unknown["error"]["code"], -32601);

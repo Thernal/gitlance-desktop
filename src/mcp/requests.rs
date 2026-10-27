@@ -35,9 +35,8 @@ fn find(remote: &WebRemote, iid: u64) -> Result<mr::Mr, String> {
     })
 }
 
-/// Request `iid` of the repository `here` is in, compared from the base and head of its host's
-/// latest push (#145): a side this clone lacks is fetched first, once.
-fn read(here: &Path, iid: u64) -> Result<Read, String> {
+/// The repository `here` is in, and its host when GitLance has a token for it.
+fn host(here: &Path) -> Result<(Repo, WebRemote), String> {
     let repo =
         Repo::open(here).map_err(|_| format!("{} is not in a git repository", here.display()))?;
     let remote = repo
@@ -49,6 +48,13 @@ fn read(here: &Path, iid: u64) -> Result<Read, String> {
             mr::host(&remote)
         ));
     }
+    Ok((repo, remote))
+}
+
+/// Request `iid` of the repository `here` is in, compared from the base and head of its host's
+/// latest push (#145): a side this clone lacks is fetched first, once.
+fn read(here: &Path, iid: u64) -> Result<Read, String> {
+    let (repo, remote) = host(here)?;
     let m = find(&remote, iid)?;
     let latest = mr::versions(&remote, iid)
         .ok()
@@ -281,7 +287,7 @@ pub fn get_request(bus: &Bus, here: &Path, project: &Path, args: &Value) -> Resu
         };
         let by = mine
             .iter()
-            .find(|m| m.draft == d.id)
+            .find(|m| m.draft == Some(d.id))
             .map_or("the reviewer".to_owned(), |m| m.agent.clone());
         let _ = writeln!(out, "- {} · {at} · by {by}: {}", d.id, d.body.trim());
     }
@@ -394,7 +400,8 @@ pub fn add_pending_comment(
         let mark = Mark {
             agent,
             iid,
-            draft: id,
+            draft: Some(id),
+            note: None,
             at: agents::now(),
         };
         bus.mark(project, &mark).map_err(|e| e.to_string())?;
@@ -419,6 +426,90 @@ pub fn add_pending_comment(
         if old { " (old side)" } else { "" },
         super::unseen(bus)
     ))
+}
+
+/// `gather_requests` (#148): the requests the agent worked on, each with its line on what it did,
+/// put under Merge requests in the order given; the numbers that are not requests of this project
+/// are said.
+pub fn gather_requests(
+    bus: &Bus,
+    here: &Path,
+    project: &Path,
+    args: &Value,
+) -> Result<String, String> {
+    let asked: Vec<(u64, &str)> = args["requests"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            Some((
+                r["iid"].as_u64()?,
+                r["note"].as_str().unwrap_or_default().trim(),
+            ))
+        })
+        .collect();
+    if asked.is_empty() {
+        return Err("requests is missing: a list of {iid, note}".to_owned());
+    }
+    let (_, remote) = host(here)?;
+    // The open ones in one call; another state is asked for one by one.
+    let open = mr::list(&remote).unwrap_or_default();
+    let mut found: Vec<(mr::Mr, &str)> = Vec::new();
+    let mut missing: Vec<u64> = Vec::new();
+    for (iid, note) in asked {
+        if found.iter().any(|(m, _)| m.iid == iid) || missing.contains(&iid) {
+            continue;
+        }
+        match open.iter().find(|m| m.iid == iid) {
+            Some(m) => found.push((m.clone(), note)),
+            None => match mr::one(&remote, iid) {
+                Ok(m) => found.push((m, note)),
+                Err(_) => missing.push(iid),
+            },
+        }
+    }
+    let numbers = |iids: &[u64]| {
+        iids.iter()
+            .map(|n| format!("!{n}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if found.is_empty() {
+        return Err(format!(
+            "None of {} is a merge request of this project.",
+            numbers(&missing)
+        ));
+    }
+    let agent = agents::agent_name();
+    for (m, note) in &found {
+        let mark = Mark {
+            agent: agent.clone(),
+            iid: m.iid,
+            draft: None,
+            note: Some((*note).to_owned()),
+            at: agents::now(),
+        };
+        bus.mark(project, &mark).map_err(|e| e.to_string())?;
+    }
+    let iids = found.iter().map(|(m, _)| m.iid).collect();
+    bus.event(&Event::new(project.to_path_buf(), What::Gathered { iids }))
+        .map_err(|e| e.to_string())?;
+    let mut out = String::from("Under Merge requests in GitLance, in this order:\n");
+    for (m, note) in &found {
+        let _ = write!(out, "- !{} {}", m.iid, m.title);
+        if !note.is_empty() {
+            let _ = write!(out, " — {note}");
+        }
+        out.push('\n');
+    }
+    if !missing.is_empty() {
+        let _ = writeln!(
+            out,
+            "Not merge requests of this project, left out: {}.",
+            numbers(&missing)
+        );
+    }
+    Ok(format!("{}{}", out.trim_end(), super::unseen(bus)))
 }
 
 #[cfg(test)]
@@ -518,7 +609,7 @@ mod tests {
         let marks = bus.marks(here);
         assert_eq!(
             marks.iter().map(|m| (m.iid, m.draft)).collect::<Vec<_>>(),
-            [(7, 9001), (7, 9002)]
+            [(7, Some(9001)), (7, Some(9002))]
         );
         let events = bus.events();
         assert_eq!(events.len(), 2);
@@ -532,6 +623,65 @@ mod tests {
         assert!(read.contains("## Pending comments (2)"), "{read}");
         assert!(read.contains("- 9002 · a.rs:15 · by "), "{read}");
         assert!(!read.contains("by the reviewer"), "{read}");
+        mr::TEST_FIXTURE.with(|f| *f.borrow_mut() = None);
+    }
+
+    #[test]
+    fn gathered_requests_keep_their_order_and_the_others_are_said() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let git = git2::Repository::init(dir.path().join("clone")).unwrap();
+        git.remote("origin", "https://gitlab.example.com/g/p.git")
+            .unwrap();
+        // Two open, one merged; !99 is nowhere.
+        let host = dir.path().join("host");
+        std::fs::create_dir_all(&host).unwrap();
+        let open = json!([{"iid": 7, "title": "Louder"}, {"iid": 8, "title": "Quieter"}]);
+        std::fs::write(host.join("mrs.json"), open.to_string()).unwrap();
+        let merged = json!([{"iid": 5, "title": "Older", "state": "merged"}]);
+        std::fs::write(host.join("mrs-merged.json"), merged.to_string()).unwrap();
+        mr::TEST_FIXTURE.with(|f| *f.borrow_mut() = Some(host.clone()));
+        let bus = Bus::at(dir.path().join("agents"));
+        let here = dir.path().join("clone");
+        let gather = |args: Value| gather_requests(&bus, &here, &here, &args);
+
+        let said = gather(json!({"requests": [
+            {"iid": 8, "note": "2 pending comments"}, {"iid": 99, "note": "?"},
+            {"iid": 5}, {"iid": 8, "note": "again"}, {"iid": 7, "note": "looked, nothing to say"}
+        ]}))
+        .unwrap();
+        assert!(
+            said.contains(
+                "- !8 Quieter — 2 pending comments\n- !5 Older\n- !7 Louder — looked, nothing to say"
+            ),
+            "{said}"
+        );
+        assert!(said.contains("left out: !99."), "{said}");
+        // The app is told, in the order given, with each one's line kept.
+        let events = bus.events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].what,
+            What::Gathered {
+                iids: vec![8, 5, 7]
+            }
+        );
+        let notes: Vec<_> = bus
+            .marks(&here)
+            .into_iter()
+            .map(|m| (m.iid, m.draft, m.note.unwrap_or_default()))
+            .collect();
+        assert_eq!(
+            notes,
+            [
+                (8, None, "2 pending comments".to_owned()),
+                (5, None, String::new()),
+                (7, None, "looked, nothing to say".to_owned())
+            ]
+        );
+        // None at all: nothing is told.
+        assert!(gather(json!({"requests": [{"iid": 99}]})).is_err());
+        assert!(gather(json!({})).is_err());
+        assert_eq!(bus.events().len(), 1);
         mr::TEST_FIXTURE.with(|f| *f.borrow_mut() = None);
     }
 }

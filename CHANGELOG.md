@@ -30,6 +30,9 @@ for someone using the app, not for someone reading the code; the commits follow 
   or GitHub compares it and leaves pending comments on its lines, with GitLance's own token; a line not in the
   diff is refused. They show at once, marked with the agent's name, and a note offers Review, which opens the
   first. They stay pending, only yours to send, delete or submit.
+- **An agent can gather the merge requests it reviewed.** They come in quietly under Merge requests, in its
+  order, each with the agent's mark, how many of its comments wait there and its line on what it did; opened
+  from there, a request starts at the agent's first comment.
 
 ## 1.1.0 — 2026-10-26
 

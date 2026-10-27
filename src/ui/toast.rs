@@ -32,12 +32,14 @@ struct Toast {
 pub(super) enum Act {
     /// Opens request `iid` at the first pending comment `agent` left on it (#150).
     Review { iid: u64, agent: String },
+    /// Opens request `iid`, the first of those `agent` gathered under Merge requests (#148).
+    Gathered { iid: u64, agent: String },
 }
 
 impl Act {
     fn label(&self) -> &'static str {
         match self {
-            Act::Review { .. } => "Review",
+            Act::Review { .. } | Act::Gathered { .. } => "Review",
         }
     }
 }
@@ -88,6 +90,20 @@ impl Workspace {
         let count = before + count;
         self.toast_with(say(count).into(), None, Some((act, count)), true, cx);
         cx.notify();
+    }
+
+    /// The toasts whose button does what `over` picks go now: news another has taken in.
+    pub(super) fn toast_drop(&mut self, over: impl Fn(&Act) -> bool, cx: &mut Context<Self>) {
+        let ids: Vec<u64> = self
+            .toasts
+            .list
+            .iter()
+            .filter(|t| t.act.as_ref().is_some_and(|(a, _)| over(a)))
+            .map(|t| t.id)
+            .collect();
+        for id in ids {
+            self.dismiss(id, cx);
+        }
     }
 
     /// The news of `text` is over: its toast goes now.
@@ -180,6 +196,7 @@ impl Workspace {
         self.dismiss(id, cx);
         match act {
             Act::Review { iid, agent } => self.review_agent(iid, &agent, cx),
+            Act::Gathered { iid, .. } => self.review_gathered(iid, cx),
         }
     }
 
