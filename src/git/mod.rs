@@ -797,6 +797,17 @@ impl Repo {
         Ok(self.inner.find_commit(id)?.parent_id(0)?)
     }
 
+    /// Whether commit `id` is in this clone's objects.
+    pub fn has_commit(&self, id: Oid) -> bool {
+        self.inner.find_commit(id).is_ok()
+    }
+
+    /// Where `base...head` starts, as `compare` and `range_log` read it: their merge base, else
+    /// `base`.
+    pub fn start_of(&self, base: Oid, head: Oid) -> Oid {
+        self.inner.merge_base(base, head).unwrap_or(base)
+    }
+
     pub fn resolve(&self, spec: &str) -> Result<Oid> {
         Ok(self
             .inner
@@ -815,7 +826,7 @@ impl Repo {
         settings: DiffSettings,
     ) -> Result<Comparison> {
         let start = if since_merge_base {
-            self.inner.merge_base(base, head).unwrap_or(base)
+            self.start_of(base, head)
         } else {
             base
         };
@@ -905,7 +916,7 @@ impl Repo {
         since_merge_base: bool,
     ) -> Result<Vec<CommitInfo>> {
         let start = if since_merge_base {
-            self.inner.merge_base(base, head).unwrap_or(base)
+            self.start_of(base, head)
         } else {
             base
         };

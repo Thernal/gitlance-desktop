@@ -8,6 +8,10 @@ for someone using the app, not for someone reading the code; the commits follow 
 
 - **The background fetch runs from the start.** A repository just opened showed Fetch in the background off and
   fetched nothing until it loaded again; it is on from the first moment now, as it has been meant to be since 1.0.1.
+- **A merge request shows its own commits.** It was compared from its target branch as this clone last fetched it,
+  so a request rebased onto newer commits showed every target commit since as its own, and one merged by a
+  fast-forward showed no changes at all. It is now compared from the base and head GitLab or GitHub gives it; a
+  commit of them that is not here yet is fetched once.
 
 ## 1.1.0 — 2026-10-26
 

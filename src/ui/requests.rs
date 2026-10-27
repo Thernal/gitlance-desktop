@@ -2,11 +2,12 @@
 //! branch, and the discussions other people left on one, in the review panel. Read-only; GitLab
 //! only (see `crate::mr`).
 
+use super::nav::Page;
 use super::px;
 use super::roots::Group;
 use super::rows::Row;
 use super::tools::ToolView;
-use super::{Header, Workspace, format, plural, theme};
+use super::{Header, Selection, Workspace, format, plural, theme};
 use crate::git::{RefKind, Repo, Version};
 use crate::mr::{self, Draft, Mr, Pipeline, Thread};
 use gpui::{ClickEvent, Context, FontWeight, SharedString, Task, WeakEntity, div, prelude::*};
@@ -55,6 +56,9 @@ pub struct Requests {
     pub left: Vec<Mr>,
     /// Requests whose head was fetched, its branch not being here: one try each.
     pub heads_fetched: std::collections::HashSet<u64>,
+    /// Requests whose base or head the host compares from was fetched, not being here: one try
+    /// each (#145).
+    pub sides_fetched: std::collections::HashSet<u64>,
     /// Requests read one by one (gone from the open list, or a link's): one try each.
     pub tried: std::collections::HashSet<u64>,
     pub loading: bool,
@@ -88,11 +92,47 @@ pub struct Requests {
     pub award_task: Option<Task<()>>,
     /// The pushes GitLab kept for a request, as versions of this repository.
     pub versions: Option<(u64, Vec<Version>)>,
+    /// The base and head the host compares that request from — its latest push's, as given, here
+    /// or not (#145).
+    pub host: Option<(u64, HostSides)>,
     version_task: Option<Task<()>>,
     /// The token's username: one's own notes are the ones it wrote, and can be edited.
     pub login: Option<String>,
     task: Option<Task<()>>,
     thread_task: Option<Task<()>>,
+}
+
+/// A request's base and head as its host compares it (GitLab: the latest version's `diff_refs`;
+/// GitHub: the base branch's and the head's commits); `None` where the host gave none.
+pub type HostSides = (Option<git2::Oid>, Option<git2::Oid>);
+
+/// How a request is compared once its host's sides are known (#145).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Sides {
+    /// The sides read from this clone already give the host's diff.
+    Same,
+    /// The host's base and head, both here: the request is compared from them.
+    Host(git2::Oid, git2::Oid),
+    /// The host names a commit this clone lacks — the base, the head or both —, to fetch first.
+    Missing { base: bool, head: bool },
+}
+
+/// The host's sides against the ones read from this clone, `here`: the target's tip (a merged
+/// request's merge commit's first parent) and the source branch's. A target not fetched lately
+/// starts the compare at an old merge base, and every target commit after it shows as the
+/// request's; a fast-forward merge puts the head in the target, and nothing shows.
+pub fn sides(repo: &Repo, host: HostSides, here: (git2::Oid, git2::Oid)) -> Sides {
+    let lacks = |id: Option<git2::Oid>| id.is_some_and(|id| !repo.has_commit(id));
+    let (base, head) = (lacks(host.0), lacks(host.1));
+    if base || head {
+        return Sides::Missing { base, head };
+    }
+    let (base, head) = (host.0.unwrap_or(here.0), host.1.unwrap_or(here.1));
+    if head == here.1 && repo.start_of(base, head) == repo.start_of(here.0, here.1) {
+        Sides::Same
+    } else {
+        Sides::Host(base, head)
+    }
 }
 
 impl Requests {
@@ -471,13 +511,18 @@ impl Workspace {
         let Some(root) = self.root.clone() else {
             return;
         };
+        let head = self
+            .requests
+            .find(iid)
+            .map(|m| m.head.clone())
+            .filter(|h| !h.is_empty());
         let news = format!("Fetching {}…", super::words::number(iid));
         self.toast_info(news.clone().into(), cx);
         cx.spawn(async move |this, cx| {
             let read = cx
                 .background_executor()
                 .spawn(async move {
-                    super::fetch::fetch_request(&root, iid, github)?;
+                    super::fetch::fetch_request(&root, iid, github, head.as_deref())?;
                     Repo::open(&root)
                         .and_then(|r| r.branches())
                         .map_err(|e| format!("{e:#}"))
@@ -738,9 +783,11 @@ impl Workspace {
     }
 
     /// Reads the pushes GitLab kept for request `iid`; they become the versions timeline once the
-    /// request's diff is open.
+    /// request's diff is open, and the latest one's base and head are what it is compared from
+    /// (#145).
     fn load_request_versions(&mut self, iid: u64, cx: &mut Context<Self>) {
         self.requests.versions = None;
+        self.requests.host = None;
         let (Some(remote), Some(root)) = (self.web.clone(), self.root.clone()) else {
             return;
         };
@@ -748,22 +795,21 @@ impl Workspace {
             let built = cx
                 .background_executor()
                 .spawn(async move {
-                    let pushes: Vec<_> = mr::versions(&remote, iid)?
+                    let read = mr::versions(&remote, iid)?;
+                    let oid = |sha: &str| git2::Oid::from_str(sha).ok();
+                    let host: Option<HostSides> = read.last().map(|p| (oid(&p.base), oid(&p.head)));
+                    let pushes: Vec<_> = read
                         .iter()
-                        .filter_map(|p| {
-                            Some((
-                                git2::Oid::from_str(&p.head).ok()?,
-                                git2::Oid::from_str(&p.base).ok(),
-                                p.created,
-                            ))
-                        })
+                        .filter_map(|p| Some((oid(&p.head)?, oid(&p.base), p.created)))
                         .collect();
-                    anyhow::Ok(Repo::open(&root)?.versions_from_pushes(&pushes))
+                    anyhow::Ok((Repo::open(&root)?.versions_from_pushes(&pushes), host))
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if let Ok(list) = built {
+                if let Ok((list, host)) = built {
                     this.requests.versions = Some((iid, list));
+                    this.requests.host = host.map(|h| (iid, h));
+                    this.follow_host_sides(iid, cx);
                     this.apply_mr_versions();
                     // Two versions of it waited for them (#71).
                     this.finish_pending(cx);
@@ -773,6 +819,137 @@ impl Workspace {
             })
             .ok();
         }));
+    }
+
+    /// Request `iid` is compared from the base and head its host gives, once they are known
+    /// (#145): the sides waiting for its branch to load take them, or the open request is compared
+    /// again when its diff would differ. A side that is not here is fetched first, once.
+    fn follow_host_sides(&mut self, iid: u64, cx: &mut Context<Self>) {
+        let Some(host) = self
+            .requests
+            .host
+            .filter(|(i, _)| *i == iid)
+            .map(|(_, h)| h)
+        else {
+            return;
+        };
+        let waiting = self.pending_compare.as_ref().is_some_and(|p| p.2 == iid);
+        let open = if waiting {
+            self.pending_compare.clone()
+        } else {
+            self.open_request.clone().filter(|o| o.2 == iid)
+        };
+        let (Some((base, head, _)), Some(root)) = (open, self.root.clone()) else {
+            return;
+        };
+        let Ok(repo) = Repo::open(&root) else {
+            return;
+        };
+        match sides(&repo, host, (base.1, head.1)) {
+            Sides::Same => {}
+            Sides::Missing { base, head } => {
+                if self.requests.sides_fetched.insert(iid) {
+                    self.fetch_request_sides(iid, base, head, cx);
+                }
+            }
+            Sides::Host(b, h) => {
+                let (base, head) = ((base.0, b), (head.0, h));
+                if waiting {
+                    self.pending_compare = Some((base, head, iid));
+                    return;
+                }
+                self.open_request = Some((base.clone(), head.clone(), iid));
+                // The Commits tab is read again; a commit or a run picked in it stays picked.
+                let id = |ix: usize| self.commits.get(ix).map(|c| c.id);
+                let picked = match self.selection {
+                    Selection::Commit(ix) => id(ix).map(|a| (a, a)),
+                    Selection::Commits { newest, oldest } => id(newest).zip(id(oldest)),
+                    _ => None,
+                };
+                self.show_request_commits(&base, &head);
+                let at = |id: git2::Oid| self.commits.iter().position(|c| c.id == id);
+                if let Some((a, b)) = picked
+                    && let (Some(a), Some(b)) = (at(a), at(b))
+                {
+                    self.selection = match self.selection {
+                        Selection::Commit(_) => Selection::Commit(a),
+                        _ => Selection::Commits {
+                            newest: a,
+                            oldest: b,
+                        },
+                    };
+                }
+                let whole = self.request_loaded(iid)
+                    || (self.diff.is_none() && self.nav_page() == Some(&Page::Request(iid)));
+                if self.selection == Selection::None && whole {
+                    self.run_compare(base, head, true, Some(iid), cx);
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    /// Fetches what request `iid`'s host compares it from and this clone lacks — its target
+    /// branch for the base, its head for the head —, then compares it from them; says why when
+    /// the fetch fails.
+    fn fetch_request_sides(&mut self, iid: u64, base: bool, head: bool, cx: &mut Context<Self>) {
+        let (Some(root), Some(m)) = (self.root.clone(), self.requests.find(iid)) else {
+            return;
+        };
+        let target = m.target.clone();
+        let github = self.web.as_ref().is_some_and(|w| w.github);
+        let sha = self
+            .requests
+            .host
+            .and_then(|(_, h)| h.1)
+            .map(|h| h.to_string());
+        let number = super::words::number(iid);
+        let news = if base {
+            format!("Fetching {target} for {number}…")
+        } else {
+            format!("Fetching {number}…")
+        };
+        self.toast_info(news.clone().into(), cx);
+        cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    if base {
+                        super::fetch::fetch_branch(&root, &target)?;
+                    }
+                    if head {
+                        super::fetch::fetch_request(&root, iid, github, sha.as_deref())?;
+                    }
+                    Repo::open(&root)
+                        .and_then(|r| r.branches())
+                        .map_err(|e| format!("{e:#}"))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.toast_over(&news, cx);
+                match read {
+                    Ok(branches) => {
+                        let open = this
+                            .branch
+                            .and_then(|ix| this.branches.get(ix))
+                            .map(|b| b.refname.clone());
+                        this.branches = branches;
+                        this.branch =
+                            open.and_then(|r| this.branches.iter().position(|b| b.refname == r));
+                        this.follow_host_sides(iid, cx);
+                    }
+                    Err(e) => {
+                        this.error = Some(
+                            format!("{number}: what the host compares it from could not be fetched — {e}")
+                                .into(),
+                        );
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Shows GitLab's versions of the open request in the timeline, when there is more than one.
@@ -2357,5 +2534,79 @@ mod tests {
         // 0 needs review, 1 current, 2 reviewed, 3 new to you: on down to 3, not back up to 0
         // (#136).
         assert_eq!(next_to_review(&[true, true, false, true], Some(1)), Some(3));
+    }
+
+    /// `n` commits in a line from `parent`, each a file of its own; `tag` keeps two lines from
+    /// the same parent apart.
+    fn line(
+        repo: &git2::Repository,
+        parent: Option<git2::Oid>,
+        n: usize,
+        tag: &str,
+    ) -> Vec<git2::Oid> {
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        let mut out = Vec::new();
+        let mut parent = parent;
+        for i in 0..n {
+            let mut tree = repo.treebuilder(None).unwrap();
+            let blob = repo.blob(format!("{tag} {i}").as_bytes()).unwrap();
+            tree.insert(format!("f{i}"), blob, 0o100644).unwrap();
+            let tree = repo.find_tree(tree.write().unwrap()).unwrap();
+            let parents: Vec<_> = parent
+                .iter()
+                .map(|p| repo.find_commit(*p).unwrap())
+                .collect();
+            let parents: Vec<_> = parents.iter().collect();
+            let id = repo.commit(None, &sig, &sig, "c", &tree, &parents).unwrap();
+            out.push(id);
+            parent = Some(id);
+        }
+        out
+    }
+
+    #[test]
+    fn a_request_is_compared_from_the_hosts_sides_when_this_clone_would_differ() {
+        use super::{Sides, sides};
+        let dir = tempfile::TempDir::new().unwrap();
+        let git = git2::Repository::init(dir.path()).unwrap();
+        // The target here is at `a`; on the host it went on to `c`, the request was rebased on
+        // it (`d`), and later the target went on again (`e`).
+        let main = line(&git, None, 3, "main");
+        let (a, c) = (main[0], main[2]);
+        let d = line(&git, Some(c), 1, "request")[0];
+        let e = line(&git, Some(c), 1, "target")[0];
+        let repo = crate::git::Repo::open(dir.path()).unwrap();
+
+        // A target not fetched since: every target commit after `a` would be the request's.
+        assert_eq!(sides(&repo, (Some(c), Some(d)), (a, d)), Sides::Host(c, d));
+        // Up to date, or ahead: the same merge base, nothing to load again.
+        assert_eq!(sides(&repo, (Some(c), Some(d)), (c, d)), Sides::Same);
+        assert_eq!(sides(&repo, (Some(c), Some(d)), (e, d)), Sides::Same);
+        // Merged by a fast-forward: the head is in the target, which shows nothing.
+        let merged = line(&git, Some(d), 1, "merged")[0];
+        assert_eq!(
+            sides(&repo, (Some(c), Some(d)), (merged, d)),
+            Sides::Host(c, d)
+        );
+        // The source branch here is behind the host's head.
+        assert_eq!(sides(&repo, (Some(c), Some(e)), (c, d)), Sides::Host(c, e));
+        // What the host names is not here: fetched first.
+        let gone = git2::Oid::from_str("1234567890123456789012345678901234567890").unwrap();
+        assert_eq!(
+            sides(&repo, (Some(gone), Some(d)), (a, d)),
+            Sides::Missing {
+                base: true,
+                head: false
+            }
+        );
+        assert_eq!(
+            sides(&repo, (Some(c), Some(gone)), (a, d)),
+            Sides::Missing {
+                base: false,
+                head: true
+            }
+        );
+        // The host gave no base: the target here, with the host's head.
+        assert_eq!(sides(&repo, (None, Some(d)), (c, d)), Sides::Same);
     }
 }

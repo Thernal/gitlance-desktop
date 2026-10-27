@@ -2,7 +2,8 @@
 //! credential helpers and VPN routes work unchanged), when the window gains focus and every few
 //! minutes. It is the one place GitLance writes to a repository: remote-tracking refs and objects,
 //! and a merge request's head fetched to `refs/gitlance/requests/<n>` when its branch is not here
-//! (#114); nothing else. The auto-refresh then sees the moved refs and marks new versions.
+//! (#114) or its head the host compares is not (#145); nothing else. The auto-refresh then sees
+//! the moved refs and marks new versions.
 
 use super::px;
 use super::{Workspace, format, theme};
@@ -39,19 +40,42 @@ fn run(root: &Path) -> Result<(), String> {
 }
 
 /// Request `iid`'s head, from where the host keeps it, to `git::request_ref` (#114): a merged or
-/// closed request whose branch is gone, or a fork's. Blocks; run it off the main thread.
-pub(super) fn fetch_request(root: &Path, iid: u64, github: bool) -> Result<(), String> {
-    let remote = crate::git::Repo::open(root)
-        .ok()
-        .and_then(|r| r.web_remote_name())
-        .ok_or_else(|| "The repository has no remote".to_owned())?;
+/// closed request whose branch is gone, or a fork's. GitLab may delete that ref a while after the
+/// merge; then `head`, the commit the host names, is asked for itself (#145). Blocks; run it off
+/// the main thread.
+pub(super) fn fetch_request(
+    root: &Path,
+    iid: u64,
+    github: bool,
+    head: Option<&str>,
+) -> Result<(), String> {
+    let remote = web_remote(root)?;
     let from = if github {
         format!("refs/pull/{iid}/head")
     } else {
         format!("refs/merge-requests/{iid}/head")
     };
-    let spec = format!("+{from}:{}", crate::git::request_ref(iid));
+    let to = crate::git::request_ref(iid);
+    let spec = format!("+{from}:{to}");
+    git_fetch(root, &[&remote, &spec]).or_else(|e| match head {
+        Some(sha) => git_fetch(root, &[&remote, &format!("+{sha}:{to}")]),
+        None => Err(e),
+    })
+}
+
+/// Branch `name` of the project's remote, to its remote-tracking ref: a request's target whose
+/// base the host compares from is not here (#145). Blocks; run it off the main thread.
+pub(super) fn fetch_branch(root: &Path, name: &str) -> Result<(), String> {
+    let remote = web_remote(root)?;
+    let spec = format!("+refs/heads/{name}:refs/remotes/{remote}/{name}");
     git_fetch(root, &[&remote, &spec])
+}
+
+fn web_remote(root: &Path) -> Result<String, String> {
+    crate::git::Repo::open(root)
+        .ok()
+        .and_then(|r| r.web_remote_name())
+        .ok_or_else(|| "The repository has no remote".to_owned())
 }
 
 /// `git fetch --quiet` with `args` in `root`, given up after `TIMEOUT`.
