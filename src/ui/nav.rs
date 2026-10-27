@@ -34,8 +34,9 @@ pub enum Page {
     Versions(String, usize, usize),
     /// What is not committed, against `HEAD`.
     WorkingTree,
-    /// Two refs compared (⌥⌘C): what the head changed against the base.
-    Compare((String, Oid), (String, Oid)),
+    /// Two refs compared (⌥⌘C): what the head changed against the base, since their merge base
+    /// or directly (#147).
+    Compare((String, Oid), (String, Oid), bool),
     Request(u64),
     /// A commit of a request.
     RequestCommit(u64, Oid),
@@ -105,7 +106,11 @@ impl Page {
             Page::BranchCommits(refname, a, b) => format!("branch-commits:{a}:{b}:{refname}"),
             Page::Versions(refname, a, b) => format!("versions:{a}:{b}:{refname}"),
             Page::WorkingTree => "working-tree".to_owned(),
-            Page::Compare((base, a), (head, b)) => format!("compare:{a}:{b}:{base}:{head}"),
+            // Direct has a kind of its own: a line written before it reads as since the merge base.
+            Page::Compare((base, a), (head, b), since) => {
+                let kind = if *since { "compare" } else { "compare-direct" };
+                format!("{kind}:{a}:{b}:{base}:{head}")
+            }
             Page::Request(iid) => format!("request:{iid}"),
             Page::RequestCommit(iid, id) => format!("request-commit:{iid}:{id}"),
             Page::RequestCommits(iid, a, b) => format!("request-commits:{iid}:{a}:{b}"),
@@ -134,9 +139,10 @@ impl Page {
                 Page::Versions(next()?.to_owned(), a, b)
             }
             "working-tree" => Page::WorkingTree,
-            "compare" => {
+            "compare" | "compare-direct" => {
                 let (a, b) = (Oid::from_str(next()?).ok()?, Oid::from_str(next()?).ok()?);
-                Page::Compare((next()?.to_owned(), a), (next()?.to_owned(), b))
+                let (base, head) = (next()?.to_owned(), next()?.to_owned());
+                Page::Compare((base, a), (head, b), kind == "compare")
             }
             "request" => Page::Request(rest.parse().ok()?),
             "request-commit" => {
@@ -431,9 +437,15 @@ impl Workspace {
                 (Selection::None, Some(Header::Compare { .. })) if self.branch_compare() => {
                     Page::Branch(refname)
                 }
-                (Selection::None, Some(Header::Compare { base, head, .. })) => {
-                    Page::Compare(base.clone(), head.clone())
-                }
+                (
+                    Selection::None,
+                    Some(Header::Compare {
+                        base,
+                        head,
+                        since_merge_base,
+                        ..
+                    }),
+                ) => Page::Compare(base.clone(), head.clone(), *since_merge_base),
                 _ => Page::Branch(refname),
             },
         )
@@ -782,7 +794,7 @@ impl Workspace {
                 }
             }
             Page::WorkingTree => self.select_working_tree(cx),
-            Page::Compare(base, head) => self.run_compare(base, head, true, None, cx),
+            Page::Compare(base, head, since) => self.run_compare(base, head, since, None, cx),
             Page::Request(iid) => {
                 if same_item {
                     if let Some((base, head, iid)) = self.open_request.clone() {
@@ -1274,7 +1286,8 @@ mod tests {
             Page::BranchCommit("refs/heads/feature/x".into(), id),
             Page::Versions("refs/remotes/origin/x".into(), 1, 3),
             Page::WorkingTree,
-            Page::Compare(("main".into(), id), ("origin/x".into(), id)),
+            Page::Compare(("main".into(), id), ("origin/x".into(), id), true),
+            Page::Compare(("main".into(), id), ("origin/x".into(), id), false),
             Page::Request(398),
             Page::RequestCommit(398, id),
             Page::RequestVersions(398, 0, 2),
@@ -1282,6 +1295,15 @@ mod tests {
         for page in pages {
             assert_eq!(Page::parse(&page.key()), Some(page));
         }
+        // A compare kept before Direct was kept with it is since the merge base (#147).
+        assert_eq!(
+            Page::parse(&format!("compare:{id}:{id}:main:origin/x")),
+            Some(Page::Compare(
+                ("main".into(), id),
+                ("origin/x".into(), id),
+                true
+            ))
+        );
         let mut nav = Nav {
             space: Space::Requests,
             ..Nav::default()

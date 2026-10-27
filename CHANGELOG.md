@@ -12,6 +12,9 @@ for someone using the app, not for someone reading the code; the commits follow 
   so a request rebased onto newer commits showed every target commit since as its own, and one merged by a
   fast-forward showed no changes at all. It is now compared from the base and head GitLab or GitHub gives it; a
   commit of them that is not here yet is fetched once.
+- **A comparison stays as you left it.** Its Swap, Direct and Use origin/… were undone when you came back to it
+  from another space, and its side panel listed the commits and versions of the branch or merge request opened
+  before it. It now comes back as it was, with only its own changes beside it; the working tree too.
 
 ## 1.1.0 — 2026-10-26
 

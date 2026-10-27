@@ -401,7 +401,7 @@ impl Workspace {
                 "Working tree".to_owned(),
                 false,
             ),
-            Some(Page::Compare(base, head)) => (
+            Some(Page::Compare(base, head, _)) => (
                 vec![Crumb::up("Branches", None)],
                 format!("{} … {}", base.0, head.0),
                 true,

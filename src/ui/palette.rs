@@ -1099,7 +1099,7 @@ impl Workspace {
                     Some(Kind::Head(base)) => {
                         self.palette = None;
                         let head = (name, id);
-                        self.arrive(super::nav::Page::Compare(base.clone(), head.clone()));
+                        self.arrive(super::nav::Page::Compare(base.clone(), head.clone(), true));
                         self.run_compare(base, head, true, None, cx);
                     }
                     _ => self.palette = None,
@@ -1201,6 +1201,15 @@ impl Workspace {
         // The whole request is its page; a commit or versions of it were (#71).
         if request.is_some() {
             self.record();
+        }
+        // A comparison on screen is what it shows: Swap, Direct and Use <upstream> write it, so
+        // coming back to it, ⌘[ ⌘] and nav.txt have it as it was left (#147).
+        let page = super::nav::Page::Compare(base.clone(), head.clone(), since_merge_base);
+        if request.is_none()
+            && matches!(self.nav_page(), Some(super::nav::Page::Compare(..)))
+            && self.nav_page() != Some(&page)
+        {
+            self.arrive(page);
         }
         let settings = self.settings();
         self.load_diff(None, cx, move || {

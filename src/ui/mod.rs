@@ -1149,6 +1149,8 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                     .split(',')
                     .filter_map(|s| Some((s.to_owned(), repo.as_ref()?.resolve(s).ok()?)));
                 if let (Some(base), Some(head)) = (sides.next(), sides.next()) {
+                    // As ⌥⌘C opens it: a comparison page of Branches.
+                    this.arrive(nav::Page::Compare(base.clone(), head.clone(), true));
                     this.run_compare(base, head, true, None, cx);
                 }
             });

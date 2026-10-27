@@ -152,12 +152,20 @@ impl Workspace {
                 page,
                 Some(Page::Branch(_) | Page::BranchCommit(..) | Page::BranchCommits(..))
             );
-        self.versions.len() > 1 && !commit_level && !branch
+        self.versions.len() > 1 && !commit_level && !branch && !self.loose_page()
     }
 
-    /// The panel shows the commits: on a page without a Commits tab (the main line).
-    fn side_commits(&self) -> bool {
-        self.item_sections().is_empty()
+    /// The panel shows the commits: on a page without a Commits tab (the main line), not on a
+    /// comparison or the working tree.
+    pub(super) fn side_commits(&self) -> bool {
+        self.item_sections().is_empty() && !self.loose_page()
+    }
+
+    /// A comparison or the working tree: no branch's page, so the versions and commits loaded
+    /// are whatever branch or request was opened before it, and its panel holds only its changes
+    /// (#147).
+    fn loose_page(&self) -> bool {
+        matches!(self.nav_page(), Some(Page::Compare(..) | Page::WorkingTree))
     }
 
     /// The panel's sections on this page as icons, where it folds into the menu's column (#80):
