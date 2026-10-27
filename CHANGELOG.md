@@ -46,6 +46,10 @@ for someone using the app, not for someone reading the code; the commits follow 
   apart from your comments, with its summary over the diff, wherever you open those changes: the working tree,
   its branch, a comparison or a merge request of that branch. Answer on a note writes a comment for the agent on
   that line; dismiss one, or all of them. They stay on this Mac and never go to GitLab or GitHub.
+- **An agent can draft a merge request.** It writes the title and description from what it did, with reviewers
+  and labels if it knows them, and a note offers Open: the New merge request card for its branch, filled in, for
+  you to check, edit and create. Nothing is created until you do, and GitLance never pushes; a branch only on
+  your Mac says to push it first, as before.
 
 ## 1.1.0 — 2026-10-26
 

@@ -1,9 +1,11 @@
 //! The merge request tools (#150): an agent reads a request as GitLance compares it and leaves
 //! pending comments on its lines. The host is called with GitLance's own token (`crate::mr`), so
 //! the agent needs none; the app is told through the Bus. Nothing is published: a pending comment
-//! is seen by the reviewer alone until they submit the review, and submitting stays theirs.
+//! is seen by the reviewer alone until they submit the review, and submitting stays theirs. A
+//! request the agent drafts (#152) opens in the app's New merge request card; the reviewer creates
+//! it.
 
-use crate::agents::{self, Bus, Event, Mark, What};
+use crate::agents::{self, Bus, Event, Mark, RequestDraft, What};
 use crate::git::{DiffSettings, FileDiff, LineKind, Repo, WebRemote};
 use crate::mr;
 use git2::Oid;
@@ -512,6 +514,135 @@ pub fn gather_requests(
     Ok(format!("{}{}", out.trim_end(), super::unseen(bus)))
 }
 
+/// `draft_request` (#152): a merge request for a branch, drafted by the agent and opened in the New
+/// merge request card, filled in, for the reviewer to check and create. Read here: the branch has
+/// commits its target has not; one not on origin, or with commits origin has not, is said, as the
+/// card says it. Nothing is created, sent or pushed.
+pub fn draft_request(
+    bus: &Bus,
+    here: &Path,
+    project: &Path,
+    args: &Value,
+) -> Result<String, String> {
+    let repo =
+        Repo::open(here).map_err(|_| format!("{} is not in a git repository", here.display()))?;
+    let text = |key: &str| args[key].as_str().unwrap_or_default().trim().to_owned();
+    // A side by the name the host knows: `origin/x` is `x`.
+    let named = |key: &str| {
+        let name = text(key);
+        name.strip_prefix("origin/")
+            .map(str::to_owned)
+            .unwrap_or(name)
+    };
+    let list = |key: &str| {
+        let mut out: Vec<String> = args[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(|s| s.trim().trim_start_matches('@').to_owned())
+            .filter(|s| !s.is_empty())
+            .collect();
+        out.dedup();
+        out
+    };
+    let title = text("title");
+    if title.is_empty() {
+        return Err("title is missing: the merge request's title".to_owned());
+    }
+    let source = match named("source") {
+        s if !s.is_empty() => s,
+        _ => repo
+            .head_branch()
+            .ok_or("source is missing: nothing is checked out here, so name the branch")?,
+    };
+    let target = match named("target") {
+        t if !t.is_empty() => t,
+        _ => repo
+            .default_branch()
+            .ok_or("target is missing: name the branch it merges into")?,
+    };
+    if source == target {
+        return Err(format!(
+            "{source} cannot merge into itself: name the branch it merges into."
+        ));
+    }
+    // Each side here, on origin, or both.
+    let tips = |name: &str| {
+        (
+            repo.resolve(&format!("refs/heads/{name}")).ok(),
+            repo.resolve(&format!("refs/remotes/origin/{name}")).ok(),
+        )
+    };
+    let (mine, pushed) = tips(&source);
+    let Some(head) = mine.or(pushed) else {
+        return Err(format!(
+            "{source} is not a branch here: name one that is, or fetch it first."
+        ));
+    };
+    let (target_here, target_pushed) = tips(&target);
+    let Some(base) = target_pushed.or(target_here) else {
+        return Err(format!(
+            "{target} is not a branch here: name the branch it merges into."
+        ));
+    };
+    let commits = repo
+        .range_log(base, head, true)
+        .map_err(|e| format!("{e:#}"))?
+        .len();
+    if commits == 0 {
+        return Err(format!(
+            "{source} has no commits that {target} has not: nothing to merge."
+        ));
+    }
+    // One already open for the pair is the reviewer's to open, not to create again; asked only
+    // when the host answers.
+    if let Ok((_, remote)) = host(here)
+        && let Ok(open) = mr::list(&remote)
+        && let Some(m) = open
+            .iter()
+            .find(|m| m.source == source && m.target == target)
+    {
+        return Err(format!(
+            "!{} is already open for {source} → {target} ({}): nothing to draft. Read it with get_request.",
+            m.iid, m.title
+        ));
+    }
+    let unpushed = match (mine, pushed) {
+        (Some(mine), Some(pushed)) if mine != pushed => repo
+            .range_log(pushed, mine, true)
+            .map(|log| log.len())
+            .unwrap_or(0),
+        _ => 0,
+    };
+    let draft = RequestDraft {
+        source: source.clone(),
+        target: target.clone(),
+        title: title.clone(),
+        description: text("description"),
+        reviewers: list("reviewers"),
+        labels: list("labels"),
+    };
+    bus.event(&Event::new(project.to_path_buf(), What::NewRequest(draft)))
+        .map_err(|e| e.to_string())?;
+    let mut out = format!(
+        "The New merge request card waits in GitLance with your draft: {source} → {target}, \"{title}\", {commits} commit(s). Nothing was created or sent: the reviewer checks it, edits it and creates it."
+    );
+    // GitLance never pushes: the host makes the request from what origin has.
+    if pushed.is_none() {
+        let _ = write!(
+            out,
+            " {source} is only on this Mac: the card asks for it to be pushed first, and GitLance never pushes it."
+        );
+    } else if unpushed > 0 {
+        let _ = write!(
+            out,
+            " {unpushed} commit(s) of {source} are not on origin yet: the request will not have them until they are pushed."
+        );
+    }
+    Ok(format!("{out}{}", super::unseen(bus)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,5 +814,113 @@ mod tests {
         assert!(gather(json!({})).is_err());
         assert_eq!(bus.events().len(), 1);
         mr::TEST_FIXTURE.with(|f| *f.borrow_mut() = None);
+    }
+
+    #[test]
+    fn a_drafted_request_names_its_branches_and_creates_nothing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let clone = dir.path().join("clone");
+        let git = git2::Repository::init(&clone).unwrap();
+        let base = commit(
+            &git,
+            "refs/remotes/origin/main",
+            None,
+            &[("a.rs", "one\n".into())],
+        );
+        let pushed = commit(
+            &git,
+            "refs/remotes/origin/feature",
+            Some(base),
+            &[("a.rs", "two\n".into())],
+        );
+        git.reference("refs/heads/feature", pushed, true, "")
+            .unwrap();
+        let local = commit(
+            &git,
+            "refs/heads/solo",
+            Some(base),
+            &[("a.rs", "three\n".into())],
+        );
+        git.set_head("refs/heads/solo").unwrap();
+        let bus = Bus::at(dir.path().join("agents"));
+        let here = clone.as_path();
+        let draft = |args: Value| draft_request(&bus, here, here, &args);
+
+        let said = draft(json!({
+            "source": "origin/feature",
+            "target": "main",
+            "title": "Say two",
+            "description": "Because.",
+            "reviewers": ["@ann", "bob", " "],
+            "labels": ["ui"],
+        }))
+        .unwrap();
+        assert!(
+            said.starts_with("The New merge request card waits in GitLance with your draft: feature → main, \"Say two\", 1 commit(s). Nothing was created"),
+            "{said}"
+        );
+        assert!(!said.contains("pushed"), "{said}");
+        let events = bus.events();
+        assert_eq!(
+            events[0].what,
+            What::NewRequest(RequestDraft {
+                source: "feature".into(),
+                target: "main".into(),
+                title: "Say two".into(),
+                description: "Because.".into(),
+                reviewers: vec!["ann".into(), "bob".into()],
+                labels: vec!["ui".into()],
+            })
+        );
+        // The branch checked out here, only on this Mac: said, as the card says it.
+        let said = draft(json!({"target": "main", "title": "Say three"})).unwrap();
+        assert!(said.contains("solo → main"), "{said}");
+        assert!(said.contains("solo is only on this Mac"), "{said}");
+        // Commits origin has not yet.
+        let ahead = commit(
+            &git,
+            "refs/heads/feature",
+            Some(pushed),
+            &[("a.rs", "four\n".into())],
+        );
+        assert_ne!(ahead, local);
+        let said = draft(json!({"source": "feature", "target": "main", "title": "t"})).unwrap();
+        assert!(
+            said.contains("1 commit(s) of feature are not on origin yet"),
+            "{said}"
+        );
+        // No title, no branch, nothing to merge, itself.
+        assert!(
+            draft(json!({"source": "feature"}))
+                .unwrap_err()
+                .contains("title")
+        );
+        let none = draft(json!({"source": "nope", "target": "main", "title": "t"})).unwrap_err();
+        assert!(none.contains("nope is not a branch here"), "{none}");
+        let same = draft(json!({"source": "main", "target": "feature", "title": "t"})).unwrap_err();
+        assert!(same.contains("nothing to merge"), "{same}");
+        assert!(
+            draft(json!({"source": "main", "target": "origin/main", "title": "t"}))
+                .unwrap_err()
+                .contains("into itself")
+        );
+        assert_eq!(bus.events().len(), 3);
+        // A request open for the pair on the host: said, not drafted again.
+        git.remote("origin", "https://gitlab.example.com/g/p.git")
+            .unwrap();
+        let host = dir.path().join("host");
+        std::fs::create_dir_all(&host).unwrap();
+        let open = json!([{"iid": 9, "title": "Say two", "source_branch": "feature",
+            "target_branch": "main", "sha": pushed.to_string(),
+            "author": {"name": "Ann", "username": "ann"}}]);
+        std::fs::write(host.join("mrs.json"), open.to_string()).unwrap();
+        mr::TEST_FIXTURE.with(|f| *f.borrow_mut() = Some(host.clone()));
+        let twice =
+            draft(json!({"source": "feature", "target": "main", "title": "t"})).unwrap_err();
+        assert!(
+            twice.starts_with("!9 is already open for feature → main"),
+            "{twice}"
+        );
+        assert_eq!(bus.events().len(), 3);
     }
 }

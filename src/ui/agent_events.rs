@@ -8,7 +8,8 @@ use super::Workspace;
 use super::goto::Spot;
 use super::nav::{Item, Page};
 use super::toast::Act;
-use crate::agents::{Bus, Mark, What};
+use crate::agents::{Bus, Mark, RequestDraft, What};
+use crate::git::RefKind;
 use gpui::Context;
 use std::path::Path;
 
@@ -40,6 +41,7 @@ impl Workspace {
                     }
                 }
                 What::Notes { .. } => self.take_agent_notes(event, cx),
+                What::NewRequest(draft) => self.agent_drafted(event.agent, draft, cx),
                 What::Open => {}
             }
         }
@@ -128,6 +130,73 @@ impl Workspace {
             }
         };
         self.toast_act(act, 1, say, cx);
+    }
+
+    /// `agent` drafted a merge request (#152): kept for its branch, over an earlier draft for it;
+    /// the branch a row under Branches, quietly, and a toast whose Open shows the card filled in.
+    fn agent_drafted(&mut self, agent: String, draft: RequestDraft, cx: &mut Context<Self>) {
+        let said = format!("{} → {}", draft.source, draft.target);
+        let source = draft.source.clone();
+        self.agent_requests.retain(|(_, d)| d.source != source);
+        self.agent_requests.push((agent.clone(), draft));
+        if let Some(ix) = self.draft_branch(&source) {
+            self.open_quietly(Page::Branch(self.branches[ix].refname.clone()));
+            self.save_nav();
+        }
+        let act = Act::Drafted {
+            source,
+            agent: agent.clone(),
+        };
+        let say = move |_| format!("{agent} drafted a merge request: {said}");
+        self.toast_act(act, 1, say, cx);
+    }
+
+    /// The branch a drafted request is for: here, else as origin has it.
+    fn draft_branch(&self, source: &str) -> Option<usize> {
+        let at = |kind: RefKind, name: &str| {
+            self.branches
+                .iter()
+                .position(|b| b.kind == kind && b.name == name)
+        };
+        at(RefKind::Local, source).or_else(|| at(RefKind::Remote, &format!("origin/{source}")))
+    }
+
+    /// Open on that toast: the branch's page, and on it the New merge request card with the
+    /// draft once the page is in.
+    pub(super) fn open_agent_draft(&mut self, source: String, cx: &mut Context<Self>) {
+        let Some(ix) = self.draft_branch(&source) else {
+            self.error = Some(format!("{source} is not a branch here any more.").into());
+            return cx.notify();
+        };
+        let page = Page::Branch(self.branches[ix].refname.clone());
+        let Some(item) = page.item() else {
+            return;
+        };
+        self.open_quietly(page);
+        self.save_nav();
+        self.show_open(&item, cx);
+        self.create_waiting = Some(source);
+        self.open_waiting_draft(cx);
+    }
+
+    /// The card Open asked for, when its branch's page is in (`select_branch`); another page
+    /// shown meanwhile lets it go.
+    pub(super) fn open_waiting_draft(&mut self, cx: &mut Context<Self>) {
+        let Some(ix) = self
+            .create_waiting
+            .as_deref()
+            .and_then(|source| self.draft_branch(source))
+        else {
+            self.create_waiting = None;
+            return;
+        };
+        if self.branch == Some(ix) && self.branch_task.is_some() {
+            return;
+        }
+        self.create_waiting = None;
+        if self.branch == Some(ix) {
+            self.open_create(Some(ix), cx);
+        }
     }
 
     /// Show on that toast: the row's page on screen.

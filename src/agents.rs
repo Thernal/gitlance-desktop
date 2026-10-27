@@ -156,6 +156,24 @@ pub enum What {
         notes: Vec<crate::notes::Note>,
         open: bool,
     },
+    /// A merge request drafted for the reviewer to check and create (`draft_request`, #152).
+    NewRequest(RequestDraft),
+}
+
+/// An agent's draft of a merge request (#152): the New merge request card opens with it filled in;
+/// nothing is created until the reviewer creates it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestDraft {
+    /// The branch it merges, as the host names it: `feature-x`, not `origin/feature-x`.
+    pub source: String,
+    pub target: String,
+    pub title: String,
+    pub description: String,
+    /// Usernames, without `@`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reviewers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 /// Something an agent left on a request that the app tells apart from the reviewer's own: a

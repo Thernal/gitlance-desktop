@@ -172,11 +172,23 @@ impl Workspace {
         let on_origin = self.branches.iter().any(|b| {
             b.kind == RefKind::Remote && b.name.split_once('/').is_some_and(|(_, n)| n == source)
         });
-        let target = ["main", "master"]
-            .into_iter()
-            .find(|t| self.remote_tip(t).is_some())
-            .unwrap_or("main")
-            .to_owned();
+        // An agent's draft for this branch (#152) is what the form starts from.
+        let drafted = self
+            .agent_requests
+            .iter()
+            .find(|(_, d)| d.source == source)
+            .cloned();
+        let target = drafted
+            .as_ref()
+            .map(|(_, d)| d.target.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| {
+                ["main", "master"]
+                    .into_iter()
+                    .find(|t| self.remote_tip(t).is_some())
+                    .unwrap_or("main")
+                    .to_owned()
+            });
         let repo = Repo::open(&root).ok();
         let commit = repo.as_ref().and_then(|r| r.commit(tip).ok());
         let title = commit
@@ -248,6 +260,22 @@ impl Workspace {
                 n.started_from = Some("from the commit's message".to_owned());
             }
             n.started = n.description.clone();
+            // The agent's words over the template's; `started` stays the template, so a template
+            // read later leaves them.
+            if let Some((agent, d)) = drafted {
+                if !d.title.is_empty() {
+                    n.title = d.title;
+                }
+                if !d.description.is_empty() {
+                    n.description = d.description;
+                    n.started_from = Some(format!("drafted by {agent}"));
+                }
+                n.labels = d.labels;
+                if !d.reviewers.is_empty() {
+                    n.reviewers = d.reviewers;
+                    n.reviewers_touched = true;
+                }
+            }
         }
         self.read_create_lists(web, cx);
         cx.notify();
@@ -679,6 +707,9 @@ impl Workspace {
                     Ok(request) => {
                         let iid = request.iid;
                         this.newreq = None;
+                        // Created: an agent's draft for the branch is done with (#152).
+                        this.agent_requests
+                            .retain(|(_, d)| d.source != request.source);
                         this.requests.list.insert(0, request);
                         this.layout.show_sidebar = true;
                         this.select_request(iid, cx);

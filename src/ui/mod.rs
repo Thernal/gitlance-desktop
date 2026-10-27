@@ -1644,6 +1644,11 @@ pub struct Workspace {
     /// Agents' notes on the lines of their changes (#151), and where those whose line changed
     /// since went, by note id.
     agent_notes: Vec<crate::notes::Notes>,
+    /// Merge requests agents drafted (#152), with who did: the last one for each branch, until
+    /// the reviewer creates it.
+    agent_requests: Vec<(String, crate::agents::RequestDraft)>,
+    /// The branch whose drafted request opens once its page is in (Open on its toast).
+    create_waiting: Option<String>,
     note_lines: std::collections::HashMap<u64, u32>,
     note_task: Option<Task<()>>,
     tabs: shell::TabModel,
@@ -1904,6 +1909,8 @@ impl Workspace {
             agent_lines: Default::default(),
             agent_task: None,
             agent_notes: Vec::new(),
+            agent_requests: Vec::new(),
+            create_waiting: None,
             note_lines: Default::default(),
             note_task: None,
             tabs: Default::default(),
@@ -2213,6 +2220,7 @@ impl Workspace {
                                 this.run_branch_compare(cx);
                             }
                             this.follow_pending_link(cx);
+                            this.open_waiting_draft(cx);
                             cx.notify();
                             return;
                         }
@@ -2232,6 +2240,7 @@ impl Workspace {
                             this.finish_pending(cx);
                         }
                         this.follow_pending_link(cx);
+                        this.open_waiting_draft(cx);
                     }
                     Err(err) => this.error = Some(format!("{err:#}").into()),
                 }

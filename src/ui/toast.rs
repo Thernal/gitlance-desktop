@@ -40,6 +40,9 @@ pub(super) enum Act {
         unstaged: Option<bool>,
         agent: String,
     },
+    /// Opens the New merge request card for branch `source` with the request `agent` drafted
+    /// (#152).
+    Drafted { source: String, agent: String },
     /// Opens under Branches the changes `agent` left notes on, and shows them (#151).
     Notes {
         page: super::nav::Page,
@@ -53,6 +56,7 @@ impl Act {
         match self {
             Act::Review { .. } | Act::Gathered { .. } => "Review",
             Act::Show { .. } | Act::Notes { .. } => "Show",
+            Act::Drafted { .. } => "Open",
         }
     }
 }
@@ -212,6 +216,7 @@ impl Workspace {
             Act::Gathered { iid, .. } => self.review_gathered(iid, cx),
             Act::Show { item, unstaged, .. } => self.show_changes(&item, unstaged, cx),
             Act::Notes { page, unstaged, .. } => self.show_agent_notes(page, unstaged, cx),
+            Act::Drafted { source, .. } => self.open_agent_draft(source, cx),
         }
     }
 

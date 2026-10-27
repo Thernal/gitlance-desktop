@@ -35,7 +35,8 @@ gather them with gather_requests, each with a line on what you did there, so the
 When you finish work the reviewer should read, open it for them with open_changes: your branch against its base, \
 or the working tree. Where a change needs explaining — why this way, what you left alone, what to look at closely — \
 give notes on its lines and a summary, with open_changes or alone with annotate_changes; answers to them come back as \
-review comments. \
+review comments. When a branch is ready for a merge request, you may draft its title and description with \
+draft_request; the reviewer checks it and creates it in GitLance. \
 Pending comments are seen by the reviewer alone; the reviewer edits, deletes or keeps them and submits the review: \
 never submit, approve or publish anything yourself. \
 GitLance shows the reviewer what you did only while it runs. When your work needs the reviewer to look and a tool \
@@ -193,6 +194,22 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "draft_request",
+            "description": "Draft a merge request (a pull request on GitHub) for a branch: a title and a description written from what you did and why, with reviewers and labels if you know them. GitLance opens its New merge request card for that branch, filled in, for the reviewer to check, edit and create. Nothing is created or sent, and nothing is pushed: a branch, or commits, not on origin yet have to be pushed before the request has them.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "The branch to merge; the one checked out here when left out"},
+                    "target": {"type": "string", "description": "The branch it merges into; the project's main line when left out"},
+                    "title": {"type": "string", "description": "The request's title"},
+                    "description": {"type": "string", "description": "The request's description, in markdown: what changed, why, how to check it"},
+                    "reviewers": {"type": "array", "items": {"type": "string"}, "description": "Optional: reviewers' usernames"},
+                    "labels": {"type": "array", "items": {"type": "string"}, "description": "Optional: labels' names"}
+                },
+                "required": ["title", "description"]
+            }
+        },
+        {
             "name": "open_gitlance",
             "description": "Start GitLance on this repository, or open the repository in a tab when GitLance runs without it. Answers once it is there. Only when your work needs the reviewer to look and GitLance is not showing it.",
             "inputSchema": {"type": "object", "properties": {}}
@@ -235,6 +252,7 @@ fn call(bus: &Bus, exe: &str, name: &str, args: &Value) -> Result<String, String
         "gather_requests" => return requests::gather_requests(bus, &here, &root, args),
         "open_changes" => return changes::open_changes(bus, &here, &root, args),
         "annotate_changes" => return changes::annotate_changes(bus, &here, &root, args),
+        "draft_request" => return requests::draft_request(bus, &here, &root, args),
         _ => {}
     }
     let comments = bus.comments(&root);
@@ -427,7 +445,7 @@ mod tests {
                 .contains("\"/x/GitLance\" agent-watch")
         );
         let list = handle(&bus, "", &json!({"id": 2, "method": "tools/list"})).unwrap();
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 10);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 11);
         assert!(handle(&bus, "", &json!({"method": "notifications/initialized"})).is_none());
         let unknown = handle(&bus, "", &json!({"id": 3, "method": "nope"})).unwrap();
         assert_eq!(unknown["error"]["code"], -32601);
