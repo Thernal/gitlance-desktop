@@ -136,6 +136,17 @@ pub enum What {
     Pending { iid: u64, ids: Vec<u64> },
     /// Requests put under Merge requests, in this order (`gather_requests`, #148).
     Gathered { iids: Vec<u64> },
+    /// Two refs compared, since their merge base unless `direct`, by their names and the commits
+    /// they were at (`open_changes`, #149).
+    Compare {
+        base: String,
+        base_id: String,
+        head: String,
+        head_id: String,
+        direct: bool,
+    },
+    /// The working tree, or what is not staged in it (`open_changes`, #149).
+    WorkingTree { unstaged: bool },
 }
 
 /// Something an agent left on a request that the app tells apart from the reviewer's own: a

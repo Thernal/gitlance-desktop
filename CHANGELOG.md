@@ -33,6 +33,9 @@ for someone using the app, not for someone reading the code; the commits follow 
 - **An agent can gather the merge requests it reviewed.** They come in quietly under Merge requests, in its
   order, each with the agent's mark, how many of its comments wait there and its line on what it did; opened
   from there, a request starts at the agent's first comment.
+- **Comparisons and the working tree stay in the menu.** One you open with ⌥⌘C, or the working tree, becomes a
+  row under Branches as a branch does, kept until you close it (× or ⌘W); Swap and Direct keep the same row. An
+  agent can open its changes there too, as a comparison or the working tree, with a note offering Show.
 
 ## 1.1.0 — 2026-10-26
 

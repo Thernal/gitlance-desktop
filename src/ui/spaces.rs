@@ -288,6 +288,35 @@ impl Workspace {
                             agent,
                         }
                     }
+                    // Named as their page is (#149).
+                    Item::Compare(..) => {
+                        let label = match &open.page {
+                            Page::Compare(base, head, _) => format!("{} … {}", base.0, head.0),
+                            _ => String::new(),
+                        };
+                        OpenRow {
+                            item: Some(open.item.clone()),
+                            icon: "layers",
+                            tip: label.clone(),
+                            label,
+                            mono: true,
+                            on,
+                            drafts,
+                            news: false,
+                            agent: None,
+                        }
+                    }
+                    Item::WorkingTree => OpenRow {
+                        item: Some(open.item.clone()),
+                        icon: "files",
+                        label: "Working tree".to_owned(),
+                        mono: false,
+                        tip: "Working tree".to_owned(),
+                        on,
+                        drafts,
+                        news: false,
+                        agent: None,
+                    },
                     Item::Branch(refname) => {
                         let name = self
                             .branches

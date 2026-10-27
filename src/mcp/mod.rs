@@ -1,8 +1,10 @@
 //! `GitLance mcp`: the MCP server an agent runs in its chat (stdio, one JSON-RPC message per line).
 //! It reads the review comments GitLance sent for the repository the agent works in and records
 //! the agent's answers (`crate::agents`); it never writes the comments or the repository. It also
-//! reads a merge request and keeps the agent's pending comments on it (`requests`, #150).
+//! reads a merge request and keeps the agent's pending comments on it (`requests`, #150), and opens
+//! what the agent changed for the reviewer (`changes`, #149).
 
+mod changes;
 mod requests;
 
 use crate::agents::{self, Answer, Bus, Kind};
@@ -30,6 +32,8 @@ opens in the app for the reviewer to check and send. \
 To review a merge request, read it with get_request — its diff as GitLab or GitHub compares it, its discussions \
 and the pending comments already there — and leave each remark with add_pending_comment on a line the diff shows. When you have looked at several, \
 gather them with gather_requests, each with a line on what you did there, so the reviewer finds them together. \
+When you finish work the reviewer should read, open it for them with open_changes: your branch against its base, \
+or the working tree. \
 Pending comments are seen by the reviewer alone; the reviewer edits, deletes or keeps them and submits the review: \
 never submit, approve or publish anything yourself. \
 GitLance shows the reviewer what you did only while it runs. When your work needs the reviewer to look and a tool \
@@ -140,6 +144,20 @@ fn tools() -> Value {
             }
         },
         {
+            "name": "open_changes",
+            "description": "Open what you changed for the reviewer, as a row under Branches in GitLance: two refs or commits compared (head against base, since their merge base unless direct), or the working tree. Nothing on their screen moves; a note offers to show it. Answers what it opened, or why it could not.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "base": {"type": "string", "description": "What the changes are compared against; the project's main line when left out"},
+                    "head": {"type": "string", "description": "The changes; the branch checked out here when left out"},
+                    "direct": {"type": "boolean", "description": "Compare the two as they are, not since their merge base"},
+                    "working_tree": {"type": "boolean", "description": "The uncommitted changes instead of two refs"},
+                    "unstaged": {"type": "boolean", "description": "With working_tree: only what is not staged"}
+                }
+            }
+        },
+        {
             "name": "open_gitlance",
             "description": "Start GitLance on this repository, or open the repository in a tab when GitLance runs without it. Answers once it is there. Only when your work needs the reviewer to look and GitLance is not showing it.",
             "inputSchema": {"type": "object", "properties": {}}
@@ -180,6 +198,7 @@ fn call(bus: &Bus, exe: &str, name: &str, args: &Value) -> Result<String, String
         "get_request" => return requests::get_request(bus, &here, &root, args),
         "add_pending_comment" => return requests::add_pending_comment(bus, &here, &root, args),
         "gather_requests" => return requests::gather_requests(bus, &here, &root, args),
+        "open_changes" => return changes::open_changes(bus, &here, &root, args),
         _ => {}
     }
     let comments = bus.comments(&root);
@@ -372,7 +391,7 @@ mod tests {
                 .contains("\"/x/GitLance\" agent-watch")
         );
         let list = handle(&bus, "", &json!({"id": 2, "method": "tools/list"})).unwrap();
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 8);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 9);
         assert!(handle(&bus, "", &json!({"method": "notifications/initialized"})).is_none());
         let unknown = handle(&bus, "", &json!({"id": 3, "method": "nope"})).unwrap();
         assert_eq!(unknown["error"]["code"], -32601);

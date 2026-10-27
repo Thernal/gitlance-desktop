@@ -92,7 +92,9 @@ impl Page {
             | Page::RequestCommit(iid, _)
             | Page::RequestCommits(iid, ..)
             | Page::RequestVersions(iid, ..) => Some(Item::Request(*iid)),
-            Page::File(_) | Page::Folder(_) | Page::WorkingTree | Page::Compare(..) => None,
+            Page::WorkingTree => Some(Item::WorkingTree),
+            Page::Compare(base, head, _) => Some(Item::compare(&base.0, &head.0)),
+            Page::File(_) | Page::Folder(_) => None,
         }
     }
 
@@ -168,20 +170,44 @@ impl Page {
 pub enum Item {
     Request(u64),
     Branch(String),
+    /// Two refs compared (#149), by their names whichever is the base: Swap and Direct keep its
+    /// row.
+    Compare(String, String),
+    /// What is not committed (#149).
+    WorkingTree,
 }
 
 impl Item {
     pub fn space(&self) -> Space {
         match self {
             Item::Request(_) => Space::Requests,
-            Item::Branch(_) => Space::Branches,
+            Item::Branch(_) | Item::Compare(..) | Item::WorkingTree => Space::Branches,
         }
     }
 
+    /// The comparison of `a` and `b`, in either order.
+    pub fn compare(a: &str, b: &str) -> Item {
+        let (a, b) = if a <= b { (a, b) } else { (b, a) };
+        Item::Compare(a.to_owned(), b.to_owned())
+    }
+
+    /// Its page when it is opened anew; a comparison's needs its sides' commits.
+    fn page(&self) -> Option<Page> {
+        match self {
+            Item::Request(iid) => Some(Page::Request(*iid)),
+            Item::Branch(refname) => Some(Page::Branch(refname.clone())),
+            Item::WorkingTree => Some(Page::WorkingTree),
+            Item::Compare(..) => None,
+        }
+    }
+
+    /// A comparison is kept as its page, which has its sides' commits (`Nav::line`).
     fn key(&self) -> String {
         match self {
             Item::Request(iid) => format!("request:{iid}"),
             Item::Branch(refname) => format!("branch:{refname}"),
+            Item::Compare(a, b) => format!("compare:{a}:{b}"),
+            Item::WorkingTree => "working-tree".to_owned(),
         }
     }
 
@@ -243,7 +269,8 @@ struct Saved {
     repo: String,
     space: Space,
     pages: [Option<Page>; 4],
-    open: Vec<Item>,
+    /// Each with its page when the item alone cannot say it: a comparison's.
+    open: Vec<(Item, Option<Page>)>,
 }
 
 /// A page seen: ⌘[ ⌘] come back to it, with the commit a branch's page showed.
@@ -350,7 +377,15 @@ impl Nav {
             .iter()
             .map(|p| p.as_ref().map_or_else(|| "-".to_owned(), Page::key))
             .collect();
-        let open: Vec<String> = self.open.iter().map(|o| o.item.key()).collect();
+        // A comparison as its page: its sides' commits come back with it (#149).
+        let open: Vec<String> = self
+            .open
+            .iter()
+            .map(|o| match o.item {
+                Item::Compare(..) => o.page.key(),
+                _ => o.item.key(),
+            })
+            .collect();
         format!(
             "{repo}\t{}\t{}\t{}",
             self.space.ix(),
@@ -374,7 +409,10 @@ impl Nav {
             .next()
             .unwrap_or_default()
             .split(' ')
-            .filter_map(Item::parse)
+            .filter_map(|key| match Item::parse(key) {
+                Some(item) => Some((item, None)),
+                None => Page::parse(key).and_then(|page| Some((page.item()?, Some(page)))),
+            })
             .collect();
         Some(Saved {
             repo,
@@ -534,10 +572,7 @@ impl Workspace {
         if let Some(open) = self.nav.opened_mut(&item) {
             open.section = section;
         }
-        let top = match &item {
-            Item::Request(iid) => Page::Request(*iid),
-            Item::Branch(refname) => Page::Branch(refname.clone()),
-        };
+        let top = item.page().unwrap_or_else(|| page.clone());
         if page != top {
             self.show(page.space(), Some(top), cx);
         }
@@ -899,7 +934,7 @@ impl Workspace {
                 (_, Some(Item::Branch(refname))) => {
                     self.nav.pick_branch = self.branch_ix(&refname).map(BranchRow::Branch)
                 }
-                (_, None) => {}
+                (_, Some(Item::Compare(..) | Item::WorkingTree) | None) => {}
             }
             self.nav.from = None;
         }
@@ -977,16 +1012,23 @@ impl Workspace {
         self.show(item.space(), Some(page), cx);
     }
 
-    /// Request `iid` open under Merge requests without loading it, on Changes, after the others
-    /// (#148); one open already stays as it is. Whether it was added.
-    pub(super) fn open_quietly(&mut self, iid: u64) -> bool {
-        let item = Item::Request(iid);
-        if self.nav.opened(&item).is_some() {
+    /// `page`'s request, comparison or working tree open under its space without loading it, on
+    /// Changes, after the others (#148, #149). One open already keeps its place; a comparison not
+    /// on screen goes to the commits `page` has. Whether it was added.
+    pub(super) fn open_quietly(&mut self, page: Page) -> bool {
+        let Some(item) = page.item() else {
+            return false;
+        };
+        let loaded = self.loaded_page().and_then(|p| p.item()).as_ref() == Some(&item);
+        if let Some(open) = self.nav.opened_mut(&item) {
+            if !loaded && matches!(item, Item::Compare(..)) {
+                open.page = page;
+            }
             return false;
         }
         self.nav.open.push(Opened {
             item,
-            page: Page::Request(iid),
+            page,
             commit: None,
             place: None,
             paths: Vec::new(),
@@ -1046,7 +1088,7 @@ impl Workspace {
                 .iter()
                 .filter_map(|o| match o.item {
                     Item::Request(iid) => Some(iid),
-                    Item::Branch(_) => None,
+                    _ => None,
                 })
                 .filter(|iid| self.requests.find(*iid).is_none())
                 .collect();
@@ -1082,19 +1124,19 @@ impl Workspace {
             return;
         };
         self.nav.pages = pages;
-        for item in open {
-            let page = match &item {
-                Item::Request(iid) => Page::Request(*iid),
-                Item::Branch(refname) => Page::Branch(refname.clone()),
-            };
-            let page = self
+        for (item, kept) in open {
+            let Some(page) = self
                 .nav
                 .pages
                 .iter()
                 .flatten()
                 .find(|p| p.item().as_ref() == Some(&item))
                 .cloned()
-                .unwrap_or(page);
+                .or(kept)
+                .or_else(|| item.page())
+            else {
+                continue;
+            };
             self.nav.open.push(Opened {
                 item,
                 page,
@@ -1293,7 +1335,14 @@ mod tests {
             Some(Page::Folder("a".into()))
         );
         assert_eq!(Page::File("README.md".into()).parent(), None);
-        assert_eq!(Page::WorkingTree.item(), None);
+        assert_eq!(Page::WorkingTree.item(), Some(Item::WorkingTree));
+        assert_eq!(Page::File("a".into()).item(), None);
+        // A comparison's row is its two sides, whichever is the base (#149).
+        let id = Oid::ZERO_SHA1;
+        assert_eq!(
+            Page::Compare(("main".into(), id), ("x".into(), id), true).item(),
+            Page::Compare(("x".into(), id), ("main".into(), id), false).item()
+        );
         assert_eq!(
             Page::RequestVersions(7, 0, 1).item(),
             Some(Item::Request(7))
@@ -1334,9 +1383,15 @@ mod tests {
         };
         nav.pages[Space::Code.ix()] = Some(Page::File("README.md".into()));
         nav.pages[Space::Requests.ix()] = Some(Page::RequestCommit(398, id));
-        for item in [Item::Request(398), Item::Branch("refs/heads/main".into())] {
+        let compare = Page::Compare(("main".into(), id), ("origin/x".into(), id), false);
+        for (item, page) in [
+            (Item::Request(398), Page::Request(398)),
+            (Item::Branch("refs/heads/main".into()), Page::WorkingTree),
+            (Item::compare("main", "origin/x"), compare.clone()),
+            (Item::WorkingTree, Page::WorkingTree),
+        ] {
             nav.open.push(Opened {
-                page: Page::WorkingTree,
+                page,
                 item,
                 commit: None,
                 place: None,
@@ -1361,9 +1416,15 @@ mod tests {
             pages[Space::Requests.ix()],
             Some(Page::RequestCommit(398, id))
         );
+        // A comparison comes back with its page, its sides' commits in it.
         assert_eq!(
             open,
-            [Item::Request(398), Item::Branch("refs/heads/main".into())]
+            [
+                (Item::Request(398), None),
+                (Item::Branch("refs/heads/main".into()), None),
+                (Item::compare("main", "origin/x"), Some(compare)),
+                (Item::WorkingTree, Some(Page::WorkingTree)),
+            ]
         );
     }
 

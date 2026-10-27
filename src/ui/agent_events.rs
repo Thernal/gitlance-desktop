@@ -1,12 +1,12 @@
 //! What agents leave for the reviewer, as a tab sees it: the marks that tell an agent's pending
 //! comments from one's own (#150) and the requests it gathered (#148), and the events of the tab's
-//! project — pending comments an agent wrote on a request, requests it put under Merge requests —
-//! taken once, each with a toast offering to go and see. Nothing here moves the screen until the
-//! reviewer asks.
+//! project — pending comments an agent wrote on a request, requests it put under Merge requests,
+//! the changes it opened under Branches (#149) — taken once, each with a toast offering to go and
+//! see. Nothing here moves the screen until the reviewer asks.
 
 use super::Workspace;
 use super::goto::Spot;
-use super::nav::Item;
+use super::nav::{Item, Page};
 use super::toast::Act;
 use crate::agents::{Bus, Mark, What};
 use gpui::Context;
@@ -34,6 +34,24 @@ impl Workspace {
                     self.agent_left(event.agent, iid, ids.len().max(1), cx)
                 }
                 What::Gathered { iids } => self.agent_gathered(event.agent, iids, cx),
+                What::Compare {
+                    base,
+                    base_id,
+                    head,
+                    head_id,
+                    direct,
+                } => {
+                    let (Ok(a), Ok(b)) =
+                        (git2::Oid::from_str(&base_id), git2::Oid::from_str(&head_id))
+                    else {
+                        continue;
+                    };
+                    let page = Page::Compare((base, a), (head, b), !direct);
+                    self.agent_changes(event.agent, page, None, cx);
+                }
+                What::WorkingTree { unstaged } => {
+                    self.agent_changes(event.agent, Page::WorkingTree, Some(unstaged), cx)
+                }
                 What::Open => {}
             }
         }
@@ -74,7 +92,7 @@ impl Workspace {
             return;
         };
         for &iid in &iids {
-            self.open_quietly(iid);
+            self.open_quietly(Page::Request(iid));
             if !self.request_loaded(iid) {
                 self.agent_fresh.insert(iid);
             }
@@ -90,6 +108,56 @@ impl Workspace {
         };
         let say = move |n| format!("{agent} gathered {}", super::plural(n, "merge request"));
         self.toast_act(act, iids.len(), say, cx);
+    }
+
+    /// `agent` opened its changes (#149): `page` a row under Branches, quietly, and a toast that
+    /// shows it — the working tree with what is staged or not as the agent asked.
+    fn agent_changes(
+        &mut self,
+        agent: String,
+        page: Page,
+        unstaged: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(item) = page.item() else {
+            return;
+        };
+        // What it is, so that two are told apart.
+        let what = match &page {
+            Page::Compare(base, head, _) => format!("{} … {}", base.0, head.0),
+            _ => "the working tree".to_owned(),
+        };
+        self.open_quietly(page);
+        self.save_nav();
+        let act = Act::Show {
+            item,
+            unstaged,
+            agent: agent.clone(),
+        };
+        let say = move |_| format!("{agent} opened its changes: {what}");
+        self.toast_act(act, 1, say, cx);
+    }
+
+    /// Show on that toast: the row's page on screen.
+    pub(super) fn show_changes(
+        &mut self,
+        item: &Item,
+        unstaged: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(on) = unstaged {
+            self.wt.only_unstaged = on;
+        }
+        self.show_open(item, cx);
+        // On screen already, it is read again as asked.
+        if let Some(on) = unstaged
+            && matches!(
+                self.diff.as_ref().map(|d| &d.header),
+                Some(super::Header::WorkingTree { only_unstaged }) if *only_unstaged != on
+            )
+        {
+            self.set_only_unstaged(on, cx);
+        }
     }
 
     /// Review on that toast: request `iid` comes on screen at the first, in the diff's order, of

@@ -34,12 +34,19 @@ pub(super) enum Act {
     Review { iid: u64, agent: String },
     /// Opens request `iid`, the first of those `agent` gathered under Merge requests (#148).
     Gathered { iid: u64, agent: String },
+    /// Shows the comparison or the working tree `agent` opened under Branches (#149).
+    Show {
+        item: super::nav::Item,
+        unstaged: Option<bool>,
+        agent: String,
+    },
 }
 
 impl Act {
     fn label(&self) -> &'static str {
         match self {
             Act::Review { .. } | Act::Gathered { .. } => "Review",
+            Act::Show { .. } => "Show",
         }
     }
 }
@@ -197,6 +204,7 @@ impl Workspace {
         match act {
             Act::Review { iid, agent } => self.review_agent(iid, &agent, cx),
             Act::Gathered { iid, .. } => self.review_gathered(iid, cx),
+            Act::Show { item, unstaged, .. } => self.show_changes(&item, unstaged, cx),
         }
     }
 

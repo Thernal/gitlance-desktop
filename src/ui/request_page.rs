@@ -506,6 +506,7 @@ impl Workspace {
             ),
             // Tabbed only while it is the branch loaded.
             Item::Branch(_) => (true, self.branch_page.as_ref().and_then(|f| f.files)),
+            Item::Compare(..) | Item::WorkingTree => return None,
         };
         let count = |section: Section| match section {
             Section::Overview => None,
