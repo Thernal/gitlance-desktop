@@ -2271,7 +2271,7 @@ impl Workspace {
                 .mb(px(6.))
                 .text_size(px(11.))
                 .text_color(theme::faint())
-                .child("🔒 On a discussion of the merge request · only on this Mac, never posted")
+                .child("🔒 On a discussion")
         });
         let notes = div()
             .flex()
@@ -2593,12 +2593,9 @@ impl Workspace {
                 )
                 .into_any_element()
         });
-        // At S the hint is short; at every width it wraps rather than being cut.
-        let placeholder = match (compose.target, room) {
-            (Target::Agent, Room::S) => "Note for your agent",
-            (Target::Agent, _) => "A note for your agent — it stays on this Mac",
-            (_, Room::S) => "Comment for everyone on it",
-            _ => "Comment on the merge request — everyone on it sees it",
+        let placeholder = match compose.target {
+            Target::Agent => "Note for your agent",
+            _ => "Comment",
         };
         let input = self.open_input(
             compose,
@@ -2690,7 +2687,7 @@ impl Workspace {
         // Which of the two the field writes, and ⇥ to switch, on a discussion (#50 G).
         let lead = matches!(compose.target, Target::Reply(_) | Target::ThreadNote(_)).then(|| {
             let said = if agent {
-                "🔒 For your agent · only on this Mac"
+                "🔒 For your agent"
             } else {
                 "Reply on the merge request"
             };
@@ -2731,10 +2728,7 @@ impl Workspace {
             compose,
             tone,
             match (compose.target, room) {
-                (Target::ThreadNote(_), Room::S) => "Note for your agent",
-                (Target::ThreadNote(_), _) => {
-                    "A note for your agent, with this discussion — never posted"
-                }
+                (Target::ThreadNote(_), _) => "Note for your agent",
                 (Target::Answer(_), Room::S) => "Note with your answer",
                 (Target::Answer(_), _) => "A note for the agent with your answer",
                 (Target::AnswerValue(_), _) => "Your own value",

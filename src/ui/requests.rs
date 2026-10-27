@@ -1959,7 +1959,8 @@ impl Workspace {
         // Public only: the agent's comments are the Agents window's (#76).
         let discussions = theirs.len();
         let total = discussions + pending;
-        // Group headings once there is more than one kind; the pending ones say how to walk them.
+        // Group headings once there is more than one kind. Pending ones always have theirs: it is what
+        // says they are pending, and how to walk them.
         let grouped = [discussions, pending].iter().filter(|&&n| n > 0).count() > 1;
         // Written on an earlier version: listed apart, grouped by that version (#46).
         let outdated = if self.showing_request() {
@@ -2019,8 +2020,8 @@ impl Workspace {
             let target = d.path.clone().zip(d.new_line.or(d.old_line));
             let old = d.new_line.is_none();
             let where_ = match &target {
-                Some((p, n)) => format!("{}:{n} · pending", p.rsplit('/').next().unwrap_or(p)),
-                None => "pending".to_owned(),
+                Some((p, n)) => format!("{}:{n}", p.rsplit('/').next().unwrap_or(p)),
+                None => "General".to_owned(),
             };
             comment_item(
                 ("comment-draft", ix),
@@ -2070,9 +2071,10 @@ impl Workspace {
                 .min_h_0()
                 .overflow_y_scroll()
                 .py(px(6.))
-                .children((pending > 0 && (grouped || pending > 1)).then(|| {
-                    group_heading(format!("Pending · {pending}"), Some("⌥N"))
-                }))
+                .children(
+                    (pending > 0)
+                        .then(|| group_heading(format!("Pending · {pending}"), Some("⌥N"))),
+                )
                 .children(draft_items)
                 .children(
                     (grouped && discussions > 0)
@@ -2109,7 +2111,7 @@ impl Workspace {
                         .py(px(10.))
                         .text_size(px(12.))
                         .text_color(theme::muted())
-                        .child("No comments yet. Press c to comment on a line, or hover a line and press +.")
+                        .child("No comments yet")
                 }))
                 .into_any_element(),
             foot: submit.map(IntoElement::into_any_element),

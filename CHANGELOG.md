@@ -56,8 +56,10 @@ for someone using the app, not for someone reading the code; the commits follow 
   Connect: a token for this computer made with the key, for 30 days and renewed before it ends (or Read only,
   or Not now); Settings → Merge requests has Use SSH key. A host key not yet known is never accepted for you,
   and nothing asks for a password.
-- **Less text.** A pending comment no longer says who sees it, Submit review just counts them, and the connect
-  panel and Settings → Merge requests say in a line which token they need.
+- **Less text.** The app no longer explains what a reviewer already knows: a pending comment does not say who sees
+  it, Submit review just counts them, the comment box says "Comment" or "Note for your agent", the Discussions
+  panel says "Pending" once, Settings rows keep a line only where it adds something (Codex's limits are in a
+  tooltip), and the connect panel and Settings → Merge requests say in a line which token they need.
 
 ## 1.1.0 — 2026-10-26
 

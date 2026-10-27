@@ -289,7 +289,7 @@ impl Workspace {
             Section::Diff => column()
                 .child(item(
                     "Changed words",
-                    "How the words that changed inside a changed line are marked, in Words and Structural modes.",
+                    "In Words and Structural modes.",
                     marks,
                 ))
                 .child(
@@ -303,51 +303,51 @@ impl Workspace {
                 )
                 .child(item(
                     "Default mode",
-                    "What a diff opens in. Lines, Words and Structural are also in the toolbar and the View menu.",
+                    "",
                     modes,
                 ))
                 .child(item(
                     "Interface size",
-                    "How big everything in the window is, 60 % to 250 %. ⌘+ and ⌘− change it anywhere, ⌘0 puts it back; a click on the percentage does the same.",
+                    "⌘+ ⌘− ⌘0",
                     ui_zoom,
                 ))
                 .child(item(
                     "Code size",
-                    "The code in a diff, as a share of the interface size, 60 % to 250 %. It follows the interface size too, so this is only for making code larger or smaller than the rest.",
+                    "Relative to the interface size.",
                     zoom,
                 ))
                 .child(item(
                     "Fold generated files",
-                    "Lock files, minified and generated code (Cargo.lock, package-lock.json, *.min.js, *.pb.go …) start folded when they change by more than 40 lines. They stay in the file list, tagged “generated”; one click shows them.",
+                    "Lock files and generated code that change by more than 40 lines.",
                     fold,
                 ))
                 .child(item(
                     "Mark reviewed as I scroll past",
-                    "With all files in one scroll (⌥A switches to one file at a time), a file whose last line scrolls off the top while you scroll down is marked reviewed. Off: only V, ⇧V and the box mark a file — a file that flew by under a fast scroll was not read.",
+                    "",
                     scrolled,
                 ))
                 .child(item(
                     "Format comments as markdown",
-                    "Draws headings, lists, code, tables and links in comments — GitLab discussions are written in markdown. Off shows the text as written; ⌥M or Raw / Rich beside a comment switches it anywhere.",
+                    "⌥M, or Raw / Rich beside a comment, switches it.",
                     rich,
                 ))
                 .into_any_element(),
             Section::Appearance => self.render_appearance(
                 item(
                     "Several projects",
-                    "How the open repositories are shown: a rail of their marks on the left (⌘1…9 in its order, a right-click moves or closes one, a drag reorders), tabs in the title bar, or listed in the menu with the spaces nested under the one open.",
+                    "",
                     projects,
                 )
                 .into_any_element(),
                 item(
                     "Panes",
-                    "Islands: rounded panes on the window's ground with gaps between them. Flat: square panes side by side, split by hairlines.",
+                    "",
                     panes,
                 )
                 .into_any_element(),
                 item(
                     "Animations",
-                    "Panels, menus and folds move instead of jumping, in 120 or 200 ms; nothing waits for them. Off, or with Reduce motion on in System Settings → Accessibility → Display, everything appears at once.",
+                    "",
                     animations,
                 )
                 .into_any_element(),
@@ -356,7 +356,7 @@ impl Workspace {
             Section::General => column()
                 .child(item(
                     "Open files in",
-                    "The editor behind “Open in …” on a file or a line. It opens the file in the working tree.",
+                    "",
                     if installed.is_empty() {
                         div()
                             .text_size(px(12.))
@@ -369,7 +369,7 @@ impl Workspace {
                 ))
                 .child(item(
                     "Open a repository in",
-                    "Where a repository goes when another one is open: ask each time, in place of the open one, or in a new tab beside it.",
+                    "",
                     open_in,
                 ))
                 .child(
@@ -378,7 +378,7 @@ impl Workspace {
                         .flex_col()
                         .child(item(
                             "Check for updates",
-                            "Asks GitHub for GitLance's releases when the app starts and every 6 hours; a newer one opens a card with what is new in it, once, then waits in the title bar. Nothing is downloaded or installed.",
+                            "At start and every 6 hours.",
                             updates,
                         ))
                         .child(div().pt(px(6.)).child(update_status)),
@@ -387,12 +387,12 @@ impl Workspace {
             Section::Repository => column()
                 .child(item(
                     "Refresh when the repository changes",
-                    "Re-reads refs and history when something outside the app commits, amends or rebases. Never writes to the repository.",
+                    "",
                     refresh,
                 ))
                 .child(item(
                     "Fetch in the background",
-                    "Runs git fetch --all --prune for this repository every 5 minutes and when the window comes back to the front, so other people’s force pushes show up as versions. It writes remote-tracking refs and objects — the one exception to the read-only rule — and uses your own git, SSH agent and VPN. On for every repository; turn it off here for this one.",
+                    "Every 5 minutes and when the window comes back · this repository only.",
                     fetch,
                 ))
                 .into_any_element(),
@@ -566,7 +566,8 @@ fn heading(text: impl Into<SharedString>) -> impl IntoElement {
         .child(text.into())
 }
 
-/// A labelled row: the name and what it does on the left, the control on the right.
+/// A labelled row: the name, and a line only where the name and the control do not say enough,
+/// on the left; the control on the right.
 pub(super) fn item(
     title: &'static str,
     detail: &'static str,
@@ -586,12 +587,12 @@ pub(super) fn item(
                 .flex()
                 .flex_col()
                 .child(super::keys::text(title).into_owned())
-                .child(
+                .children((!detail.is_empty()).then(|| {
                     div()
                         .text_size(px(12.))
                         .text_color(theme::muted())
-                        .child(super::keys::text(detail).into_owned()),
-                ),
+                        .child(super::keys::text(detail).into_owned())
+                })),
         )
         .child(div().flex_none().child(control))
 }
@@ -868,7 +869,7 @@ impl Workspace {
                     .pb(px(12.))
                     .text_size(px(12.))
                     .text_color(theme::muted())
-                    .child("Start from a preset — GitLance’s keys, Android Studio’s or VS Code’s — and change any key on top: Change gives an action one new key in place of its keys; esc cancels, ⌫ leaves it without one. A changed key shows what it was; the changes are kept in keymap.txt in GitLance’s data folder."),
+                    .child("Start from a preset and change any key · esc cancels, ⌫ leaves it without one"),
             )
             .child(presets)
             .child(tools)

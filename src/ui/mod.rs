@@ -3937,7 +3937,6 @@ impl Workspace {
                             .gap_3()
                             .text_size(px(12.))
                             .text_color(theme::muted())
-                            .child("Read-only: staging and committing happen elsewhere")
                             .child(stats),
                     )
             }

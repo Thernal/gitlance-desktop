@@ -638,12 +638,12 @@ fn section(title: &'static str, sub: &'static str) -> Div {
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title),
         )
-        .child(
+        .children((!sub.is_empty()).then(|| {
             div()
                 .text_size(px(12.))
                 .text_color(theme::muted())
-                .child(sub),
-        )
+                .child(sub)
+        }))
 }
 
 fn small_button(
@@ -808,15 +808,9 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_5()
-            .child(section(
-                "Window",
-                "Surfaces, text, the accent and status. Text is 4.5:1 or more in every built-in theme.",
-            ))
+            .child(section("Window", ""))
             .child(rows_of_three(windows))
-            .child(section(
-                "Code",
-                "Syntax colours and the diff's tints. They follow the window until you pick another.",
-            ))
+            .child(section("Code", ""))
             .child(rows_of_three(codes))
             .child(
                 div()
@@ -829,10 +823,7 @@ impl Workspace {
             .child(projects)
             .child(panes)
             .child(fold)
-            .child(section(
-                "Your themes",
-                "A .json file in the themes folder shows up above; its colors set any token by name, or window and code set those parts apart — a theme with only one shows up there only. A theme extends One Dark unless it says another.",
-            ))
+            .child(section("Your themes", "JSON files in the themes folder."))
             .child(
                 div()
                     .flex()
@@ -876,11 +867,11 @@ impl Workspace {
                     .flex_col()
                     .gap(px(2.))
                     .text_size(px(12.))
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(format!("{} — {}", t.label, tag_of(t).unwrap_or_default().0)),
-                    )
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(format!(
+                        "{} — {}",
+                        t.label,
+                        tag_of(t).unwrap_or_default().0
+                    )))
                     .children(t.problems.iter().map(|p| div().child(format!("· {p}"))))
             }))
             .child(self.render_file_icons(cx))
@@ -910,7 +901,7 @@ impl Workspace {
             .gap(px(10.))
             .child(section(
                 "File icons",
-                "IntelliJ Community's icons, by a file's name or extension. Yours go in the icons folder: name.svg for a whole name (Dockerfile.svg), an extension (kt.svg) or one of the icons replaced (folder.svg, kotlin.svg), name_dark.svg for dark themes; folders.txt and files.txt hold a regular expression on the path from the repository's root, then the icon, a line each — (^|/)src/test$ testRoot.",
+                "Yours in the icons folder: Dockerfile.svg, kt.svg or folder.svg, _dark for dark themes; folders.txt and files.txt: a path's regular expression, then the icon — (^|/)src/test$ testRoot.",
             ))
             .child(
                 div()
@@ -1452,7 +1443,12 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(10.))
-                    .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(t.label.clone()))
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t.label.clone()),
+                    )
                     .child(
                         div()
                             .id("theme-extends")
@@ -1468,7 +1464,11 @@ impl Workspace {
                             .cursor_pointer()
                             .hover(|s| s.bg(theme::selected()))
                             .child(format!("extends {from_label}"))
-                            .child(icons::icon("chevron").size(px(12.)).text_color(theme::muted()))
+                            .child(
+                                icons::icon("chevron")
+                                    .size(px(12.))
+                                    .text_color(theme::muted()),
+                            )
                             .on_click(cx.listener(|this, ev: &ClickEvent, _, cx| {
                                 this.open_theme_bases(ev.position(), cx)
                             })),
@@ -1479,8 +1479,9 @@ impl Workspace {
                             .on_click(move |_: &ClickEvent, _, cx| cx.reveal_path(&f))
                     }))
                     .child(
-                        small_button("theme-revert", "Revert")
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.revert_theme(cx))),
+                        small_button("theme-revert", "Revert").on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.revert_theme(cx)),
+                        ),
                     )
                     .child(
                         div()
@@ -1502,20 +1503,19 @@ impl Workspace {
                                     .font_weight(FontWeight::NORMAL)
                                     .child(super::keys::text("⌘S").into_owned()),
                             )
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.save_theme(cx))),
+                            .on_click(
+                                cx.listener(|this, _: &ClickEvent, _, cx| this.save_theme(cx)),
+                            ),
                     )
-                    .child(
-                        small_button("theme-done", "Done")
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_theme_edit(cx))),
-                    ),
+                    .child(small_button("theme-done", "Done").on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| this.close_theme_edit(cx)),
+                    )),
             )
             .children(edit.from.as_ref().map(|from| {
                 div()
                     .text_size(px(12.))
                     .text_color(theme::muted())
-                    .child(format!(
-                        "Made from {from} when you opened it — a built-in theme is never edited; your changes are a theme of their own, saved to the themes folder."
-                    ))
+                    .child(format!("A copy of {from}"))
             }))
             .children(edit.said.as_ref().map(|said| {
                 let (text, bad) = match said {
@@ -1524,7 +1524,11 @@ impl Workspace {
                 };
                 div()
                     .text_size(px(12.))
-                    .text_color(if bad { theme::removed() } else { theme::added() })
+                    .text_color(if bad {
+                        theme::removed()
+                    } else {
+                        theme::added()
+                    })
                     .child(text)
             }))
             // Always one line of the same height, problems or none: a colour dragged across

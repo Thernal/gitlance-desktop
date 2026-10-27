@@ -1563,7 +1563,7 @@ impl Workspace {
             empty_state(
                 "branch",
                 format!("Only {name}, nothing ahead"),
-                "Branches you make in your terminal or editor show up here, with what they hold and their request. GitLance only reads the repository.".to_owned(),
+                "Branches you make in your terminal or editor show up here, with what they hold and their request.".to_owned(),
                 None,
             )
             .into_any_element()

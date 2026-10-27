@@ -1558,7 +1558,7 @@ impl Workspace {
                         .text_size(px(12.))
                         .text_color(theme::muted())
                         .child(if self.comments.is_empty() {
-                            "No comments for your agent. Write one on a line with c and pick Your agent."
+                            "No comments for your agent"
                         } else {
                             "Nothing here."
                         })
@@ -2105,56 +2105,62 @@ impl Workspace {
                 "Connect"
             })
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.connect_claude(cx)));
-        let command = |id: &'static str, label: &'static str, text: String| {
-            let copy = text.clone();
-            div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .py(px(8.))
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme::muted())
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .id(id)
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .rounded(px(ROW_RADIUS))
-                        .bg(theme::base())
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme::hover()))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .font_family(theme::CODE_FONT)
-                                .text_size(px(12.))
-                                .child(text),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(theme::faint())
-                                .child("Copy"),
-                        )
-                        .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
-                        }),
-                )
-        };
+        // `tip`: what the label leaves out, on a hover.
+        let command =
+            |id: &'static str, label: &'static str, tip: Option<&'static str>, text: String| {
+                let copy = text.clone();
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .py(px(8.))
+                    .child(
+                        div()
+                            .id(gpui::SharedString::from(format!("{id}-label")))
+                            .text_size(px(12.))
+                            .text_color(theme::muted())
+                            .child(label)
+                            .when_some(tip, |d, tip| {
+                                d.tooltip(move |_, cx| cx.new(|_| super::Tip(tip)).into())
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id(id)
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(ROW_RADIUS))
+                            .bg(theme::base())
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme::hover()))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .font_family(theme::CODE_FONT)
+                                    .text_size(px(12.))
+                                    .child(text),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(theme::faint())
+                                    .child("Copy"),
+                            )
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
+                            }),
+                    )
+            };
         div()
             .flex()
             .flex_col()
             .child(super::settings::item(
                 "Claude Code",
-                "Adds GitLance's MCP server to every Claude Code profile. A chat then starts GitLance's watcher in the background on its own, shows up in Send to agent (⌥⌘A), and answers each comment; you resolve them here. A chat that was already open needs a restart, or ask it to “listen to GitLance”.",
+                "Adds GitLance's MCP server to every Claude Code profile; a chat already open needs a restart.",
                 connect,
             ))
             .children(self.agent_setup.clone().map(|text| {
@@ -2175,18 +2181,18 @@ impl Workspace {
                         format!("Profiles: {profiles}")
                     }),
             )
-            .child(command("agents-cmd-claude", "Or by hand, in a terminal:", claude_cmd))
+            .child(command(
+                "agents-cmd-claude",
+                "Or by hand, in a terminal:",
+                None,
+                claude_cmd,
+            ))
             .child(command(
                 "agents-cmd-codex",
-                "Codex (its tools; then a Codex running in a terminal in the project listens by itself — limited):",
+                "Codex (limited):",
+                Some(crate::codex::LIMITS),
                 codex_cmd,
             ))
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(theme::faint())
-                    .child(crate::codex::LIMITS),
-            )
     }
 
     fn connect_claude(&mut self, cx: &mut Context<Self>) {

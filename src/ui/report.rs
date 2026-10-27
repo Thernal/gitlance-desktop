@@ -436,16 +436,7 @@ impl Workspace {
             };
         let mut body: Vec<AnyElement> = Vec::new();
         if let Some(Ok(id)) = &r.said {
-            body.push(
-                note(
-                    "check",
-                    theme::added(),
-                    format!(
-                        "Sent — {id}. It is in the project's reports; what becomes of it shows below."
-                    ),
-                )
-                .into_any_element(),
-            );
+            body.push(note("check", theme::added(), format!("Sent — {id}")).into_any_element());
             body.push(
                 div()
                     .child(
@@ -464,9 +455,7 @@ impl Workspace {
                     note(
                         "bot",
                         theme::agent(),
-                        format!(
-                            "{by} drafted this from an error it hit. Nothing is sent until you check it and press Send."
-                        ),
+                        format!("{by} drafted this from an error it hit."),
                     )
                     .into_any_element(),
                 );
@@ -549,7 +538,7 @@ impl Workspace {
                 .border_t_1()
                 .border_color(theme::island_border())
                 .child(div().text_size(px(11.)).text_color(theme::faint()).child(if relay {
-                    "To the project's reports — private; it is made public only when it is moved to the project."
+                    "To the project's private reports."
                 } else {
                     "The reports' relay is not set up yet: it opens GitHub's page of the project, filled in."
                 }))

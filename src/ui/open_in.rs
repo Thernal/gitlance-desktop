@@ -458,7 +458,7 @@ impl Workspace {
             "file",
             "This file can’t be shown as text".to_owned(),
             format!(
-                "It is {} of binary data. Images are shown; other binary files open where they belong.",
+                "{} of binary data.",
                 super::image_view::bytes(size as usize)
             ),
             Some(actions.into_any_element()),

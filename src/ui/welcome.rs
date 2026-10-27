@@ -375,12 +375,9 @@ impl Workspace {
         let (title, text) = match card {
             Card::Connect => (
                 "Connect GitLab or GitHub",
-                "For review requests, discussions and approvals. The token stays on this Mac; GitLance writes nothing to the host unless you post a comment or a review.",
+                "For review requests, discussions and approvals.",
             ),
-            Card::Clone => (
-                "Clone from a URL",
-                "git clone with your own git — its SSH keys and credentials —, into a folder you pick; then it opens.",
-            ),
+            Card::Clone => ("Clone from a URL", ""),
         };
         let fields = match card {
             Card::Connect => {
@@ -459,12 +456,12 @@ impl Workspace {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(title),
                     )
-                    .child(
+                    .children((!text.is_empty()).then(|| {
                         div()
                             .text_size(px(12.))
                             .text_color(theme::muted())
-                            .child(text),
-                    ),
+                            .child(text)
+                    })),
             )
             .child(fields)
             .children(

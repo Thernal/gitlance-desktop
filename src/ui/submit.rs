@@ -8,7 +8,7 @@ use super::keys::{self, On};
 use super::px;
 use super::tools::ToolView;
 use super::waiting::Op;
-use super::{ROW_RADIUS, Workspace, icons, plural, theme};
+use super::{ROW_RADIUS, Workspace, plural, theme};
 use crate::mr;
 use gpui::{ClickEvent, Context, FontWeight, KeyDownEvent, div, prelude::*};
 
@@ -325,7 +325,6 @@ impl Workspace {
                 }))
         });
         let drafts = self.requests.drafts.len();
-        let agent_drafts = self.agent_drafts().len();
         let go = match s.verdict {
             Verdict::Comment => "Submit review",
             Verdict::Approve => "Submit and approve",
@@ -406,28 +405,6 @@ impl Workspace {
                 self.field_completion(&s.summary)
                     .map(|(_, choices)| self.render_completion(&choices, self.field_pick)),
             )
-            .children((agent_drafts > 0).then(|| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .text_size(px(11.))
-                    .text_color(theme::muted())
-                    .child(icons::icon("bot").size(px(14.)).text_color(theme::agent()))
-                    .child(format!(
-                        "Your {} not part of the review — they go to your agent, not to {}.",
-                        if agent_drafts == 1 {
-                            "agent draft is".to_owned()
-                        } else {
-                            format!("{agent_drafts} agent drafts are")
-                        },
-                        if super::words::github() {
-                            "GitHub"
-                        } else {
-                            "GitLab"
-                        },
-                    ))
-            }))
             .children(s.error.clone().map(|e| {
                 div()
                     .px_3()

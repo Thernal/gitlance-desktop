@@ -152,7 +152,7 @@ impl Workspace {
         };
         if !self.requests.available {
             self.error = Some(
-                super::words::say("Creating a merge request needs a GitLab token — connect GitLab from Review requests in the menu on the left.")
+                super::words::say("Needs a GitLab token: Settings → Merge requests.")
                     .into_owned()
                     .into(),
             );
