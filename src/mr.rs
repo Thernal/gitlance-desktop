@@ -1103,17 +1103,14 @@ pub fn post_discussion(
     }
     if let Some(dir) = fixture() {
         // UI checks: record what would have been sent.
-        let file = dir.join("posted.txt");
-        let mut text = std::fs::read_to_string(&file).unwrap_or_default();
-        text.push_str(&format!(
-            "{iid} {}{} {:?} {:?}{} {body}\n",
+        record(format!(
+            "{iid} {}{} {:?} {:?}{} {body}",
             if draft { "draft " } else { "" },
             place.path,
             place.new_line,
             place.old_line,
             place.range_text()
-        ));
-        std::fs::write(file, text)?;
+        ))?;
         return if draft {
             fixture_draft(&dir, iid, place, body).map(Some)
         } else {
@@ -1186,16 +1183,29 @@ fn fixture_draft(dir: &std::path::Path, iid: u64, place: &Place<'_>, body: &str)
     Ok(id)
 }
 
-/// A line of the audit trail that UI checks read back: what the app would have sent.
+/// A line of the audit trail that UI checks read back: what the app would have sent. A fixture
+/// with `slow.txt` answers after that many milliseconds, and one with `refuse.txt` refuses with its
+/// text, as a host can (#139).
 pub(crate) fn record(line: String) -> Result<bool> {
     let Some(dir) = fixture() else {
         return Ok(false);
     };
-    let file = dir.join("posted.txt");
-    let mut text = std::fs::read_to_string(&file).unwrap_or_default();
-    text.push_str(&line);
-    text.push('\n');
-    std::fs::write(file, text)?;
+    if let Some(ms) = std::fs::read_to_string(dir.join("slow.txt"))
+        .ok()
+        .and_then(|t| t.trim().parse().ok())
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+    if let Ok(why) = std::fs::read_to_string(dir.join("refuse.txt")) {
+        anyhow::bail!("{}", why.trim());
+    }
+    // Appended in one write: changes sent at once each get their line.
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("posted.txt"))?
+        .write_all(format!("{line}\n").as_bytes())?;
     Ok(true)
 }
 

@@ -280,7 +280,13 @@ impl Workspace {
                             .into_any_element(),
                     ))
                     .child(fact("Pipeline", pipeline))
-                    .child(fact("Approvals", div().child(approvals).into_any_element()))
+                    .child(fact(
+                        "Approvals",
+                        div()
+                            .when(self.approval_waits(), |s| s.opacity(super::waiting::FADED))
+                            .child(approvals)
+                            .into_any_element(),
+                    ))
                     .child(fact("Reviewed", div().child(reviewed).into_any_element()))
                     .child(fact("Versions", div().child(versions).into_any_element())),
             )

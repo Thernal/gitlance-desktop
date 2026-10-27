@@ -7,6 +7,7 @@ use super::input::{self, Edit};
 use super::keys::{self, On};
 use super::px;
 use super::tools::ToolView;
+use super::waiting::Op;
 use super::{ROW_RADIUS, Workspace, icons, plural, theme};
 use crate::mr;
 use gpui::{ClickEvent, Context, FontWeight, KeyDownEvent, div, prelude::*};
@@ -42,7 +43,6 @@ impl Verdict {
 pub struct Submit {
     summary: String,
     verdict: Verdict,
-    posting: bool,
     error: Option<String>,
 }
 
@@ -56,7 +56,6 @@ impl Workspace {
         self.submit = Some(Submit {
             summary: String::new(),
             verdict: Verdict::Comment,
-            posting: false,
             error: None,
         });
         cx.notify();
@@ -83,9 +82,6 @@ impl Workspace {
         let Some(s) = self.submit.as_mut() else {
             return;
         };
-        if s.posting {
-            return;
-        }
         if key.key == "enter" && key.modifiers.secondary() {
             return self.run_submit(cx);
         }
@@ -127,13 +123,11 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Publishes the pending comments, then the summary, then the verdict; the card closes when
-    /// all went through and says what failed when not.
+    /// Publishes the pending comments, then the summary, then the verdict. The card closes at once
+    /// and the review shows, faded, until the host answers: the pending comments as discussions,
+    /// the summary, the approval (#139). Refused, the card comes back saying why.
     fn run_submit(&mut self, cx: &mut Context<Self>) {
         let Some(iid) = self.requests.current else {
-            return;
-        };
-        let Some(remote) = self.web.clone() else {
             return;
         };
         let head = self
@@ -141,7 +135,15 @@ impl Workspace {
             .find(iid)
             .map(|m| m.head.clone())
             .unwrap_or_default();
-        let drafts = !self.requests.drafts.is_empty();
+        // One still on its way is not on the host to publish yet.
+        let sent: Vec<u64> = self
+            .requests
+            .drafts
+            .iter()
+            .map(|d| d.id)
+            .filter(|id| !super::waiting::is_temp(*id) && self.draft_waits(*id).is_none())
+            .collect();
+        let drafts = !sent.is_empty();
         let approve_already = self.approved_already();
         let Some(s) = self.submit.as_mut() else {
             return;
@@ -153,46 +155,55 @@ impl Workspace {
                 Some("Nothing to submit: write a summary, or approve or ask for changes.".into());
             return cx.notify();
         }
-        s.posting = true;
-        s.error = None;
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let verdict = match verdict {
-                        Verdict::Comment => mr::Verdict::Comment,
-                        Verdict::Approve => mr::Verdict::Approve,
-                        Verdict::RequestChanges => mr::Verdict::RequestChanges,
-                    };
-                    mr::submit(
-                        &remote,
-                        iid,
-                        &head,
-                        drafts,
-                        &summary,
-                        verdict,
-                        approve_already,
-                    )
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(()) => this.submit = None,
-                    Err(e) => {
-                        if let Some(s) = this.submit.as_mut() {
-                            s.posting = false;
-                            s.error = Some(format!("{e:#}"));
-                        }
-                    }
-                }
-                // Whatever went through (the comments, say) shows either way.
-                this.reload_threads(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        let Some(card) = self.submit.take() else {
+            return;
+        };
+        let w = &mut self.requests.waiting;
+        let mut ops = vec![Op::Publish(
+            sent.into_iter()
+                .map(|id| (id, w.temp_thread(), w.temp()))
+                .collect(),
+        )];
+        if !summary.is_empty() {
+            ops.push(Op::Discussion {
+                thread: w.temp_thread(),
+                note: w.temp(),
+                body: summary.clone(),
+                at: None,
+            });
+        }
+        if verdict == Verdict::Approve && !approve_already {
+            ops.push(Op::Approve { mine: true });
+        }
+        let refused = move |this: &mut Self, why: String, cx: &mut Context<Self>| {
+            if this.submit.is_none() && this.requests.current == Some(iid) {
+                this.reset_field_edit();
+                this.submit = Some(Submit {
+                    error: Some(why),
+                    ..card
+                });
+            } else {
+                this.error = Some(why.into());
+            }
+            cx.notify();
+        };
+        let work = move |remote: crate::git::WebRemote| {
+            let verdict = match verdict {
+                Verdict::Comment => mr::Verdict::Comment,
+                Verdict::Approve => mr::Verdict::Approve,
+                Verdict::RequestChanges => mr::Verdict::RequestChanges,
+            };
+            mr::submit(
+                &remote,
+                iid,
+                &head,
+                drafts,
+                &summary,
+                verdict,
+                approve_already,
+            )
+        };
+        self.send_change(iid, ops, work, refused, cx);
     }
 
     /// Submit review, in the tool window while it is open.
@@ -315,11 +326,10 @@ impl Workspace {
         });
         let drafts = self.requests.drafts.len();
         let agent_drafts = self.agent_drafts().len();
-        let go = match (s.posting, s.verdict) {
-            (true, _) => "Submitting…",
-            (false, Verdict::Comment) => "Submit review",
-            (false, Verdict::Approve) => "Submit and approve",
-            (false, Verdict::RequestChanges) => "Submit, request changes",
+        let go = match s.verdict {
+            Verdict::Comment => "Submit review",
+            Verdict::Approve => "Submit and approve",
+            Verdict::RequestChanges => "Submit, request changes",
         };
         let field = self.field_look(
             &s.summary,
@@ -480,7 +490,6 @@ impl Workspace {
                     .text_color(theme::base())
                     .font_weight(FontWeight::SEMIBOLD)
                     .cursor_pointer()
-                    .when(s.posting, |s| s.opacity(0.6))
                     .hover(|s| s.opacity(0.85))
                     .child(go)
                     .child(keys::caps("⌘↵", On::Filled))

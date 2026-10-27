@@ -36,6 +36,12 @@ for someone using the app, not for someone reading the code; the commits follow 
 - **Comparisons and the working tree stay in the menu.** One you open with ⌥⌘C, or the working tree, becomes a
   row under Branches as a branch does, kept until you close it (× or ⌘W); Swap and Direct keep the same row. An
   agent can open its changes there too, as a comparison or the working tree, with a note offering Show.
+- **What you change on a merge request shows at once.** A comment, a reply, an edit, a deletion, a resolve, a
+  pending comment, Send this now, an approval or a submitted review used to read the whole request again, its
+  discussions, pipeline and Overview going back to loading and the page jumping. It now shows where you made it,
+  faded and saying what it waits for, and becomes the real one when GitLab or GitHub answers; nothing else
+  reloads. If the host refuses, it is taken back and says why, your text back in its field. The Inbox's reply,
+  resolve and Mark done do the same.
 
 ## 1.1.0 — 2026-10-26
 

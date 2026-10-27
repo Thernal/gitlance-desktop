@@ -46,8 +46,17 @@ impl Workspace {
                 .await;
             this.update(cx, |this, cx| {
                 if this.requests.current == Some(iid)
-                    && let Ok(awards) = awards
+                    && let Ok(mut awards) = awards
                 {
+                    // One's own still on its way stays (#139).
+                    for (note, list) in &this.requests.awards {
+                        for a in list.iter().filter(|a| a.id == 0) {
+                            let fresh = awards.entry(*note).or_default();
+                            if !fresh.iter().any(|f| f.name == a.name && f.user == a.user) {
+                                fresh.push(a.clone());
+                            }
+                        }
+                    }
                     this.requests.awards = awards;
                     this.refresh_rows();
                     cx.notify();
@@ -208,6 +217,10 @@ impl Workspace {
                 .mt(px(6.))
                 .children(groups.into_iter().enumerate().map(|(i, (name, who))| {
                     let mine = who.contains(&me);
+                    // Yours, on its way to the host: faded until it answers (#139).
+                    let waits = list
+                        .iter()
+                        .any(|a| a.id == 0 && a.name == name && a.user == me);
                     let tip: gpui::SharedString = format!(":{name}: {}", who.join(", ")).into();
                     let this = this.clone();
                     let toggle = name.clone();
@@ -235,6 +248,7 @@ impl Workspace {
                             theme::hover()
                         })
                         .cursor_pointer()
+                        .when(waits, |s| s.opacity(super::waiting::FADED))
                         // One the list lacks (a custom one) by its name.
                         .child(match emoji::get(&name) {
                             Some(glyph) => glyph.to_owned(),

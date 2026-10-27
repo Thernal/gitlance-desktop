@@ -8,6 +8,7 @@ use super::input::{self, Edit};
 use super::markdown;
 use super::px;
 use super::rows::{FileData, Row};
+use super::waiting::Op;
 use super::{ROW_RADIUS, Selection, Workspace, format, theme};
 use crate::markdown::Helper;
 use crate::review::{self, Comment, Place, State};
@@ -77,7 +78,6 @@ pub struct Compose {
     pub target: Target,
     /// Why the last attempt to post failed.
     error: Option<String>,
-    posting: bool,
     /// The text is shown formatted instead of as written (⌘⇧P); typing goes on and the preview
     /// follows it.
     preview: bool,
@@ -90,6 +90,26 @@ pub struct Compose {
     /// Written on a file read in Code, at its commit (None: the working tree) — a note on a plain
     /// line, under it in the file (#75).
     file: Option<Option<git2::Oid>>,
+}
+
+impl Compose {
+    /// The discussion of the open request a reply, an edit or a note for the agent is in.
+    pub(super) fn thread(&self) -> Option<usize> {
+        match self.target {
+            Target::Reply(ix) | Target::ThreadNote(ix) => Some(ix),
+            Target::Edit(Change::Note { thread, .. }) => Some(thread),
+            _ => None,
+        }
+    }
+
+    /// That discussion moved to `ix` in the list.
+    pub(super) fn set_thread(&mut self, ix: usize) {
+        match &mut self.target {
+            Target::Reply(i) | Target::ThreadNote(i) => *i = ix,
+            Target::Edit(Change::Note { thread, .. }) => *thread = ix,
+            _ => {}
+        }
+    }
 }
 
 impl Workspace {
@@ -464,7 +484,6 @@ impl Workspace {
             at: self.comment_at(),
             target: self.comment_target(),
             error: None,
-            posting: false,
             preview: false,
             pick: 0,
             closed: None,
@@ -500,7 +519,6 @@ impl Workspace {
             at: view.at().to_owned(),
             target: Target::Agent,
             error: None,
-            posting: false,
             preview: false,
             pick: 0,
             closed: None,
@@ -540,7 +558,6 @@ impl Workspace {
             at,
             target: Target::Agent,
             error: None,
-            posting: false,
             preview: false,
             pick: 0,
             closed: None,
@@ -632,7 +649,6 @@ impl Workspace {
             at,
             target,
             error: None,
-            posting: false,
             preview: false,
             pick: 0,
             closed: None,
@@ -709,7 +725,6 @@ impl Workspace {
             at: String::new(),
             target: Target::Answer(id),
             error: None,
-            posting: false,
             preview: false,
             pick: 0,
             closed: None,
@@ -819,7 +834,13 @@ impl Workspace {
 
     /// Starts a reply under discussion `ix` of the open merge request.
     pub(super) fn start_reply(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(t) = self.requests.threads.get(ix) else {
+        // One still on its way to the host has no id to reply to yet (#139).
+        let Some(t) = self
+            .requests
+            .threads
+            .get(ix)
+            .filter(|t| !super::waiting::is_temp_thread(&t.id))
+        else {
             return;
         };
         let (Some(path), Some(line)) = (t.path.clone(), t.new_line.or(t.old_line)) else {
@@ -836,7 +857,6 @@ impl Workspace {
             at: String::new(),
             target: Target::Reply(ix),
             error: None,
-            posting: false,
             preview: false,
             pick: 0,
             closed: None,
@@ -880,7 +900,6 @@ impl Workspace {
             at: String::new(),
             target: Target::InboxReply,
             error: None,
-            posting: false,
             preview: false,
             pick: 0,
             closed: None,
@@ -894,18 +913,30 @@ impl Workspace {
 
     /// Posts the Inbox's reply: to its discussion, or as a comment on the request.
     fn post_inbox_reply(&mut self, cx: &mut Context<Self>) {
-        let (Some(remote), Some(compose), Some((iid, discussion))) = (
-            self.web.clone(),
-            self.compose.as_ref(),
-            self.inbox_view.reply.clone(),
-        ) else {
+        let (Some(compose), Some((iid, discussion))) =
+            (self.compose.as_ref(), self.inbox_view.reply.clone())
+        else {
             return;
         };
         let body = compose.edit.text().trim().to_owned();
-        if body.is_empty() || compose.posting {
+        if body.is_empty() {
             return;
         }
-        self.submit_compose(cx, move || match discussion {
+        let w = &mut self.requests.waiting;
+        let op = match discussion.clone() {
+            Some(thread) => Op::Reply {
+                thread,
+                note: w.temp(),
+                body: body.clone(),
+            },
+            None => Op::Discussion {
+                thread: w.temp_thread(),
+                note: w.temp(),
+                body: body.clone(),
+                at: None,
+            },
+        };
+        self.submit_compose(iid, vec![op], cx, move |remote| match discussion {
             Some(id) => crate::mr::reply(&remote, iid, &id, &body),
             None => crate::mr::comment(&remote, iid, &body),
         });
@@ -927,7 +958,11 @@ impl Workspace {
                 let Some(t) = self.requests.threads.get(thread) else {
                     return;
                 };
-                let Some(n) = t.notes.iter().find(|n| n.id == note) else {
+                let Some(n) = t
+                    .notes
+                    .iter()
+                    .find(|n| n.id == note && !super::waiting::is_temp(n.id))
+                else {
                     return;
                 };
                 self.thread_at = Some(thread);
@@ -956,7 +991,6 @@ impl Workspace {
             at: String::new(),
             target: Target::Edit(change),
             error: None,
-            posting: false,
             preview: false,
             pick: 0,
             closed: None,
@@ -1003,7 +1037,7 @@ impl Workspace {
             return;
         };
         let body = compose.edit.text().trim().to_owned();
-        if body.is_empty() || compose.posting {
+        if body.is_empty() {
             return;
         }
         match change {
@@ -1018,15 +1052,17 @@ impl Workspace {
                 cx.notify();
             }
             Change::Note { thread, note } => {
-                let (Some(remote), Some(t), Some(iid)) = (
-                    self.web.clone(),
-                    self.requests.threads.get(thread),
-                    self.requests.current,
-                ) else {
+                let (Some(t), Some(iid)) =
+                    (self.requests.threads.get(thread), self.requests.current)
+                else {
                     return;
                 };
                 let id = t.id.clone();
-                self.submit_compose(cx, move || {
+                let op = Op::Edit {
+                    note,
+                    body: body.clone(),
+                };
+                self.submit_compose(iid, vec![op], cx, move |remote| {
                     crate::mr::edit_note(&remote, iid, &id, note, &body)
                 });
             }
@@ -1056,8 +1092,8 @@ impl Workspace {
                 .into_any_element(),
             discussion::button(
                 "edit-save",
-                if compose.posting { "Saving…" } else { "Save" },
-                (!compose.posting && !self.compose_narrow()).then_some("⌘↵"),
+                "Save",
+                (!self.compose_narrow()).then_some("⌘↵"),
                 Kind::Primary(tone),
             )
             .h(px(28.))
@@ -1114,9 +1150,7 @@ impl Workspace {
 
     fn toggle_target(&mut self, cx: &mut Context<Self>) {
         let request = self.compose_request();
-        if let Some(compose) = self.compose.as_mut()
-            && !compose.posting
-        {
+        if let Some(compose) = self.compose.as_mut() {
             compose.target = match (compose.target, request) {
                 // ⇥ in a discussion's reply: a note for the agent instead, and back (#50 G).
                 (Target::Reply(ix), _) => Target::ThreadNote(ix),
@@ -1197,7 +1231,7 @@ impl Workspace {
     /// Posts the comment being written to merge request `iid`, on its line.
     /// With `draft`, as a pending comment that only its author sees until the review is submitted.
     pub(super) fn post_comment(&mut self, iid: u64, draft: bool, cx: &mut Context<Self>) {
-        let (Some(remote), Some(compose)) = (self.web.clone(), self.compose.as_ref()) else {
+        let Some(compose) = self.compose.as_ref() else {
             return;
         };
         let body = compose.edit.text().trim().to_owned();
@@ -1212,7 +1246,7 @@ impl Workspace {
             .filter(|_| compose.page.is_some())
             .map(|f| f.line_pair(compose.old, compose.line));
         let file = file.map(|f| (f.new_path.clone(), f.old_path.clone()));
-        if body.is_empty() || compose.posting {
+        if body.is_empty() {
             return;
         }
         let Some((new_path, old_path)) = file else {
@@ -1229,7 +1263,29 @@ impl Workspace {
         });
         let path = new_path.clone().or(old_path.clone()).unwrap_or_default();
         let old_path = old_path.or(new_path).unwrap_or_default();
-        self.submit_compose(cx, move || {
+        // Shown at once where it was written: a pending comment, or a discussion (#139).
+        let w = &mut self.requests.waiting;
+        let op = if draft {
+            Op::Draft(crate::mr::Draft {
+                id: w.temp(),
+                body: body.clone(),
+                path: Some(path.clone()),
+                new_line,
+                old_line,
+            })
+        } else {
+            Op::Discussion {
+                thread: w.temp_thread(),
+                note: w.temp(),
+                body: body.clone(),
+                at: Some(super::waiting::At {
+                    path: path.clone(),
+                    new_line,
+                    old_line,
+                }),
+            }
+        };
+        self.submit_compose(iid, vec![op], cx, move |remote| {
             crate::mr::post_discussion(
                 &remote,
                 iid,
@@ -1250,8 +1306,7 @@ impl Workspace {
 
     /// Writes the reply being composed to the discussion it answers.
     fn post_reply(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let (Some(remote), Some(compose), Some(thread), Some(iid)) = (
-            self.web.clone(),
+        let (Some(compose), Some(thread), Some(iid)) = (
             self.compose.as_ref(),
             self.requests.threads.get(ix),
             self.requests.current,
@@ -1259,54 +1314,92 @@ impl Workspace {
             return;
         };
         let (body, id) = (compose.edit.text().trim().to_owned(), thread.id.clone());
-        if body.is_empty() || compose.posting {
+        if body.is_empty() || super::waiting::is_temp_thread(&id) {
             return;
         }
-        self.submit_compose(cx, move || crate::mr::reply(&remote, iid, &id, &body));
+        let op = Op::Reply {
+            thread: id.clone(),
+            note: self.requests.waiting.temp(),
+            body: body.clone(),
+        };
+        self.submit_compose(iid, vec![op], cx, move |remote| {
+            crate::mr::reply(&remote, iid, &id, &body)
+        });
     }
 
-    /// Runs `work` away from the interface while the composer shows "Posting…"; on success the
-    /// composer closes and the request's discussions are read again, on failure the reason stays in
-    /// the composer with the text.
+    /// Sends what the composer holds, as `ops` on request `iid`, with `work`: the composer closes
+    /// and the comment shows at once, faded (#139). Refused, the composer comes back with its text
+    /// and the reason when nothing else is being written and its place still shows; else its text
+    /// goes to the clipboard and the error bar says why.
     fn submit_compose(
         &mut self,
+        iid: u64,
+        ops: Vec<Op>,
         cx: &mut Context<Self>,
-        work: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
+        work: impl FnOnce(crate::git::WebRemote) -> anyhow::Result<()> + Send + 'static,
     ) {
-        if let Some(c) = self.compose.as_mut() {
-            c.posting = true;
-            c.error = None;
+        if self.web.is_none() {
+            return;
         }
-        let inbox = self
-            .compose
-            .as_ref()
-            .is_some_and(|c| c.target == Target::InboxReply);
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = cx.background_executor().spawn(async move { work() }).await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(()) => {
-                        this.compose = None;
-                        this.refresh_rows();
-                        this.remeasure_pages();
-                        match this.inbox_view.reply.take() {
-                            Some((iid, _)) if inbox => this.inbox_posted(iid, cx),
-                            _ => this.reload_threads(cx),
-                        }
-                    }
-                    Err(e) => {
-                        if let Some(c) = this.compose.as_mut() {
-                            c.posting = false;
-                            c.error = Some(format!("{e:#}"));
-                        }
-                    }
+        let Some(mut compose) = self.compose.take() else {
+            return;
+        };
+        let reply = self.inbox_view.reply.take();
+        // A reply or an edit comes back to its discussion, wherever it moved.
+        let thread = compose
+            .thread()
+            .and_then(|ix| self.requests.threads.get(ix))
+            .map(|t| t.id.clone());
+        self.refresh_rows();
+        self.remeasure_pages();
+        let refused = move |this: &mut Self, why: String, cx: &mut Context<Self>| {
+            let place = match &thread {
+                Some(id) => this.requests.threads.iter().position(|t| &t.id == id),
+                None => Some(usize::MAX),
+            };
+            let shows = match compose.target {
+                Target::InboxReply => {
+                    this.inbox
+                        && this.inbox_view.reply.is_none()
+                        && reply.as_ref().is_some_and(|(i, _)| {
+                            this.notices
+                                .list
+                                .get(this.notices.at)
+                                .is_some_and(|n| n.iid == *i)
+                        })
                 }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+                Target::Request(_) => {
+                    this.requests.current == Some(iid)
+                        && (compose.page.is_some()
+                            || this.current_path().as_deref() == Some(compose.path.as_str()))
+                }
+                _ => this.requests.current == Some(iid),
+            };
+            match place {
+                Some(ix) if this.compose.is_none() && shows => {
+                    if ix != usize::MAX {
+                        compose.set_thread(ix);
+                    }
+                    compose.error = Some(why);
+                    if compose.target == Target::InboxReply {
+                        this.inbox_view.reply = reply;
+                    }
+                    this.compose = Some(compose);
+                    this.reset_field_edit();
+                    this.refresh_rows();
+                    this.remeasure_pages();
+                }
+                _ => {
+                    cx.write_to_clipboard(ClipboardItem::new_string(
+                        compose.edit.text().to_owned(),
+                    ));
+                    this.error =
+                        Some(format!("Not sent — {why}. Its text is on the clipboard.").into());
+                }
+            }
+            cx.notify();
+        };
+        self.send_change(iid, ops, work, refused, cx);
     }
 
     /// A line of the open file with both of GitLab's counters: from its hunk, or, outside the
@@ -1697,7 +1790,7 @@ impl Workspace {
     pub(super) fn compose_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = &event.keystroke;
         let m = key.modifiers;
-        if self.compose.as_ref().is_none_or(|c| c.posting) {
+        if self.compose.is_none() {
             return;
         }
         if key.key == "enter" && m.secondary() {
@@ -1875,7 +1968,7 @@ impl Workspace {
 
     /// A markdown helper of the composer's toolbar, on the selection or at the caret.
     pub(super) fn apply_helper(&mut self, helper: Helper, cx: &mut Context<Self>) {
-        let Some(compose) = self.compose.as_mut().filter(|c| !c.posting) else {
+        let Some(compose) = self.compose.as_mut() else {
             return;
         };
         crate::markdown::apply(&mut compose.edit, helper);
@@ -2280,12 +2373,11 @@ impl Workspace {
         // The foot by its room (Design shell round 6, #129): at S "Add to drafts" is "Add" (named in
         // full in its tooltip), and the other ways to send fold into its own ▾.
         let room = self.compose_room();
-        let folded = room == Room::S && !compose.posting;
-        let primary = match (&compose.target, compose.posting) {
-            (_, true) => "Posting…",
-            (Target::Agent, _) if room == Room::S => "Add",
-            (Target::Agent, _) => "Add to drafts",
-            (_, _) => "Comment",
+        let folded = room == Room::S;
+        let primary = match &compose.target {
+            Target::Agent if room == Room::S => "Add",
+            Target::Agent => "Add to drafts",
+            _ => "Comment",
         };
         // An agent comment's bar (#50 F): Send all beside Add to drafts, Send this only in ▾.
         let drafts = self.agent_drafts().len();
@@ -2295,8 +2387,8 @@ impl Workspace {
         } else {
             "Send".to_owned()
         };
-        let review_iid = match (compose.target, compose.posting) {
-            (Target::Request(iid), false) => Some(iid),
+        let review_iid = match compose.target {
+            Target::Request(iid) => Some(iid),
             _ => None,
         };
         let (send_all, send_one, fold_menu) = (this.clone(), this.clone(), this.clone());
@@ -2423,12 +2515,12 @@ impl Workspace {
         let add_button = discussion::button(
             "compose-add",
             primary,
-            (!compose.posting && !narrow).then_some("⌘↵"),
+            (!narrow).then_some("⌘↵"),
             Kind::Primary(tone),
         )
         .h(px(28.))
         .px(px(10.))
-        .when(narrow && !compose.posting, |s| {
+        .when(narrow, |s| {
             s.tooltip_show_delay(crate::ui::hover::LONG)
                 .tooltip(move |_, cx| {
                     cx.new(|_| {
@@ -2555,16 +2647,14 @@ impl Workspace {
             .into_any_element(),
             discussion::button(
                 "reply-send",
-                if compose.posting {
-                    "Posting…"
-                } else if agent && self.inbox && matches!(compose.target, Target::Answer(_)) {
+                if agent && self.inbox && matches!(compose.target, Target::Answer(_)) {
                     "Send answer"
                 } else if agent {
                     "Add to drafts"
                 } else {
                     "Reply"
                 },
-                (!compose.posting && !narrow).then_some("⌘↵"),
+                (!narrow).then_some("⌘↵"),
                 Kind::Primary(tone),
             )
             .h(px(28.))

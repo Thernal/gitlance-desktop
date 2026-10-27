@@ -63,6 +63,7 @@ mod theme;
 mod toast;
 mod tools;
 mod updates;
+mod waiting;
 mod watch;
 mod welcome;
 mod words;
@@ -1217,6 +1218,11 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
         if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("toast-act")) {
             ws.update(cx, |this, cx| this.press_toast(cx));
             wait(2500).await;
+        }
+        // Changes sent on the request open, to see them waiting or refused (#139).
+        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("changes")) {
+            ws.update(cx, |this, cx| this.snapshot_changes(cx));
+            wait(1500).await;
         }
         // Open in's ▾ under its button, on the page the keys reached (#78).
         if std::env::var("GITLANCE_SNAPSHOT_MENU").as_deref() == Ok("open-in") {

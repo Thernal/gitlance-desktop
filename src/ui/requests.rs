@@ -7,6 +7,7 @@ use super::px;
 use super::roots::Group;
 use super::rows::Row;
 use super::tools::ToolView;
+use super::waiting::Op;
 use super::{Header, Selection, Workspace, format, plural, theme};
 use crate::git::{RefKind, Repo, Version};
 use crate::mr::{self, Draft, Mr, Pipeline, Thread};
@@ -72,6 +73,8 @@ pub struct Requests {
     pub walk: Option<(u64, Group)>,
     /// Its discussions are being read: Discussions shimmers instead of saying there are none.
     pub reading: bool,
+    /// What shows of its discussions, pending comments and approvals: `base` with the changes
+    /// still `waiting` on it (#139).
     pub threads: Vec<Thread>,
     /// One's own pending comments on the current request.
     pub drafts: Vec<Draft>,
@@ -79,6 +82,12 @@ pub struct Requests {
     pub pipeline: Option<Pipeline>,
     /// Who approved the request, and where the reviewer stands.
     pub approvals: Option<mr::Approvals>,
+    /// The host's last answer for them, and the tick the read that gave it began at.
+    pub base: super::waiting::Base,
+    pub from: u64,
+    /// The changes sent to the host and not yet read back, on any request (#139).
+    pub waiting: super::waiting::Waiting,
+    reload_task: Option<Task<()>>,
     /// Its description, labels, milestone and assignees, for its Overview (#8, #73).
     pub details: Option<mr::Details>,
     /// The files of a request's whole diff when it was last loaded: its Changes tab's count, on a
@@ -323,12 +332,39 @@ impl Workspace {
         self.requests.list.iter().find(|m| m.source == name)
     }
 
-    /// Reads the discussions of the current request again (after posting to it).
+    /// Reads the discussions, pending comments and approvals of the current request again (after
+    /// a change to it) and swaps them in, nothing cleared first; a read that fails leaves what
+    /// shows (#139).
     pub(super) fn reload_threads(&mut self, cx: &mut Context<Self>) {
-        if let Some(ix) = self.branch {
-            self.requests.current = None;
-            self.sync_request(ix, cx);
-        }
+        let (Some(iid), Some(remote)) = (self.requests.current, self.web.clone()) else {
+            return;
+        };
+        let from = self.requests.waiting.tick();
+        self.requests.reload_task = Some(cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    let drafts = mr::drafts(&remote, iid).ok();
+                    let approvals = mr::approvals(&remote, iid).ok();
+                    mr::threads(&remote, iid).map(|t| (t, drafts, approvals))
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.requests.current != Some(iid) {
+                    return;
+                }
+                if let Ok((threads, drafts, approvals)) = read {
+                    let base = super::waiting::Base {
+                        threads,
+                        drafts: drafts.unwrap_or_else(|| this.requests.base.drafts.clone()),
+                        approvals: approvals.or_else(|| this.requests.base.approvals.clone()),
+                    };
+                    this.take_base(iid, from, base, cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     /// Follows the branch selection: a request opened as one (or being opened) whose source
@@ -357,6 +393,8 @@ impl Workspace {
         if iid != self.requests.current {
             self.requests.threads.clear();
             self.requests.drafts.clear();
+            self.requests.base = Default::default();
+            self.requests.reload_task = None;
             self.requests.pipeline = None;
             self.requests.approvals = None;
             self.requests.details = None;
@@ -379,6 +417,7 @@ impl Workspace {
         };
         let known = self.requests.login.is_some();
         self.requests.reading = true;
+        let from = self.requests.waiting.tick();
         self.requests.thread_task = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -406,13 +445,13 @@ impl Workspace {
                                 this.requests.login = login;
                             }
                             this.requests.details = details;
-                            this.requests.threads = threads;
-                            this.requests.drafts = drafts;
                             this.requests.pipeline = pipeline;
-                            this.requests.approvals = approvals;
-                            // Both read the discussions just taken in.
-                            this.compute_histories(cx);
-                            this.load_awards(cx);
+                            let base = super::waiting::Base {
+                                threads,
+                                drafts,
+                                approvals,
+                            };
+                            this.take_base(iid, from, base, cx);
                             // A link to a comment waits for the discussions; the diff is in by now
                             // or comes later and tries again.
                             let diff_in = this.showing_request();
@@ -1039,7 +1078,10 @@ impl Workspace {
         };
         let open = self.mr_open(ix);
         let focused = self.thread_at == Some(ix);
-        let can_act = self.request_target().is_some();
+        // On its way to the host: faded, and nothing to act on until it has an id (#139).
+        let waits = self.thread_waits(&t.id);
+        let sending = super::waiting::is_temp_thread(&t.id);
+        let can_act = self.request_target().is_some() && !sending;
         let (fold, pick, reply, resolve, raw, edit) = (
             this.clone(),
             this.clone(),
@@ -1098,7 +1140,16 @@ impl Workspace {
                             .ok();
                     })
             }))
-            .children(t.resolvable.then(|| discussion::state(t.resolved)))
+            .children(t.resolvable.then(|| {
+                discussion::state(t.resolved).when(waits.is_some() && !sending, |s| {
+                    s.opacity(super::waiting::FADED)
+                })
+            }))
+            .children(
+                waits
+                    .filter(|_| !sending)
+                    .map(|word| div().flex_none().text_color(theme::muted()).child(word)),
+            )
             .tooltip_show_delay(crate::ui::hover::LONG)
             // Folded, a long hover reads its start and how many replied (X59).
             .tooltip({
@@ -1146,7 +1197,10 @@ impl Workspace {
             };
             let edit_box = self.edit_box(change, edit.clone());
             let own = self.requests.login.as_deref() == Some(note.login.as_str());
-            let editable = can_act && self.compose.is_none() && own;
+            // Waiting on the host: faded, its time saying what for; a new one takes no actions.
+            let (time, note_waits) = self.note_time(note.id, note.created);
+            let can_act = can_act && !super::waiting::is_temp(note.id);
+            let editable = can_act && self.compose.is_none() && own && !note_waits;
             let (hover, pills) = (edit.clone(), self.reaction_pills(note.id, edit.clone()));
             let bar = can_act
                 .then(|| self.hover_bar(ix, note.id, &note.login, edit.clone()))
@@ -1156,7 +1210,7 @@ impl Workspace {
                 &note.author,
                 own,
                 (author.as_deref() == Some(note.author.as_str())).then_some("Author"),
-                format::ago(note.created),
+                time,
                 div()
                     .child(match edit_box {
                         Some(edit_box) => edit_box.into_any_element(),
@@ -1207,6 +1261,7 @@ impl Workspace {
             // Hovering a note shows its reaction bar.
             div()
                 .id(("note-hover", note_id as usize))
+                .when(note_waits && !sending, |s| s.opacity(super::waiting::FADED))
                 .child(note_el)
                 .on_hover(move |hovered: &bool, _, cx| {
                     let hovered = *hovered;
@@ -1308,6 +1363,7 @@ impl Workspace {
             .child(
                 discussion::frame(Source::GitLab, focused)
                     .id(("thread", ix))
+                    .when(sending, |s| s.opacity(super::waiting::FADED))
                     .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
                         pick.update(cx, |this, cx| {
                             if this.thread_at != Some(ix) {
@@ -1485,6 +1541,9 @@ impl Workspace {
         let id = d.id;
         let selecting = self.selecting(this.clone());
         let (delete, raw, send) = (this.clone(), this.clone(), this);
+        // Waiting on the host: faded, saying what for, nothing to act on (#139).
+        let waits = self.draft_waits(id);
+        let acts = waits.is_none() && !super::waiting::is_temp(id);
         let one = self.sends_one_draft();
         // GitHub publishes a pending comment only with its review: there it says so (#138).
         let send = discussion::icon_button(
@@ -1534,8 +1593,8 @@ impl Workspace {
                             .ok();
                     })
             }))
-            .child(send)
-            .child(
+            .children(acts.then_some(send))
+            .children(acts.then(|| {
                 discussion::icon_button(
                     ("draft-delete", ix),
                     "trash",
@@ -1551,8 +1610,8 @@ impl Workspace {
                     delete
                         .update(cx, |this, cx| this.discard_draft(id, cx))
                         .ok();
-                }),
-            );
+                })
+            }));
         div()
             .w_full()
             .pl(px(indent))
@@ -1560,12 +1619,13 @@ impl Workspace {
             .py(px(6.))
             .child(
                 discussion::frame(Source::Pending, self.draft_at == Some(ix))
+                    .when(waits.is_some(), |s| s.opacity(super::waiting::FADED))
                     .child(bar)
                     .child(div().child(discussion::note(
                         &self.me,
                         true,
                         None,
-                        "pending".to_owned(),
+                        waits.unwrap_or("pending").to_owned(),
                         super::markdown::body(
                             &d.body,
                             self.settings.rich_comments,
@@ -1581,41 +1641,43 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// Runs a GitLab call away from the interface; afterwards the request is read again.
+    /// A change to the open request, `ops` sent with `work`; a refusal says why in the error bar
+    /// (#139).
     fn request_action(
         &mut self,
+        ops: Vec<Op>,
         work: impl FnOnce(crate::git::WebRemote) -> anyhow::Result<()> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
-        let Some(remote) = self.web.clone() else {
-            return;
-        };
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { work(remote) })
-                .await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(()) => {
-                        this.error = None;
-                        this.reload_threads(cx);
-                    }
-                    Err(e) => this.error = Some(format!("{e:#}").into()),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        if let Some(iid) = self.requests.current {
+            self.send_change(iid, ops, work, Self::say_refused, cx);
+        }
     }
 
+    /// Resolves discussion `ix`, or opens it again: it folds, or opens, at once (#139).
     pub(super) fn toggle_resolved(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let (Some(t), Some(iid)) = (self.requests.threads.get(ix), self.requests.current) else {
+        let Some(t) = self.requests.threads.get(ix) else {
             return;
         };
+        if super::waiting::is_temp_thread(&t.id) {
+            return;
+        }
         let (id, resolved) = (t.id.clone(), !t.resolved);
-        self.request_action(move |remote| mr::resolve(&remote, iid, &id, resolved), cx);
+        let Some(iid) = self.requests.current else {
+            return;
+        };
+        // Shown as its new state shows it.
+        self.mark_motion(&format!("thread-{ix}"), cx);
+        self.toggled_mr.remove(&ix);
+        let op = Op::Resolve {
+            thread: id.clone(),
+            resolved,
+        };
+        self.request_action(
+            vec![op],
+            move |remote| mr::resolve(&remote, iid, &id, resolved),
+            cx,
+        );
     }
 
     /// `a`: approves the open request, or takes one's approval back.
@@ -1626,15 +1688,16 @@ impl Workspace {
         if !self.showing_request() {
             return;
         }
+        let op = vec![Op::Approve { mine: !a.mine }];
         if a.mine {
-            self.request_action(move |remote| mr::unapprove(&remote, iid), cx);
+            self.request_action(op, move |remote| mr::unapprove(&remote, iid), cx);
         } else if a.can {
             let head = self
                 .requests
                 .find(iid)
                 .map(|m| m.head.clone())
                 .unwrap_or_default();
-            self.request_action(move |remote| mr::approve(&remote, iid, &head), cx);
+            self.request_action(op, move |remote| mr::approve(&remote, iid, &head), cx);
         } else {
             self.error = Some("GitLab does not let you approve this merge request.".into());
             cx.notify();
@@ -1700,20 +1763,38 @@ impl Workspace {
         order
     }
 
-    fn discard_draft(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(iid) = self.requests.current else {
+    pub(super) fn discard_draft(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(iid) = self
+            .requests
+            .current
+            .filter(|_| !super::waiting::is_temp(id))
+        else {
             return;
         };
-        self.request_action(move |remote| mr::delete_draft(&remote, iid, id), cx);
+        self.request_action(
+            vec![Op::DropDraft(id)],
+            move |remote| mr::delete_draft(&remote, iid, id),
+            cx,
+        );
     }
 
     /// Send this now: pending comment `id` is published alone and becomes a discussion on its
     /// line; the others stay pending. A failure leaves it pending and says why (#138).
     pub(super) fn send_draft_now(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(iid) = self.requests.current else {
+        let Some(iid) = self
+            .requests
+            .current
+            .filter(|_| !super::waiting::is_temp(id))
+        else {
             return;
         };
-        self.request_action(move |remote| mr::publish_draft(&remote, iid, id), cx);
+        let w = &mut self.requests.waiting;
+        let op = Op::Publish(vec![(id, w.temp_thread(), w.temp())]);
+        self.request_action(
+            vec![op],
+            move |remote| mr::publish_draft(&remote, iid, id),
+            cx,
+        );
     }
 
     /// Whether a pending comment can be sent alone: GitLab publishes one draft, GitHub only the
@@ -1855,6 +1936,7 @@ impl Workspace {
             return;
         };
         self.request_action(
+            vec![Op::Delete { note }],
             move |remote| mr::delete_note(&remote, iid, &discussion, note),
             cx,
         );
@@ -1917,12 +1999,16 @@ impl Workspace {
                 None => "General".to_owned(),
             };
             let first = &t.notes[0];
+            // Faded while a change to it waits on the host (#139).
+            let waits = self.thread_waits(&t.id).is_some()
+                || t.notes.iter().any(|n| self.note_time(n.id, n.created).1);
             comment_item(
                 ("comment-mr", ix),
                 theme::warning(),
                 where_,
                 format!("{}: {}", first.author, self.one_line(&first.body)),
             )
+            .when(waits, |s| s.opacity(super::waiting::FADED))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if let Some((path, line)) = target.clone() {
                     this.jump_to_line(&path, line, old, cx)
@@ -1944,8 +2030,12 @@ impl Workspace {
             )
             .relative()
             .group("pending-row")
+            .when(self.draft_waits(d.id).is_some(), |s| {
+                s.opacity(super::waiting::FADED)
+            })
             .children(
                 self.send_now_chip(d.id, "pending-row", cx)
+                    .filter(|_| self.draft_waits(d.id).is_none() && !super::waiting::is_temp(d.id))
                     .map(|chip| chip.absolute().top(px(3.)).right(px(6.))),
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -2400,6 +2490,7 @@ impl Workspace {
         &self,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
+        let waits = self.approval_waits();
         self.requests.approvals.clone().map(|a| {
             let count = if a.required > 0 {
                 format!(" {}/{}", a.required - a.left.min(a.required), a.required)
@@ -2472,6 +2563,8 @@ impl Workspace {
                 .when(a.mine || a.can, |s| {
                     s.cursor_pointer().hover(|s| s.bg(theme::hover()))
                 })
+                // Counted at once, faded until the host answers (#139).
+                .when(waits, |s| s.opacity(super::waiting::FADED))
                 .child(format!("{label}{count}"))
                 .when(a.can && !a.mine, |s| {
                     s.child(super::keys::caps("a", super::keys::On::Plain))

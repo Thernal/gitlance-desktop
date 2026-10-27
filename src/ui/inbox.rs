@@ -325,32 +325,20 @@ impl Workspace {
         self.start_inbox_reply(iid, discussion, spot, cx);
     }
 
-    /// Resolves (or opens again) discussion `id` of request `iid` from the Inbox.
+    /// Resolves (or opens again) discussion `id` of request `iid` from the Inbox: at once, faded
+    /// until the host answers (#139).
     fn inbox_resolve(&mut self, iid: u64, id: String, resolved: bool, cx: &mut Context<Self>) {
-        let Some(remote) = self.web.clone() else {
-            return;
+        let op = super::waiting::Op::Resolve {
+            thread: id.clone(),
+            resolved,
         };
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { crate::mr::resolve(&remote, iid, &id, resolved) })
-                .await;
-            this.update(cx, |this, cx| match result {
-                Ok(()) => this.inbox_posted(iid, cx),
-                Err(e) => {
-                    this.error = Some(format!("{e:#}").into());
-                    cx.notify();
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Something was posted to request `iid` from the Inbox: its discussions are read again.
-    pub(super) fn inbox_posted(&mut self, iid: u64, cx: &mut Context<Self>) {
-        self.notices.forget(iid);
-        self.load_notices(cx);
+        self.send_change(
+            iid,
+            vec![op],
+            move |remote| crate::mr::resolve(&remote, iid, &id, resolved),
+            Self::say_refused,
+            cx,
+        );
     }
 
     /// The Inbox's filters, in its page bar (#71).
@@ -973,11 +961,14 @@ impl Workspace {
             Some(t) => {
                 let last = t.notes.len().saturating_sub(1);
                 let notes = t.notes.iter().enumerate().map(|(i, note)| {
+                    // Sent from here or the diff: faded until the host answers; the read after it is
+                    // the Inbox's next look (#139).
+                    let waits = self.requests.waiting.note(n.iid, u64::MAX, note.id);
                     discussion::note(
                         &note.author,
                         note.login == me,
                         None,
-                        format::ago(note.created),
+                        waits.map_or_else(|| format::ago(note.created), str::to_owned),
                         markdown::body(
                             &note.body,
                             self.settings.rich_comments,
@@ -989,18 +980,29 @@ impl Workspace {
                         None,
                         None,
                     )
+                    .when(waits.is_some(), |s| s.opacity(super::waiting::FADED))
                 });
                 let (iid, id, resolved) = (n.iid, t.id.clone(), t.resolved);
+                let resolving = self
+                    .requests
+                    .waiting
+                    .thread(iid, u64::MAX, &id)
+                    .filter(|_| t.resolvable);
                 discussion::frame(Source::GitLab, n.note.is_some())
                     .children(notes)
                     .children(t.resolvable.then(|| {
                         div().flex().justify_end().pt(px(6.)).child(
                             discussion::button(
                                 "inbox-resolve",
-                                if resolved { "Reopen" } else { "Resolve" },
+                                match resolving {
+                                    Some(word) => word,
+                                    None if resolved => "Reopen",
+                                    None => "Resolve",
+                                },
                                 None,
                                 Button::Plain,
                             )
+                            .when(resolving.is_some(), |s| s.opacity(super::waiting::FADED))
                             .on_click(cx.listener(
                                 move |this, _: &ClickEvent, _, cx| {
                                     this.inbox_resolve(iid, id.clone(), !resolved, cx)

@@ -79,6 +79,10 @@ pub struct Notices {
     seen_loaded: bool,
     /// A request's discussions as last read, with its `updated_at` then.
     cache: HashMap<u64, (i64, Vec<Thread>)>,
+    /// The tick the read of each began at, and what shows of those with changes waiting on them
+    /// (#139).
+    from: HashMap<u64, u64>,
+    shown: HashMap<u64, Vec<Thread>>,
     task: Option<Task<()>>,
     poll: Option<Task<()>>,
     /// A first read finished, whatever it found: before it the Inbox shows rows loading (#72).
@@ -93,23 +97,49 @@ impl Notice {
 }
 
 impl Notices {
-    /// Request `iid`'s discussions as last read, when it is one of those read.
+    /// Request `iid`'s discussions as last read, with the changes waiting on them, when it is one
+    /// of those read.
     pub fn threads_of(&self, iid: u64) -> Option<&[Thread]> {
-        self.cache.get(&iid).map(|(_, threads)| threads.as_slice())
+        match self.shown.get(&iid) {
+            Some(threads) => Some(threads),
+            None => self.cache.get(&iid).map(|(_, threads)| threads.as_slice()),
+        }
     }
 
-    /// The discussion of request `iid` holding note `note`, as last read.
+    /// The discussion of request `iid` holding note `note`, as it shows.
     pub fn thread_of(&self, iid: u64, note: u64) -> Option<&Thread> {
-        self.cache
-            .get(&iid)?
-            .1
+        self.threads_of(iid)?
             .iter()
             .find(|t| t.notes.iter().any(|n| n.id == note))
     }
 
-    /// Request `iid`'s discussions are read again on the next load (after posting to it).
-    pub fn forget(&mut self, iid: u64) {
-        self.cache.remove(&iid);
+    /// Request `iid`'s discussions are read again on the next load (after a change to it); until
+    /// then they show as they are.
+    pub fn stale(&mut self, iid: u64) {
+        if let Some((updated, _)) = self.cache.get_mut(&iid) {
+            *updated = i64::MIN;
+        }
+    }
+
+    /// What shows of request `iid`'s discussions made again with the changes waiting on them.
+    pub fn show(&mut self, iid: u64, waiting: &super::waiting::Waiting, me: super::waiting::Me) {
+        let from = self.from.get(&iid).copied().unwrap_or(0);
+        match self.cache.get(&iid) {
+            Some((_, threads)) if waiting.any(iid, from) => {
+                let mut threads = threads.clone();
+                waiting.apply(iid, from, me, &mut threads, &mut Vec::new(), &mut None);
+                self.shown.insert(iid, threads);
+            }
+            _ => {
+                self.shown.remove(&iid);
+            }
+        }
+    }
+
+    /// Whether what shows of request `iid` was read after the answer at tick `done`, or is not
+    /// read at all.
+    pub fn holds(&self, iid: u64, done: u64) -> bool {
+        !self.cache.contains_key(&iid) || self.from.get(&iid).is_some_and(|&from| from > done)
     }
 
     /// Whether `key` (a notice's, or an agent's answer's in the Inbox) was looked at.
@@ -317,6 +347,7 @@ impl Workspace {
         let seen = self.notices.seen.clone();
         let known = self.notices.known_resolved.clone();
         let cache = self.notices.cache.clone();
+        let tick = self.requests.waiting.tick();
         self.notices.task = Some(cx.spawn(async move |this, cx| {
             let found = cx
                 .background_executor()
@@ -331,12 +362,16 @@ impl Workspace {
                     let mut first_resolved = Vec::new();
                     let mut reopened = Vec::new();
                     let mut fresh = HashMap::new();
+                    let mut read_again = Vec::new();
                     for m in requests.iter().take(MOST_REQUESTS) {
                         // Read again only what changed since the last look.
                         let threads = match cache.get(&m.iid) {
                             Some((updated, threads)) if *updated == m.updated => threads.clone(),
                             _ => match mr::threads(&remote, m.iid) {
-                                Ok(threads) => threads,
+                                Ok(threads) => {
+                                    read_again.push(m.iid);
+                                    threads
+                                }
                                 Err(_) => {
                                     complete = false;
                                     continue;
@@ -376,12 +411,15 @@ impl Workspace {
                         fresh.insert(m.iid, (m.updated, threads));
                     }
                     notices.sort_by_key(|n| std::cmp::Reverse(n.created));
-                    anyhow::Ok((notices, floors, first_resolved, reopened, fresh, complete))
+                    let read = (fresh, read_again);
+                    anyhow::Ok((notices, floors, first_resolved, reopened, read, complete))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.notices.loaded = true;
-                if let Ok((list, floors, first_resolved, reopened, fresh, complete)) = found {
+                if let Ok((list, floors, first_resolved, reopened, (fresh, read_again), complete)) =
+                    found
+                {
                     let changed =
                         !floors.is_empty() || !first_resolved.is_empty() || !reopened.is_empty();
                     this.notices.seen.extend(floors);
@@ -393,6 +431,22 @@ impl Workspace {
                         this.notices.save_seen();
                     }
                     this.notices.cache = fresh;
+                    // What was read again holds the changes answered before it began (#139).
+                    let notices = &mut this.notices;
+                    for iid in read_again {
+                        notices.from.insert(iid, tick);
+                    }
+                    notices
+                        .from
+                        .retain(|iid, _| notices.cache.contains_key(iid));
+                    notices.shown.clear();
+                    this.settle_waiting();
+                    let iids: Vec<u64> = this.notices.cache.keys().copied().collect();
+                    let me = this.requests.login.clone().unwrap_or_default();
+                    for iid in iids {
+                        this.notices
+                            .show(iid, &this.requests.waiting, (&this.me, &me));
+                    }
                     if complete {
                         let before = this.notices.read.len();
                         this.notices
@@ -481,12 +535,29 @@ impl Workspace {
             .notices
             .at
             .min(self.notices.list.len().saturating_sub(1));
+        // Gone at once; a refusal puts it back where it was and says why (#139).
         if let Some(id) = n.todo
             && let Some(remote) = self.web.clone()
         {
-            cx.background_executor()
-                .spawn(async move { mr::mark_todo_done(&remote, id) })
-                .detach();
+            let back = n.clone();
+            cx.spawn(async move |this, cx| {
+                let done = cx
+                    .background_executor()
+                    .spawn(async move { mr::mark_todo_done(&remote, id) })
+                    .await;
+                this.update(cx, |this, cx| {
+                    if let Err(e) = done {
+                        if !this.notices.list.iter().any(|n| n.key == back.key) {
+                            let at = ix.min(this.notices.list.len());
+                            this.notices.list.insert(at, back);
+                        }
+                        this.error = Some(format!("Not marked done — {e:#}").into());
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+            .detach();
         }
         if let Some(key) = n.resolved.clone() {
             self.notices.known_resolved.insert(key);
