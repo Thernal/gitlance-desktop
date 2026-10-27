@@ -1484,7 +1484,33 @@ impl Workspace {
         };
         let id = d.id;
         let selecting = self.selecting(this.clone());
-        let (delete, raw) = (this.clone(), this);
+        let (delete, raw, send) = (this.clone(), this.clone(), this);
+        let one = self.sends_one_draft();
+        // GitHub publishes a pending comment only with its review: there it says so (#138).
+        let send = discussion::icon_button(
+            ("draft-send", ix),
+            "send",
+            "Send this now",
+            None,
+            Some(if one {
+                "Publishes this comment alone; the others stay pending"
+            } else {
+                "GitHub sends a pending comment only with its review: Submit review sends it"
+            }),
+            Kind::Plain,
+            self.tight,
+        )
+        .h(px(24.))
+        .px(px(8.))
+        .map(|b| {
+            if one {
+                b.on_click(move |_, _, cx| {
+                    send.update(cx, |this, cx| this.send_draft_now(id, cx)).ok();
+                })
+            } else {
+                b.opacity(0.45).cursor_default()
+            }
+        });
         let bar = discussion::bar(("draft-bar", ix), true)
             .cursor_default()
             .child(discussion::source_pill(Source::Pending))
@@ -1502,6 +1528,7 @@ impl Workspace {
                             .ok();
                     })
             }))
+            .child(send)
             .child(
                 discussion::icon_button(
                     ("draft-delete", ix),
@@ -1655,6 +1682,60 @@ impl Workspace {
             return;
         };
         self.request_action(move |remote| mr::delete_draft(&remote, iid, id), cx);
+    }
+
+    /// Send this now: pending comment `id` is published alone and becomes a discussion on its
+    /// line; the others stay pending. A failure leaves it pending and says why (#138).
+    pub(super) fn send_draft_now(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(iid) = self.requests.current else {
+            return;
+        };
+        self.request_action(move |remote| mr::publish_draft(&remote, iid, id), cx);
+    }
+
+    /// Whether a pending comment can be sent alone: GitLab publishes one draft, GitHub only the
+    /// whole review (#138).
+    pub(super) fn sends_one_draft(&self) -> bool {
+        self.web.as_ref().is_some_and(|w| !w.github)
+    }
+
+    /// Send now on a pending comment's row in a list (the Discussions window, Submit review),
+    /// shown while the row is under the pointer; none on GitHub (#138).
+    pub(super) fn send_now_chip(
+        &self,
+        id: u64,
+        group: &'static str,
+        cx: &Context<Self>,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
+        self.sends_one_draft().then(|| {
+            div()
+                .id(("send-now", id as usize))
+                .flex_none()
+                .px(px(6.))
+                .h(px(20.))
+                .flex()
+                .items_center()
+                .rounded(px(super::ROW_RADIUS))
+                .border_1()
+                .border_color(theme::island_border())
+                .bg(theme::panel())
+                .text_size(px(11.))
+                .text_color(theme::text())
+                .cursor_pointer()
+                .hover(|s| s.bg(theme::selected()))
+                .invisible()
+                .group_hover(group, |s| s.visible())
+                .child("Send now")
+                .tooltip_show_delay(super::hover::LONG)
+                .tooltip(|_, cx| {
+                    cx.new(|_| super::Tip("Publishes this comment alone; the others stay pending"))
+                        .into()
+                })
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.send_draft_now(id, cx);
+                }))
+        })
     }
 
     /// Delete on one's own note, then "Delete on GitLab?" with Delete and Cancel (#76).
@@ -1837,6 +1918,12 @@ impl Workspace {
                 theme::warning(),
                 where_,
                 self.one_line(&d.body),
+            )
+            .relative()
+            .group("pending-row")
+            .children(
+                self.send_now_chip(d.id, "pending-row", cx)
+                    .map(|chip| chip.absolute().top(px(3.)).right(px(6.))),
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if let Some((path, line)) = target.clone() {

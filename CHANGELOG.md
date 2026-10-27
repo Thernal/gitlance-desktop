@@ -20,6 +20,9 @@ for someone using the app, not for someone reading the code; the commits follow 
 - **v opens the file it moves to.** A generated or lock file it went to stayed folded, and the file it marked
   opened again when you had folded it; the next file now opens at its first lines, and the one marked stays as
   you left it unless View → Fold reviewed files folds it.
+- **Send one pending comment now.** A comment kept for the review (⇧⌘↵) can go on its own, the others still
+  pending: Send this now beside its Delete, and on its row in Discussions and Submit review. On GitLab; GitHub
+  sends pending comments only with the review.
 
 ## 1.1.0 — 2026-10-26
 

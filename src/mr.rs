@@ -1601,6 +1601,24 @@ pub fn publish_drafts(remote: &WebRemote, iid: u64) -> Result<()> {
     Ok(())
 }
 
+/// Publishes draft `id` of the request alone: it becomes a discussion, the others stay pending
+/// (#138). GitHub publishes a pending comment only with its review.
+pub fn publish_draft(remote: &WebRemote, iid: u64, id: u64) -> Result<()> {
+    if remote.github {
+        bail!("GitHub sends a pending comment only with its review");
+    }
+    if record(format!("publish-draft {iid} {id}"))? {
+        return Ok(());
+    }
+    call(
+        remote,
+        &format!("merge_requests/{iid}/draft_notes/{id}/publish"),
+        "PUT",
+        &[],
+    )?;
+    Ok(())
+}
+
 pub fn delete_draft(remote: &WebRemote, iid: u64, id: u64) -> Result<()> {
     if remote.github {
         return github::delete_draft(remote, iid, id);
@@ -2105,9 +2123,17 @@ mod tests {
         post_discussion(&remote, 412, "abc", &place, "Why?", false).unwrap();
         // One's own note deleted (#76).
         delete_note(&remote, 412, "d1", 7).unwrap();
+        // One pending comment sent alone (#138); GitHub has no such call.
+        publish_draft(&remote, 412, 9001).unwrap();
+        let github = WebRemote {
+            github: true,
+            ..remote.clone()
+        };
+        assert!(publish_draft(&github, 412, 9001).is_err());
         let posted = std::fs::read_to_string(dir.join("posted.txt")).unwrap();
         assert!(posted.contains("412 a.rs Some(3) None Why?"));
         assert!(posted.contains("delete-note 412 7"));
+        assert!(posted.contains("publish-draft 412 9001"));
         unsafe { std::env::remove_var("GITLANCE_MR_FIXTURE") };
         let _ = std::fs::remove_dir_all(dir);
     }

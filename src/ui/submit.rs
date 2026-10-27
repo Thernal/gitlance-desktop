@@ -300,6 +300,12 @@ impl Workspace {
                         .text_color(theme::muted())
                         .child(self.one_line(&d.body)),
                 )
+                .relative()
+                .group("submit-pending-row")
+                .children(
+                    self.send_now_chip(d.id, "submit-pending-row", cx)
+                        .map(|chip| chip.absolute().top(px(1.)).right(px(4.))),
+                )
                 // The window stays: the comment is checked in the diff beside it.
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     if let Some((path, line)) = target.clone() {
