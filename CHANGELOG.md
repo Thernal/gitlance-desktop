@@ -4,6 +4,22 @@ What is new in each release of GitLance. A release's notes on GitHub are its sec
 (`.github/release-notes.sh`); a release tag whose version has no section here does not build. Write what changed
 for someone using the app, not for someone reading the code; the commits follow anyway.
 
+## Unreleased
+
+- **Every way in, easiest first.** A repository whose host GitLance has no token for lists the ways this computer
+  offers, each with the account it signs in as and a button named for what it does: the GitLab or GitHub CLI's
+  token (Use — nothing is asked, nothing copied), the one git keeps, one made with your SSH key (read-only under
+  ▾), one copied from IntelliJ IDEA, Android Studio or another JetBrains IDE signed in to the host (Copy… — macOS
+  asks once; an OAuth sign-in is not taken), or one made on the host's page and pasted. ↑ ↓ choose, ↵ connects,
+  ⌘V pastes a token. A way found that cannot be used says why underneath — a token for cloning only, a key the
+  host refused, a CLI signed in elsewhere. The way picked is remembered for the host; Settings → Merge requests
+  lists the same ways, the one in use tagged, to change it.
+- **A token found is no longer used without a word.** git's token and the GitHub CLI's were taken as they were
+  found; they are now listed with whose they are, so a second account is not used by mistake. Once picked they
+  are used as before.
+- **The window never waits on the GitHub CLI.** Its token was asked for each time the window drew; it is read once
+  a run, in the background, and again when GitHub refuses it.
+
 ## 1.2.0 — 2026-10-27
 
 - **The background fetch runs from the start.** A repository just opened showed Fetch in the background off and

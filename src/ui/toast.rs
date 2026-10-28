@@ -49,6 +49,8 @@ pub(super) enum Act {
         unstaged: Option<bool>,
         agent: String,
     },
+    /// Opens Settings → Merge requests, where the way in to a host changes (#156).
+    Connected,
 }
 
 impl Act {
@@ -57,6 +59,7 @@ impl Act {
             Act::Review { .. } | Act::Gathered { .. } => "Review",
             Act::Show { .. } | Act::Notes { .. } => "Show",
             Act::Drafted { .. } => "Open",
+            Act::Connected => "Settings",
         }
     }
 }
@@ -217,6 +220,7 @@ impl Workspace {
             Act::Show { item, unstaged, .. } => self.show_changes(&item, unstaged, cx),
             Act::Notes { page, unstaged, .. } => self.show_agent_notes(page, unstaged, cx),
             Act::Drafted { source, .. } => self.open_agent_draft(source, cx),
+            Act::Connected => self.open_requests_settings(cx),
         }
     }
 

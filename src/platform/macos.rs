@@ -212,3 +212,87 @@ pub fn preview() -> Option<PathBuf> {
     .map(PathBuf::from)
     .find(|p| p.exists())
 }
+
+/// IntelliJ IDEA, PyCharm and the rest under `JetBrains/`, Android Studio under `Google/`.
+pub fn ide_config_dirs() -> Vec<PathBuf> {
+    let Some(home) = std::env::home_dir() else {
+        return Vec::new();
+    };
+    let support = home.join("Library/Application Support");
+    vec![support.join("JetBrains"), support.join("Google")]
+}
+
+#[link(name = "Security", kind = "framework")]
+unsafe extern "C" {
+    fn SecKeychainFindGenericPassword(
+        keychains: *const std::ffi::c_void,
+        service_length: u32,
+        service: *const std::ffi::c_char,
+        account_length: u32,
+        account: *const std::ffi::c_char,
+        password_length: *mut u32,
+        password: *mut *mut std::ffi::c_void,
+        item: *mut *mut std::ffi::c_void,
+    ) -> i32;
+    fn SecKeychainItemFreeContent(
+        attributes: *mut std::ffi::c_void,
+        data: *mut std::ffi::c_void,
+    ) -> i32;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRelease(item: *const std::ffi::c_void);
+}
+
+/// Only the item is asked for, not its secret: the Keychain shows nothing.
+pub fn keychain_has(service: &str) -> bool {
+    let mut item = std::ptr::null_mut();
+    // SAFETY: the service's bytes outlive the call; no account, no secret asked; the item found is
+    // released once.
+    let status = unsafe {
+        SecKeychainFindGenericPassword(
+            std::ptr::null(),
+            service.len() as u32,
+            service.as_ptr().cast(),
+            0,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut item,
+        )
+    };
+    if !item.is_null() {
+        // SAFETY: an item the call returned, released once.
+        unsafe { CFRelease(item) };
+    }
+    status == 0
+}
+
+/// The call JetBrains IDEs make themselves; for another app's item macOS asks the developer, and
+/// the call returns once they answered.
+pub fn keychain_read(service: &str) -> Option<String> {
+    let (mut length, mut data) = (0u32, std::ptr::null_mut());
+    // SAFETY: the service's bytes outlive the call; the secret returned is copied, then freed with
+    // the Keychain's own call.
+    let status = unsafe {
+        SecKeychainFindGenericPassword(
+            std::ptr::null(),
+            service.len() as u32,
+            service.as_ptr().cast(),
+            0,
+            std::ptr::null(),
+            &mut length,
+            &mut data,
+            std::ptr::null_mut(),
+        )
+    };
+    if status != 0 || data.is_null() {
+        return None;
+    }
+    // SAFETY: `data` holds `length` bytes until it is freed below.
+    let bytes = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), length as usize) }.to_vec();
+    // SAFETY: the secret the call returned, freed once.
+    unsafe { SecKeychainItemFreeContent(std::ptr::null_mut(), data) };
+    String::from_utf8(bytes).ok()
+}

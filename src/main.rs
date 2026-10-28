@@ -18,6 +18,7 @@ mod generated;
 mod git;
 mod github;
 mod highlight;
+mod ide;
 mod labels;
 mod links;
 mod markdown;

@@ -106,3 +106,16 @@ pub fn open_with(file: &std::path::Path, app: Option<&std::path::Path>) -> std::
 pub fn preview() -> Option<PathBuf> {
     None
 }
+
+/// JetBrains IDEs keep tokens in the system's secret store here, which GitLance does not read yet.
+pub fn ide_config_dirs() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+pub fn keychain_has(_service: &str) -> bool {
+    false
+}
+
+pub fn keychain_read(_service: &str) -> Option<String> {
+    None
+}

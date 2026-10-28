@@ -265,11 +265,18 @@ impl Workspace {
         };
         let available = mr::available(&remote);
         self.requests.available = available;
+        // The way picked borrows a token not read yet this run (the CLI's, git's): read first.
+        if !available && crate::connect::to_borrow(&remote) {
+            self.requests.connectable = false;
+            self.requests.loading = true;
+            return self.borrow_token(cx);
+        }
+        self.requests.loading = false;
         self.requests.connectable = !available;
         if !available {
             self.requests.list.clear();
             self.requests.error = None;
-            // A token git keeps, or one made with the SSH key (#142).
+            // The ways in this computer offers (#142, #156).
             return self.look_for_token(cx);
         }
         self.renew_ssh_token(cx);
@@ -2312,6 +2319,11 @@ impl Workspace {
                 this.testing = false;
                 match result {
                     Ok(who) => {
+                        let host = mr::api_host(&remote);
+                        crate::connect::set_note(&host, |n| {
+                            n.way = Some("pasted".to_owned());
+                            n.ide = None;
+                        });
                         this.gitlab_check = Some(Ok(who));
                         this.token_input.clear();
                         this.field = None;
@@ -2329,111 +2341,10 @@ impl Workspace {
         .detach();
     }
 
-    /// Merge requests' first run, a project without a token (#72): what a token is for, where to
-    /// make one, and the field it is pasted into, centred in the content.
+    /// Merge requests' first run, a project without a token (#72): the ways in, centred in the
+    /// content (#156, `connecting.rs`).
     pub(super) fn render_connect(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let Some(remote) = self.web.clone() else {
-            return div().into_any_element();
-        };
-        let host = mr::host(&remote);
-        let page = mr::token_page(&remote);
-        let offering = self.ssh_offering();
-        let field = self.field_box(
-            "token-field",
-            super::lists::Field::Token,
-            "Paste your token",
-            cx,
-        );
-        let note = match (&self.gitlab_check, self.testing) {
-            (_, true) => Some(("Checking…".to_owned(), theme::muted())),
-            (Some(Err(e)), _) => Some((e.clone(), theme::removed())),
-            (Some(Ok(who)), _) => Some((format!("Connected as {who}"), theme::added())),
-            _ => None,
-        };
-        let step = |text: String| {
-            div()
-                .text_size(px(12.))
-                .text_color(theme::muted())
-                .child(text)
-        };
-        div()
-            .flex_1()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(8.))
-            .px(px(24.))
-            .child(
-                super::icons::icon("pull-request")
-                    .size(px(24.))
-                    .text_color(theme::muted()),
-            )
-            .child(
-                div()
-                    .text_size(px(15.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(super::words::say("Connect GitLab to see merge requests").into_owned()),
-            )
-            .when(!offering, |panel| {
-                panel.child(
-                    div()
-                        .max_w(px(420.))
-                        .text_size(px(13.))
-                        .line_height(px(19.))
-                        .text_center()
-                        .text_color(theme::muted())
-                        .child(if remote.github {
-                            "Needs a token with the repo scope, or gh auth login."
-                        } else {
-                            "Needs a token with the api scope."
-                        }),
-                )
-            })
-            // What git or the SSH key offer, over the paste steps or in their place (#142).
-            .children(self.render_ssh_offer(cx))
-            .when(!offering, |panel| {
-                panel.child(
-                    div()
-                        .w(px(360.))
-                        .pt(px(8.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.))
-                        .child(
-                            div()
-                                .id("token-create")
-                                .h(px(28.))
-                                .px(px(10.))
-                                .flex()
-                                .items_center()
-                                .rounded(px(super::ROW_RADIUS))
-                                .border_1()
-                                .border_color(theme::island_border())
-                                .text_size(px(13.))
-                                .text_color(theme::accent())
-                                .cursor_pointer()
-                                .hover(|s| s.bg(theme::hover()))
-                                .child(format!("1 · Create a token on {host} ↗"))
-                                .on_click(
-                                    cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&page)),
-                                ),
-                        )
-                        .child(step("2 · Paste it here and press ↵".to_owned()))
-                        .child(field)
-                        .children(note.map(|(text, color)| {
-                            div().text_size(px(12.)).text_color(color).child(text)
-                        })),
-                )
-            })
-            .child(
-                div()
-                    .pt(px(4.))
-                    .text_size(px(11.))
-                    .text_color(theme::faint())
-                    .child(super::words::say("or Settings → Merge requests").into_owned()),
-            )
-            .into_any_element()
+        self.render_ways(cx)
     }
 
     /// The pipeline's pill: its state, and the job that failed; a click opens it.

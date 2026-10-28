@@ -185,6 +185,17 @@ impl Workspace {
             self.step_pick(event.keystroke.key == "down", cx);
             return true;
         }
+        // The connect panel: ↵ with nothing pasted presses the focused way's button; ↑ ↓ move
+        // between the ways (`zone_vertical`, #156).
+        if field == Field::Token
+            && self.requests.connectable
+            && !self.settings_open
+            && event.keystroke.key == "enter"
+            && self.token_input.trim().is_empty()
+        {
+            self.press_way(cx);
+            return true;
+        }
         // Typed, the keyboard filter matches by words again.
         if field == Field::Keys {
             self.keys_exact = false;

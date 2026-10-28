@@ -60,8 +60,10 @@ fn owner_name(remote: &WebRemote) -> Result<(String, String)> {
 }
 
 /// Where the token comes from, best first: `GITHUB_TOKEN` / `GH_TOKEN`, the token saved by this app
-/// for the host, the GitHub CLI's own (`gh auth token`), then one found in git this run (#142).
-pub fn token_source(remote: &WebRemote) -> Option<(String, &'static str)> {
+/// for the host (pasted or copied from an IDE), then the way picked for it that borrows one — the
+/// GitHub CLI's (`gh auth token`) or what git keeps (#142, #156). `run`: a CLI not read yet this
+/// run is read now (a process: off the window's thread).
+pub fn token_source(remote: &WebRemote, run: bool) -> Option<(String, &'static str)> {
     let clean = |t: String| {
         let t = t.trim().to_owned();
         (!t.is_empty()).then_some(t)
@@ -81,33 +83,7 @@ pub fn token_source(remote: &WebRemote) -> Option<(String, &'static str)> {
     if let Some(t) = crate::mr::saved_token(&format!("https://{}", host(remote))).and_then(clean) {
         return Some((t, "Settings"));
     }
-    gh_program()
-        .and_then(|gh| {
-            Command::new(gh)
-                .args(["auth", "token", "--hostname", &host(remote)])
-                .stderr(Stdio::null())
-                .output()
-                .ok()
-        })
-        .filter(|out| out.status.success())
-        .and_then(|out| clean(String::from_utf8_lossy(&out.stdout).into_owned()))
-        .map(|t| (t, "the GitHub CLI (gh)"))
-        // One found in git this run (#142).
-        .or_else(|| crate::connect::found_token(&format!("https://{}", host(remote))))
-}
-
-/// The GitHub CLI: on the PATH, or where Homebrew puts it (an app opened from the Finder does not
-/// get the shell's PATH).
-fn gh_program() -> Option<std::path::PathBuf> {
-    let on_path = std::env::var_os("PATH")
-        .map(|p| {
-            std::env::split_paths(&p)
-                .map(|d| d.join("gh"))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let known = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"].map(Into::into);
-    on_path.into_iter().chain(known).find(|p| p.is_file())
+    crate::connect::borrowed_token(remote, run)
 }
 
 /// Where a token is made: a classic token with the `repo` scope reads and reviews pull requests
@@ -198,16 +174,40 @@ fn graphql(remote: &WebRemote, query: &str, mut variables: Value) -> Result<Valu
     Ok(value["data"].clone())
 }
 
+/// What a refused token's call ends with.
+const REFUSED: &str = "GitHub refused the token";
+
+/// One call with the host's token; the CLI's refused, the CLI is read again once (#156).
 fn send(remote: &WebRemote, url: &str, method: &str, body: Option<&Value>) -> Result<Value> {
-    let token = token_source(remote).map(|(t, _)| t).ok_or_else(|| {
+    let (token, from) = token_source(remote, true).ok_or_else(|| {
         anyhow!(
             "no GitHub token — add one in Settings, or sign in with the GitHub CLI (gh auth login)"
         )
     })?;
+    match send_with(remote, &token, url, method, body) {
+        Err(e) if e.to_string() == REFUSED && from.contains("CLI") => {
+            crate::connect::drop_cli(&crate::mr::api_host(remote));
+            match token_source(remote, true).filter(|(fresh, _)| *fresh != token) {
+                Some((fresh, _)) => send_with(remote, &fresh, url, method, body),
+                None => Err(e),
+            }
+        }
+        sent => sent,
+    }
+}
+
+/// `send` with `token`.
+fn send_with(
+    remote: &WebRemote,
+    token: &str,
+    url: &str,
+    method: &str,
+    body: Option<&Value>,
+) -> Result<Value> {
     let mut config = format!(
         "url = \"{}\"\nheader = \"Authorization: Bearer {}\"\nheader = \"Accept: application/vnd.github+json\"\nheader = \"X-GitHub-Api-Version: 2022-11-28\"\nuser-agent = \"GitLance\"\n",
         quote(url),
-        quote(&token)
+        quote(token)
     );
     if method != "GET" {
         config.push_str(&format!("request = \"{method}\"\n"));
@@ -256,7 +256,7 @@ fn send(remote: &WebRemote, url: &str, method: &str, body: Option<&Value>) -> Re
             Ok(value)
         }
         "204" => Ok(Value::Null),
-        "401" => bail!("GitHub refused the token"),
+        "401" => bail!(REFUSED),
         "403" => bail!("GitHub refused it: {}", message()),
         "404" => bail!("GitHub does not know this repository (or the token cannot see it)"),
         "422" | "400" => bail!("GitHub would not take that: {}", message()),
@@ -287,6 +287,13 @@ pub fn me(remote: &WebRemote) -> Result<String> {
     }
     let user = get(remote, "/user")?;
     Ok(format!("{} (@{})", who(&user), s(&user["login"])))
+}
+
+/// Who `token` is — the name and the login — asked with that token rather than the one in use.
+pub fn whois_with(remote: &WebRemote, token: &str) -> Result<(String, String)> {
+    let (base, _, _) = api(remote)?;
+    let user = send_with(remote, token, &format!("{base}/user"), "GET", None)?;
+    Ok((who(&user), s(&user["login"])))
 }
 
 pub fn username(remote: &WebRemote) -> Result<String> {

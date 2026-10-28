@@ -159,9 +159,12 @@ every repository with a remote, is what brings other people's pushes in. Version
   with that line's history version by version.
 - Creating one (⌥⌘M): the target's template, reviewers from CODEOWNERS, labels, milestone, draft, squash.
 
-**Tokens.** GitLab needs one with the `api` scope; GitHub a classic token with the `repo` scope,
-`GITHUB_TOKEN` / `GH_TOKEN`, or the GitHub CLI's (`gh auth login`). Give it in the welcome window or in
-Settings → Merge requests; GitLab also reads `GITLAB_TOKEN` and `~/.config/gitlab-token`.
+**Tokens.** GitLab needs one with the `api` scope (`read_api` to only read); GitHub a classic token with the
+`repo` scope. With none for the host, Merge requests lists the ways in this computer offers, easiest first, each
+with the account it signs in as: the GitLab or GitHub CLI's token (`glab auth login`, `gh auth login`) or the one
+git keeps, used where they are; one made with your SSH key (GitLab, renewed by GitLance); one copied once from a
+JetBrains IDE signed in to the host (macOS); or one made on the host's page and pasted. Settings → Merge requests
+changes the way in use. `GITLAB_TOKEN`, `GITHUB_TOKEN` / `GH_TOKEN` and `~/.config/gitlab-token` are read too.
 
 </details>
 

@@ -944,8 +944,7 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                         }
                         // The token's source, and one made with the SSH key (#142).
                         "settings-requests" => {
-                            this.open_settings(cx);
-                            this.settings_section = settings::Section::Requests;
+                            this.open_requests_settings(cx);
                             continue;
                         }
                         // Fetch in the background's switch (#141).
@@ -1235,6 +1234,14 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
         // Make the token pressed on the connect panel's offer, with GITLANCE_SSH_FIXTURE (#142).
         if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("ssh-make")) {
             ws.update(cx, |this, cx| this.make_ssh_token("api", cx));
+            wait(1500).await;
+        }
+        // Settings → Merge requests after the keys, the SSH key picked there (#156).
+        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("ways-settings")) {
+            ws.update(cx, |this, cx| {
+                this.open_requests_settings(cx);
+                this.connecting.pick = Some("ssh".to_owned());
+            });
             wait(1500).await;
         }
         // Answer on the first of an agent's notes on the file the keys reached (#151).

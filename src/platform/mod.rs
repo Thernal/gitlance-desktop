@@ -147,6 +147,25 @@ pub fn open_with(file: &std::path::Path, app: Option<&std::path::Path>) -> std::
     os::open_with(file, app)
 }
 
+/// The folders JetBrains IDEs keep their settings under, one folder a version inside
+/// (`IntelliJIdea2026.2`, `AndroidStudio2026.1.3`), where GitLance can also read the tokens they
+/// keep (#156): macOS's Keychain. None elsewhere: there the passwords are in a store not read yet.
+pub fn ide_config_dirs() -> Vec<PathBuf> {
+    os::ide_config_dirs()
+}
+
+/// Whether the password store holds an item of `service`, asked without reading it: nothing is
+/// shown to the developer (#156).
+pub fn keychain_has(service: &str) -> bool {
+    os::keychain_has(service)
+}
+
+/// The secret of `service`'s item: macOS asks the developer first, and this waits for the answer
+/// (off the window's thread). `None` when there is none or the developer said no.
+pub fn keychain_read(service: &str) -> Option<String> {
+    os::keychain_read(service)
+}
+
 /// Where Preview is: images and PDFs open there (#78); None off macOS.
 pub fn preview() -> Option<PathBuf> {
     os::preview()

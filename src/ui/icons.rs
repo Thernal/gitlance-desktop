@@ -242,6 +242,22 @@ const ICONS: &[(&str, &str)] = &[
         ),
     ),
     (
+        "terminal",
+        lucide!(
+            r#"<polyline points="4 17 10 11 4 5"/>"#
+            r#"<line x1="12" x2="20" y1="19" y2="19"/>"#
+        ),
+    ),
+    (
+        "app",
+        lucide!(
+            r#"<rect x="2" y="4" width="20" height="16" rx="2"/>"#
+            r#"<path d="M10 4v4"/>"#
+            r#"<path d="M2 8h20"/>"#
+            r#"<path d="M6 4v4"/>"#
+        ),
+    ),
+    (
         "inbox",
         lucide!(
             r#"<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/>"#

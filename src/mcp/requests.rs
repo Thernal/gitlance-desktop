@@ -44,7 +44,7 @@ fn host(here: &Path) -> Result<(Repo, WebRemote), String> {
     let remote = repo
         .web_remote()
         .ok_or("This repository has no GitLab or GitHub remote.")?;
-    if !mr::available(&remote) {
+    if !mr::fixture_on() && mr::token(&remote).is_none() {
         return Err(format!(
             "GitLance has no token for {}; the reviewer adds one in GitLance → Settings → Merge requests.",
             mr::host(&remote)

@@ -107,6 +107,13 @@ impl Workspace {
 
     /// ↑ and ↓ in the zone that has the keyboard.
     pub(super) fn zone_vertical(&mut self, down: bool, cx: &mut Context<Self>) {
+        // The connect panel with its field: ↑ ↓ move between the ways (#156).
+        if self.requests.connectable
+            && self.field == Some(super::lists::Field::Token)
+            && !self.settings_open
+        {
+            return self.step_way(down, cx);
+        }
         // The Inbox has the window: j k walk its list.
         if self.inbox && self.zone != Zone::Tool {
             return self.inbox_step(down, cx);

@@ -1154,7 +1154,7 @@ impl Workspace {
             } if self
                 .web
                 .as_ref()
-                .is_some_and(|w| crate::mr::token(w).is_some())
+                .is_some_and(|w| crate::mr::token_now(w).is_some())
                 || crate::mr::fixture_on() =>
             {
                 Some(iid)

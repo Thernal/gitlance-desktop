@@ -169,10 +169,19 @@ pub struct Push {
 }
 
 /// Where the token for a GitLab host comes from, best first: `GITLAB_TOKEN`, the token saved by this
-/// app for that host, the shared `~/.config/gitlab-token`, then one found in git this run (#142).
+/// app for that host (pasted, made with the SSH key or copied from an IDE), the way picked for it
+/// that borrows one — the GitLab CLI's or what git keeps (#142, #156) — then the shared
+/// `~/.config/gitlab-token`. What the window's thread asks: a CLI's token only as read this run
+/// (`token` reads it).
 pub fn token_source(remote: &WebRemote) -> Option<(String, &'static str)> {
+    source(remote, false)
+}
+
+/// `token_source`; `run`, a CLI not read yet this run is read now (a process: off the window's
+/// thread).
+fn source(remote: &WebRemote, run: bool) -> Option<(String, &'static str)> {
     if remote.github {
-        return github::token_source(remote);
+        return github::token_source(remote, run);
     }
     let clean = |t: String| {
         let t = t.trim().to_owned();
@@ -181,7 +190,7 @@ pub fn token_source(remote: &WebRemote) -> Option<(String, &'static str)> {
     if let Some(t) = std::env::var("GITLAB_TOKEN").ok().and_then(clean) {
         return Some((t, "the GITLAB_TOKEN variable"));
     }
-    let home = std::env::home_dir()?;
+    let home = tokens_home()?;
     if let Ok((host, _)) = api(remote)
         && let Some(t) = std::fs::read_to_string(token_file(&home, &host))
             .ok()
@@ -189,11 +198,12 @@ pub fn token_source(remote: &WebRemote) -> Option<(String, &'static str)> {
     {
         return Some((t, "Settings"));
     }
-    std::fs::read_to_string(home.join(".config/gitlab-token"))
-        .ok()
-        .and_then(clean)
-        .map(|t| (t, "~/.config/gitlab-token"))
-        .or_else(|| crate::connect::found_token(&api_host(remote)))
+    crate::connect::borrowed_token(remote, run).or_else(|| {
+        std::fs::read_to_string(home.join(".config/gitlab-token"))
+            .ok()
+            .and_then(clean)
+            .map(|t| (t, "~/.config/gitlab-token"))
+    })
 }
 
 /// `https://host` of the remote's host: what its tokens are kept by.
@@ -204,13 +214,29 @@ pub fn api_host(remote: &WebRemote) -> String {
     api(remote).map(|(h, _)| h).unwrap_or_default()
 }
 
+/// The token for the host; a CLI's is read when not read yet this run (a process: off the
+/// window's thread — there, `token_now`).
 pub fn token(remote: &WebRemote) -> Option<String> {
-    token_source(remote).map(|(t, _)| t)
+    source(remote, true).map(|(t, _)| t)
+}
+
+/// The token for the host as known now, nothing run: what the window's thread asks.
+pub fn token_now(remote: &WebRemote) -> Option<String> {
+    source(remote, false).map(|(t, _)| t)
 }
 
 /// The token this app saved for `host` (`https://host`), as written.
 pub(crate) fn saved_token(host: &str) -> Option<String> {
-    std::fs::read_to_string(token_file(&std::env::home_dir()?, host)).ok()
+    std::fs::read_to_string(token_file(&tokens_home()?, host)).ok()
+}
+
+/// The home folder tokens are kept under; with the connect checks' fixture, its `home/`, so a
+/// check or a test never writes the developer's own (#156).
+fn tokens_home() -> Option<std::path::PathBuf> {
+    match crate::connect::fixture() {
+        Some(dir) => Some(dir.join("home")),
+        None => std::env::home_dir(),
+    }
 }
 
 fn token_file(home: &std::path::Path, host: &str) -> std::path::PathBuf {
@@ -229,7 +255,7 @@ fn token_file(home: &std::path::Path, host: &str) -> std::path::PathBuf {
 
 /// Keeps `token` for the host of `remote`, readable by the owner only.
 pub fn save_token(remote: &WebRemote, token: &str) -> Result<()> {
-    let home = std::env::home_dir().ok_or_else(|| anyhow!("no home directory"))?;
+    let home = tokens_home().ok_or_else(|| anyhow!("no home directory"))?;
     let (host, _) = api(remote)?;
     let file = token_file(&home, &host);
     if let Some(dir) = file.parent() {
@@ -242,7 +268,7 @@ pub fn save_token(remote: &WebRemote, token: &str) -> Result<()> {
 
 /// Removes the token this app saved for the host of `remote` (a wrong one, after a failed test).
 pub fn forget_token(remote: &WebRemote) {
-    if let (Some(home), Ok((host, _))) = (std::env::home_dir(), api(remote)) {
+    if let (Some(home), Ok((host, _))) = (tokens_home(), api(remote)) {
         let _ = std::fs::remove_file(token_file(&home, &host));
     }
 }
@@ -285,6 +311,24 @@ pub fn me(remote: &WebRemote) -> Result<String> {
     ))
 }
 
+/// Who `token` is on the remote's host — its name and username — asked with that token rather
+/// than the one in use (#156).
+pub fn whois_with(remote: &WebRemote, token: &str) -> Result<(String, String)> {
+    if remote.github {
+        return github::whois_with(remote, token);
+    }
+    let (host, _) = api(remote)?;
+    let user = send_with(
+        remote,
+        token,
+        &format!("{host}/api/v4/user"),
+        "GET",
+        &[],
+        None,
+    )?;
+    Ok((text(&user, "name"), text(&user, "username")))
+}
+
 /// What the token can do and until when (GitLab: "api, read_repository · expires 2027-09-01");
 /// `None` where the host does not say (GitHub).
 pub fn token_info(remote: &WebRemote) -> Option<String> {
@@ -307,7 +351,18 @@ fn token_check(remote: &WebRemote) -> Option<(Vec<String>, Option<String>)> {
         let scopes = std::fs::read_to_string(dir.join("scopes.txt")).ok()?;
         return Some((scopes.split_whitespace().map(str::to_owned).collect(), None));
     }
-    let me = call(remote, "/personal_access_tokens/self", "GET", &[]).ok()?;
+    token_check_with(remote, &token(remote)?)
+}
+
+/// `token`'s scopes and the day it ends, asked with that token (#156); `None` on GitHub or where
+/// the host does not say.
+pub fn token_check_with(remote: &WebRemote, token: &str) -> Option<(Vec<String>, Option<String>)> {
+    if remote.github {
+        return None;
+    }
+    let (host, _) = api(remote).ok()?;
+    let url = format!("{host}/api/v4/personal_access_tokens/self");
+    let me = send_with(remote, token, &url, "GET", &[], None).ok()?;
     let scopes = me["scopes"]
         .as_array()?
         .iter()
@@ -325,9 +380,10 @@ pub fn revoke_token(remote: &WebRemote) -> Result<()> {
     call(remote, "/personal_access_tokens/self", "DELETE", &[]).map(|_| ())
 }
 
-/// Whether merge requests can be read for this remote at all.
+/// Whether merge requests can be read for this remote at all, as known now (the window's
+/// thread: a CLI's token only as read this run).
 pub fn available(remote: &WebRemote) -> bool {
-    fixture().is_some() || token(remote).is_some()
+    fixture().is_some() || token_now(remote).is_some()
 }
 
 /// Whether the checks' fixture stands in for GitLab.
@@ -994,7 +1050,11 @@ fn graphql(remote: &WebRemote, query: &str, variables: Value) -> Result<Value> {
     Ok(value)
 }
 
-/// Sends a request to `url`: form fields, or a JSON body.
+/// What a refused token's call ends with.
+const REFUSED: &str = "GitLab refused the token";
+
+/// Sends a request to `url`: form fields, or a JSON body. The CLI's token refused, the CLI is read
+/// again once: glab refreshes its own OAuth token, which lasts two hours (#156).
 fn send(
     remote: &WebRemote,
     url: &str,
@@ -1002,14 +1062,36 @@ fn send(
     form: &[(&str, String)],
     json: Option<&str>,
 ) -> Result<Value> {
-    let token = token(remote).ok_or_else(|| {
+    let (token, from) = source(remote, true).ok_or_else(|| {
         anyhow!("no GitLab token — add one in Settings, or put it in ~/.config/gitlab-token")
     })?;
+    let sent = send_with(remote, &token, url, method, form, json);
+    match sent {
+        Err(e) if e.to_string() == REFUSED && from.contains("CLI") => {
+            crate::connect::drop_cli(&api_host(remote));
+            match crate::mr::token(remote).filter(|fresh| *fresh != token) {
+                Some(fresh) => send_with(remote, &fresh, url, method, form, json),
+                None => Err(e),
+            }
+        }
+        sent => sent,
+    }
+}
+
+/// `send` with `token`.
+fn send_with(
+    remote: &WebRemote,
+    token: &str,
+    url: &str,
+    method: &str,
+    form: &[(&str, String)],
+    json: Option<&str>,
+) -> Result<Value> {
     let (host, _) = api(remote)?;
     let mut config = format!(
         "url = \"{}\"\nheader = \"PRIVATE-TOKEN: {}\"\n",
         quote(url),
-        quote(&token)
+        quote(token)
     );
     if method != "GET" {
         config.push_str(&format!("request = \"{method}\"\n"));
@@ -1046,7 +1128,7 @@ fn send(
             Ok(value)
         }
         "204" => Ok(Value::Null),
-        "401" | "403" => bail!("GitLab refused the token"),
+        "401" | "403" => bail!(REFUSED),
         "404" => bail!("GitLab does not know this project (or the token cannot see it)"),
         "400" | "422" => bail!("GitLab would not take that: {}", message(body)),
         "409" => bail!("GitLab refused it: {}", message(body)),

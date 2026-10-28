@@ -16,37 +16,15 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Pastes a token from the clipboard for this repository's GitLab host and tries it.
-    fn use_clipboard_token(&mut self, cx: &mut Context<Self>) {
-        let Some(remote) = self.web.clone() else {
-            return;
-        };
-        let text = cx
-            .read_from_clipboard()
-            .and_then(|c| c.text())
-            .unwrap_or_default();
-        self.connecting.error = None;
-        let token = text.trim();
-        if token.len() < 8 || token.contains(char::is_whitespace) {
-            self.gitlab_check = Some(Err(
-                super::words::say("The clipboard does not hold a token — copy one from GitLab → Preferences → Access tokens (scope: api).").into_owned(),
-            ));
-            return cx.notify();
-        }
-        match crate::mr::save_token(&remote, token) {
-            Ok(()) => {
-                self.load_requests(cx);
-                self.test_gitlab(cx);
-            }
-            Err(e) => {
-                self.gitlab_check = Some(Err(format!("{e:#}")));
-                cx.notify();
-            }
-        }
+    /// Settings → Merge requests, its ways looked for (#156): where the connected toast leads.
+    pub(super) fn open_requests_settings(&mut self, cx: &mut Context<Self>) {
+        self.open_settings(cx);
+        self.settings_section = Section::Requests;
+        self.look_for_token(cx);
     }
 
     /// Asks GitLab who the token belongs to.
-    fn test_gitlab(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn test_gitlab(&mut self, cx: &mut Context<Self>) {
         let Some(remote) = self.web.clone() else {
             return;
         };
@@ -64,70 +42,6 @@ impl Workspace {
             .ok();
         })
         .detach();
-    }
-
-    /// The GitLab block: which host, where the token comes from, a way to give one and to test it.
-    fn render_gitlab_settings(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        let remote = self.web.as_ref()?;
-        let host = crate::mr::host(remote);
-        let source = crate::mr::token_source(remote).map(|(_, from)| from);
-        // A token being made over SSH, or why not, comes first; then one GitLance made (#142).
-        let made = self.ssh_settings_made();
-        let status =
-            self.ssh_settings_busy()
-                .unwrap_or_else(|| match (&self.gitlab_check, source, made) {
-                    (Some(Ok(who)), _, _) => (format!("Connected as {who}"), theme::added()),
-                    (Some(Err(e)), _, _) => (e.clone(), theme::removed()),
-                    (None, _, Some(made)) => (made, theme::muted()),
-                    (None, Some(from), None) => (format!("Token from {from}"), theme::muted()),
-                    (None, None, None) => (
-                        "No token for this host yet — merge requests stay hidden.".to_owned(),
-                        theme::warning(),
-                    ),
-                });
-        Some(
-            div()
-                .flex()
-                .flex_col()
-                .gap_5()
-                .child(heading(if remote.github { "GitHub" } else { "GitLab" }))
-                .child(item(
-                    "Merge requests",
-                    if remote.github {
-                        "The token for this repository's host: a classic one with the repo scope, or the GitHub CLI's (gh auth login)."
-                    } else {
-                        "The token for this repository's host: api, or read_api to only read."
-                    },
-                    div()
-                        .flex()
-                        .flex_col()
-                        .items_end()
-                        .gap_2()
-                        .child(div().text_size(px(12.)).child(host))
-                        .child(
-                            diff_view::group()
-                                .child(
-                                    chip("gitlab-paste", "Use token from clipboard", false)
-                                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                            this.use_clipboard_token(cx)
-                                        })),
-                                )
-                                // Or one made with the SSH key (#142).
-                                .children(self.ssh_settings_chip(cx))
-                                .child(chip("gitlab-test", "Test", false).on_click(cx.listener(
-                                    |this, _: &ClickEvent, _, cx| this.test_gitlab(cx),
-                                ))),
-                        )
-                        .child(
-                            div()
-                                .max_w(px(320.))
-                                .text_size(px(12.))
-                                .text_color(status.1)
-                                .child(status.0),
-                        ),
-                ))
-                .into_any_element(),
-        )
     }
 
     fn change_settings(&mut self, change: impl FnOnce(&mut Self), cx: &mut Context<Self>) {
@@ -280,7 +194,8 @@ impl Workspace {
         ));
         let update_status = self.render_update_status(cx);
 
-        let gitlab = self.render_gitlab_settings(cx);
+        // The host's ways in, as a list to pick from (#156, `connecting.rs`).
+        let gitlab = self.render_ways_settings(cx);
         let section = self.settings_section;
         // The theme editor takes the page's height: its tokens scroll beside a preview that stays.
         let editing = section == Section::Appearance && self.theme_edit.is_some();
@@ -441,6 +356,9 @@ impl Workspace {
                     .child(super::words::say(sec.label()).into_owned())
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.settings_section = sec;
+                        if sec == Section::Requests {
+                            this.look_for_token(cx);
+                        }
                         cx.notify();
                     }))
             }));
