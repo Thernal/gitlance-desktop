@@ -379,7 +379,7 @@ impl CommitCard {
                     .child(
                         cut("card-sha", sha.clone())
                             .flex_1()
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .text_size(px(11.))
                             .text_color(theme::muted()),
                     )
@@ -527,7 +527,7 @@ impl BranchCard {
         frame()
             .child(
                 div()
-                    .font_family(theme::CODE_FONT)
+                    .font_family(theme::code_font())
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(self.name.clone()),
             )

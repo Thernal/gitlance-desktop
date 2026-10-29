@@ -105,6 +105,9 @@ pub enum Kind {
     /// typed, and Browse for the system's picker (the developer, 2026-10-23: not a new tab's
     /// welcome page, which had no way back).
     Projects,
+    /// A face for the interface or (`code`) the code (#24, a face's Other…): every one installed,
+    /// each drawn in itself; ↵ keeps it.
+    Face { code: bool },
 }
 
 #[derive(Clone, Copy)]
@@ -290,6 +293,18 @@ enum Pick {
     Theme(String),
     /// A repository to open in a tab of its own, or go to when one has it.
     Project(std::path::PathBuf),
+    /// A face (`Kind::Face`), None its default.
+    Face(Option<String>),
+}
+
+/// The family a face's row is drawn in.
+fn face_of(kind: &Kind, pick: &Pick) -> Option<gpui::SharedString> {
+    match (kind, pick) {
+        (Kind::Face { code }, Pick::Face(face)) => {
+            Some(super::fonts::face_family(*code, face.as_deref()))
+        }
+        _ => None,
+    }
 }
 
 #[derive(Clone)]
@@ -309,6 +324,8 @@ pub struct Palette {
     counts: Option<[usize; 6]>,
     /// The repository's files, read when search everywhere opened.
     files: Arc<Vec<String>>,
+    /// The faces installed, read when a face's list opened.
+    faces: Vec<String>,
     query: String,
     at: usize,
     /// ⌘B: only what is not reviewed yet (⇥ switches).
@@ -457,7 +474,8 @@ impl Workspace {
                 | Kind::Bookmarks
                 | Kind::Switch
                 | Kind::Theme
-                | Kind::Projects,
+                | Kind::Projects
+                | Kind::Face { .. },
                 _,
             )
             | (_, None) => Vec::new(),
@@ -471,6 +489,14 @@ impl Workspace {
         self.ctx_menu = None;
         self.reset_field_edit();
         let theme = matches!(kind, Kind::Theme);
+        let face = match kind {
+            Kind::Face { code } => Some(code),
+            _ => None,
+        };
+        let faces = match face {
+            Some(_) => super::fonts::installed(cx),
+            None => Vec::new(),
+        };
         let files = match (&kind, &self.root) {
             // Code's own: the tree it shows, a plain folder's files on disk (#75).
             (Kind::Search(_), Some(_)) if !self.code.files().is_empty() => {
@@ -491,6 +517,7 @@ impl Workspace {
             from: None,
             counts: None,
             files,
+            faces,
             query: String::new(),
             at: 0,
             open_only: false,
@@ -505,6 +532,18 @@ impl Workspace {
                 .items
                 .iter()
                 .position(|i| matches!(&i.pick, Pick::Theme(id) if *id == current))
+                .unwrap_or(0);
+        }
+        // A face's list opens on the one in use.
+        if let Some(code) = face
+            && let Some(p) = &mut self.palette
+        {
+            let faces = theme::faces();
+            let current = if code { faces.code } else { faces.ui };
+            p.at = p
+                .items
+                .iter()
+                .position(|i| matches!(&i.pick, Pick::Face(f) if *f == current))
                 .unwrap_or(0);
         }
         cx.notify();
@@ -703,6 +742,29 @@ impl Workspace {
                     key: "",
                     pick: Pick::Theme(t.id),
                 })
+                .collect();
+        }
+        if let Kind::Face { code } = p.kind {
+            let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+            let faces = theme::faces();
+            let current = if code { faces.code } else { faces.ui };
+            let item = |group, face: Option<String>| Item {
+                group,
+                label: super::fonts::face_label(code, face.as_deref()),
+                detail: if face == current { "current" } else { "" }.to_owned(),
+                key: "",
+                pick: Pick::Face(face),
+            };
+            let default = super::fonts::face_label(code, None);
+            return matches(&words, &default)
+                .then(|| item("Default", None))
+                .into_iter()
+                .chain(
+                    p.faces
+                        .iter()
+                        .filter(|f| matches(&words, f))
+                        .map(|f| item("Installed", Some(f.clone()))),
+                )
                 .collect();
         }
         if matches!(p.kind, Kind::Bookmarks) {
@@ -1185,6 +1247,14 @@ impl Workspace {
                 choice.window = id;
                 self.choose_theme(choice, cx);
             }
+            Pick::Face(face) => {
+                let code = matches!(
+                    self.palette.as_ref().map(|p| &p.kind),
+                    Some(Kind::Face { code: true })
+                );
+                self.palette = None;
+                self.choose_face(code, face, cx);
+            }
             // A tab of its own, as + means; one that has it already comes on screen.
             Pick::Project(path) => {
                 self.palette = None;
@@ -1269,6 +1339,8 @@ impl Workspace {
             Kind::Head(_) => "Compare — pick what to compare with it",
             Kind::Theme => "Theme — ↑↓ tries it on the whole window, ↵ keeps, esc goes back",
             Kind::Projects => "Open a repository — type to filter, or a path",
+            Kind::Face { code: false } => "The interface's face — each in its own type",
+            Kind::Face { code: true } => "The code's face — each in its own type",
         };
         let title = match &p.kind {
             Kind::Search(_)
@@ -1276,7 +1348,8 @@ impl Workspace {
             | Kind::Structure
             | Kind::Bookmarks
             | Kind::Switch
-            | Kind::Theme => None,
+            | Kind::Theme
+            | Kind::Face { .. } => None,
             Kind::Projects => Some("Open a repository".to_owned()),
             Kind::Base => Some("Compare · step 1 of 2".to_owned()),
             Kind::Head((name, _)) => Some(format!("Compare · {name} … ?")),
@@ -1320,6 +1393,8 @@ impl Workspace {
                     .children(path.map(|p| super::icons::file_icon(&p, 16.)))
                     .child(
                         super::hover::cut("label", super::keys::text(&item.label).into_owned())
+                            // A face is drawn in itself (#24).
+                            .when_some(face_of(&p.kind, &item.pick), |s, face| s.font_family(face))
                             .when(!file, |s| s.flex_1())
                             .when(file, |s| s.flex_none().max_w(px(320.))),
                     )
@@ -1366,6 +1441,7 @@ impl Workspace {
                     Kind::Search(_) => "Nothing matches.",
                     Kind::Switch if p.open_only => "Nothing left to review here.",
                     Kind::Switch => "No branch or merge request by that name.",
+                    Kind::Face { .. } => "No face installed by that name.",
                     _ => "No branch, tag or commit by that name.",
                 })
         });

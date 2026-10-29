@@ -135,7 +135,7 @@ impl Workspace {
 
     /// Under 1 000 px the tool window floats over the diff instead of taking its width (#80).
     pub(super) fn tool_floats(&self) -> bool {
-        self.win_width < super::narrow::FLOAT
+        self.design_width() < super::narrow::FLOAT
     }
 
     pub(super) fn toggle_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {

@@ -783,7 +783,7 @@ impl Workspace {
                 .border_color(theme::added())
                 .bg(theme::panel())
                 .shadow_lg()
-                .font_family(theme::UI_FONT)
+                .font_family(theme::ui_font())
                 .text_size(px(12.))
                 .child(
                     div()
@@ -2728,7 +2728,7 @@ pub(super) fn comment_item(
                 .child(
                     super::hover::cut("where", where_)
                         .flex_1()
-                        .font_family(theme::CODE_FONT)
+                        .font_family(theme::code_font())
                         .text_size(px(11.))
                         .text_color(theme::faint()),
                 ),

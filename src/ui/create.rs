@@ -858,7 +858,7 @@ impl Workspace {
                                 format!("{} → {}", mid(&n.source, 52), n.target),
                                 format!("{} → {}", n.source, n.target),
                             )
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .text_size(px(12.))
                             .text_color(theme::muted()),
                         ),
@@ -1353,7 +1353,7 @@ impl Workspace {
                     .child(
                         super::hover::mid(("create-target-name", i), &name, 48)
                             .flex_1()
-                            .font_family(theme::CODE_FONT),
+                            .font_family(theme::code_font()),
                     )
                     .children(default.then(|| {
                         div()
@@ -1624,12 +1624,12 @@ impl Workspace {
                                     div()
                                         .overflow_hidden()
                                         .whitespace_nowrap()
-                                        .font_family(theme::CODE_FONT)
+                                        .font_family(theme::code_font())
                                         .child(self.field_text(&n.source, typing, "branch", cx))
                                         .into_any_element()
                                 } else {
                                     super::hover::mid("create-source-name", &n.source, 36)
-                                        .font_family(theme::CODE_FONT)
+                                        .font_family(theme::code_font())
                                         .into_any_element()
                                 },
                             ))
@@ -1646,7 +1646,7 @@ impl Workspace {
                                 "create-target-field",
                                 Some(Focus::Target),
                                 div()
-                                    .font_family(theme::CODE_FONT)
+                                    .font_family(theme::code_font())
                                     .child(self.field_text(
                                         &n.target,
                                         typing && n.focus == Focus::Target,
@@ -1845,7 +1845,7 @@ impl Workspace {
         let (field, ask): (AnyElement, &str) = match n.focus {
             Focus::Source | Focus::Target => (
                 div()
-                    .font_family(theme::CODE_FONT)
+                    .font_family(theme::code_font())
                     .child(self.field_text(&n.target, true, "main", cx))
                     .into_any_element(),
                 "Into which branch?",
@@ -1925,7 +1925,7 @@ impl Workspace {
                                 .child(
                                     super::hover::mid(("quick-target-name", i), &name, 56)
                                         .flex_1()
-                                        .font_family(theme::CODE_FONT),
+                                        .font_family(theme::code_font()),
                                 )
                                 .children(default.then(|| {
                                     div()
@@ -1968,7 +1968,7 @@ impl Workspace {
                                     format!("{} → {}", n.source, n.target),
                                 )
                                 .flex_1()
-                                .font_family(theme::CODE_FONT),
+                                .font_family(theme::code_font()),
                             )
                             .children(self.render_create_totals()),
                     )

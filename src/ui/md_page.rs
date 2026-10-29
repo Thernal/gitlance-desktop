@@ -867,7 +867,7 @@ impl BlockCtx {
 
 /// A page's type: the document reads in the interface's font, a size up.
 fn page_text<E: Styled>(el: E) -> E {
-    el.font_family(theme::UI_FONT)
+    el.font_family(theme::ui_font())
         .text_size(px(14.))
         .line_height(px(22.))
         .text_color(theme::text())

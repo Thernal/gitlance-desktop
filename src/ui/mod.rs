@@ -21,6 +21,7 @@ mod fetch;
 mod file_view;
 mod find;
 mod findfiles;
+mod fonts;
 mod format;
 mod frame;
 mod goto;
@@ -1210,13 +1211,20 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
         }
         if let Ok(query) = std::env::var("GITLANCE_SNAPSHOT_PALETTE") {
             ws.update(cx, |this, cx| {
+                // `faces:` the interface's faces (#24).
                 let kind = if query.starts_with("compare:") {
                     palette::Kind::Base
+                } else if query.starts_with("faces:") {
+                    palette::Kind::Face { code: false }
                 } else {
                     palette::Kind::Search(palette::Scope::All)
                 };
                 this.open_palette(kind, cx);
-                this.type_in_palette(query.trim_start_matches("compare:"));
+                this.type_in_palette(
+                    query
+                        .trim_start_matches("compare:")
+                        .trim_start_matches("faces:"),
+                );
             });
             wait(500).await;
         }
@@ -1313,6 +1321,13 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
             ws.update(cx, |this, cx| {
                 let at = gpui::point(gpui::px(this.win_width), gpui::px(84.));
                 this.open_in_menu(at, cx)
+            });
+            wait(600).await;
+        }
+        // The interface's face menu, on Settings → Appearance (#24).
+        if std::env::var("GITLANCE_SNAPSHOT_MENU").as_deref() == Ok("faces") {
+            ws.update(cx, |this, cx| {
+                this.open_faces(false, gpui::point(gpui::px(760.), gpui::px(200.)), cx)
             });
             wait(600).await;
         }
@@ -1861,8 +1876,10 @@ pub struct Workspace {
     file_jump: Option<(String, u32)>,
     /// Whether this is the tab on screen: one behind another polls its repository seldom.
     on_screen: Rc<Shared<bool>>,
-    /// Advance of one code character, measured on the first render.
+    /// Advance of one code character, measured on the first render and again in another face.
     char_width: f32,
+    /// The face `char_width` was measured in.
+    char_face: SharedString,
     commit_scroll: UniformListScrollHandle,
     compare_scroll: UniformListScrollHandle,
     file_scroll: UniformListScrollHandle,
@@ -2088,6 +2105,7 @@ impl Workspace {
             file_jump: None,
             on_screen: Rc::new(Shared::new(true)),
             char_width: 0.,
+            char_face: theme::code_font(),
             commit_scroll: UniformListScrollHandle::new(),
             compare_scroll: UniformListScrollHandle::new(),
             file_scroll: UniformListScrollHandle::new(),
@@ -3113,13 +3131,7 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Code size only (Settings): on top of the interface size.
-    pub(super) fn zoom_by(&mut self, steps: i32, cx: &mut Context<Self>) {
-        let step = i32::from(Settings::ZOOM_STEP);
-        let next = i32::from(self.settings.zoom) + steps * step;
-        self.set_zoom(next.max(0) as u16, cx);
-    }
-
+    /// Code size only (Settings → Appearance, in points: `fonts.rs`): on top of the interface size.
     pub(super) fn set_zoom(&mut self, percent: u16, cx: &mut Context<Self>) {
         let zoom = percent.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX);
         if zoom == self.settings.zoom {
@@ -3729,7 +3741,7 @@ impl Workspace {
             .children(file.map(|f| {
                 hover::cut("header-file", f)
                     .flex_1()
-                    .font_family(theme::CODE_FONT)
+                    .font_family(theme::code_font())
                     .text_size(px(12.))
                     .text_color(theme::muted())
             }))
@@ -4008,7 +4020,7 @@ impl Workspace {
                                 div()
                                     .flex()
                                     .gap_2()
-                                    .child(div().font_family(theme::CODE_FONT).child(short))
+                                    .child(div().font_family(theme::code_font()).child(short))
                                     .child(
                                         div()
                                             .id("copy-hash")
@@ -4755,7 +4767,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.scroll_horizontally(event, cx)))
-            .font_family(theme::CODE_FONT)
+            .font_family(theme::code_font())
             .text_size(px(self.code_size()))
             .line_height(px(self.row_height()))
             .child(rows)

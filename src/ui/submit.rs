@@ -294,7 +294,7 @@ impl Workspace {
                 .child(
                     div()
                         .flex_none()
-                        .font_family(theme::CODE_FONT)
+                        .font_family(theme::code_font())
                         .text_size(px(11.))
                         .text_color(theme::faint())
                         .child(place),

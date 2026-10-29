@@ -568,7 +568,7 @@ fn block(block: &Block, ctx: &mut Ctx) -> AnyElement {
                 .into_any_element()
         }
         Block::Html(text) => div()
-            .font_family(theme::CODE_FONT)
+            .font_family(theme::code_font())
             .text_size(px(11.))
             .text_color(theme::faint())
             .child(text.clone())
@@ -636,7 +636,7 @@ fn code_block(lang: &str, text: &str, marks: &[(usize, Mark)], ctx: &mut Ctx) ->
                 .px(px(8.))
                 .py(px(2.))
                 .bg(theme::hover())
-                .font_family(theme::UI_FONT)
+                .font_family(theme::ui_font())
                 .text_size(px(11.))
                 .text_color(theme::muted())
                 .child("Suggested change")
@@ -644,7 +644,7 @@ fn code_block(lang: &str, text: &str, marks: &[(usize, Mark)], ctx: &mut Ctx) ->
         .child(
             div()
                 .py(px(4.))
-                .font_family(theme::CODE_FONT)
+                .font_family(theme::code_font())
                 .text_size(px(11.5))
                 .line_height(px(16.))
                 .text_color(theme::code_text())
@@ -762,7 +762,7 @@ fn inline(i: &Inline, ctx: &mut Ctx) -> AnyElement {
         .spans
         .iter()
         .filter(|s| s.style.code)
-        .map(|s| (s.range.clone(), SharedString::from(theme::CODE_FONT)))
+        .map(|s| (s.range.clone(), theme::code_font()))
         .collect();
     let styled = StyledText::new(i.text.clone())
         .with_highlights(highlights)

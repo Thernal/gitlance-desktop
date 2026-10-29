@@ -33,7 +33,7 @@ No IDE to open, no worktrees to create.
 | 🤖 | **Comments for your agent** | write them on lines, files or folders; Claude Code or Codex changes the code and answers each one |
 | 📥 | **Inbox** | mentions, review requests, replies and your agents' answers in one list, answered in place |
 | 🗂️ | **Code** | the project's tree at the working tree, a branch or a commit; files open as tabs, Markdown rendered |
-| 🎨 | **Made yours** | five themes and your own, every key rebindable (GitLance, Android Studio or VS Code keys), zoom |
+| 🎨 | **Made yours** | five themes and your own, any installed face for the interface and the code, every key rebindable (GitLance, Android Studio or VS Code keys), zoom |
 
 GitLance only reads your repository: it never stages, commits or checks out ([what it writes](#in-detail)).
 

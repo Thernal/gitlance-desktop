@@ -84,7 +84,7 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap(px(4.))
-                        .when(crumb.mono, |s| s.font_family(theme::CODE_FONT))
+                        .when(crumb.mono, |s| s.font_family(theme::code_font()))
                         .when(open, |s| s.text_color(theme::accent()))
                         .child(words::say(&crumb.label).into_owned())
                         .when(noted, |s| {
@@ -251,7 +251,7 @@ impl Workspace {
             title
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme::text())
-                .when(mono, |s| s.font_family(theme::CODE_FONT))
+                .when(mono, |s| s.font_family(theme::code_font()))
         };
         let title = style(
             div()

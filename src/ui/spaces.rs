@@ -699,7 +699,7 @@ impl Workspace {
                                 .flex_1()
                                 .min_w_0()
                                 .cut_in_tip()
-                                .when(open.mono, |s| s.font_family(theme::CODE_FONT))
+                                .when(open.mono, |s| s.font_family(theme::code_font()))
                                 .child(open.label),
                         )
                         .children(open.agent.map(|(letter, hue, waiting)| {

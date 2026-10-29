@@ -850,7 +850,7 @@ impl Workspace {
                 .child(
                     div()
                         .flex_none()
-                        .font_family(theme::CODE_FONT)
+                        .font_family(theme::code_font())
                         .text_color(theme::faint())
                         .child(kind),
                 )
@@ -1341,7 +1341,7 @@ impl Workspace {
             markdown::body(text, true, "folder-readme", None, selecting)
         } else {
             div()
-                .font_family(theme::CODE_FONT)
+                .font_family(theme::code_font())
                 .whitespace_normal()
                 .child(markdown::body(
                     text,
@@ -1370,7 +1370,7 @@ impl Workspace {
                     .child(icons::file_icon(path, 14.))
                     .child(
                         div()
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .text_color(theme::muted())
                             .child(path.clone()),
                     )

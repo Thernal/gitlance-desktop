@@ -506,7 +506,7 @@ impl Workspace {
                 .border_color(theme::agent())
                 .bg(theme::base())
                 .cursor_text()
-                .font_family(theme::CODE_FONT)
+                .font_family(theme::code_font())
                 .text_size(px(12.))
                 .child(if answer.value.is_empty() {
                     div().text_color(theme::faint()).child("Your own value…")
@@ -735,7 +735,7 @@ impl Workspace {
                     .children(picked.then(|| {
                         div()
                             .flex_none()
-                            .font_family(theme::UI_FONT)
+                            .font_family(theme::ui_font())
                             .text_size(px(11.))
                             .text_color(theme::agent())
                             .child("← here")
@@ -759,7 +759,7 @@ impl Workspace {
                 .border_1()
                 .border_color(theme::island_border())
                 .bg(theme::editor())
-                .font_family(theme::CODE_FONT)
+                .font_family(theme::code_font())
                 .text_size(px(12.))
                 .children(rows)
                 .into_any_element(),
@@ -924,7 +924,7 @@ impl Workspace {
                             .py(px(6.))
                             .rounded(px(6.))
                             .bg(theme::editor())
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .text_size(px(12.))
                             .children(o.code.iter().map(|l| div().child(l.clone())))
                     }))
@@ -1384,7 +1384,9 @@ impl Workspace {
                                         ))))
                                     })
                                     .children((!c.branch.is_empty()).then(|| {
-                                        div().font_family(theme::CODE_FONT).child(c.branch.clone())
+                                        div()
+                                            .font_family(theme::code_font())
+                                            .child(c.branch.clone())
                                     })),
                             ),
                     );
@@ -1774,7 +1776,7 @@ impl Workspace {
                             .flex_1()
                             .min_w_0()
                             .cut_in_tip()
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .text_color(theme::muted())
                             .child(place),
                     )
@@ -2149,7 +2151,7 @@ impl Workspace {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .font_family(theme::CODE_FONT)
+                                    .font_family(theme::code_font())
                                     .text_size(px(12.))
                                     .child(text),
                             )
@@ -2397,7 +2399,7 @@ fn limited(id: impl Into<gpui::ElementId>) -> gpui::Stateful<gpui::Div> {
         .rounded(px(4.))
         .border_1()
         .border_color(theme::island_border())
-        .font_family(theme::UI_FONT)
+        .font_family(theme::ui_font())
         .text_size(px(10.))
         .text_color(theme::faint())
         .child("limited")

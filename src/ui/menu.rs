@@ -81,6 +81,13 @@ pub enum Act {
     RequestView(crate::mr::MrState),
     AlwaysOpen(String),
     EditorSettings,
+    /// Settings → Appearance → Fonts and size (#24): the interface's face or (`code`) the code's,
+    /// None its default; Other… lists every face installed.
+    Face {
+        code: bool,
+        face: Option<String>,
+    },
+    OtherFaces(bool),
 }
 
 #[derive(Clone)]
@@ -91,6 +98,8 @@ pub struct Entry {
     pub checked: Option<bool>,
     /// Shown dimmed, taking no click: its label says why (a branch only on this Mac, #162).
     pub off: bool,
+    /// Its label drawn in this face (a face's menu, #24).
+    pub face: Option<gpui::SharedString>,
     pub act: Act,
 }
 
@@ -101,6 +110,7 @@ impl Entry {
             key: "",
             checked: None,
             off: false,
+            face: None,
             act,
         }
     }
@@ -120,6 +130,11 @@ impl Entry {
 
     pub fn checked(mut self, on: bool) -> Self {
         self.checked = Some(on);
+        self
+    }
+
+    pub fn face(mut self, face: gpui::SharedString) -> Self {
+        self.face = Some(face);
         self
     }
 }
@@ -232,6 +247,8 @@ impl Workspace {
             }
             Act::AlwaysOpen(ext) => self.always_open(ext),
             Act::EditorSettings => self.open_settings(cx),
+            Act::Face { code, face } => self.choose_face(code, face, cx),
+            Act::OtherFaces(code) => self.open_all_faces(code, cx),
             // Need the window: `run_act_in` runs them.
             Act::MoveProject { .. } | Act::CloseProject(_) => {}
         }
@@ -400,6 +417,7 @@ impl Workspace {
                                 "label",
                                 super::keys::text(&entry.label).into_owned(),
                             )
+                            .when_some(entry.face.clone(), |s, face| s.font_family(face))
                             .flex_1(),
                         )
                         .child(

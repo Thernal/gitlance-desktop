@@ -330,7 +330,7 @@ impl Workspace {
                             .w(px(46.))
                             .flex_none()
                             .text_align(gpui::TextAlign::Right)
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .text_size(px(11.))
                             .text_color(if hit.old {
                                 theme::removed()
@@ -342,7 +342,7 @@ impl Workspace {
                     .child(
                         super::hover::cut_with("hit-text", trimmed.to_owned(), styled)
                             .flex_1()
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .text_size(px(12.)),
                     )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_hit(ix, cx)))

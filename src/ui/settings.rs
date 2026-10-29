@@ -125,33 +125,6 @@ impl Workspace {
             },
         ));
 
-        let ui_zoom = diff_view::group()
-            .child(chip("ui-zoom-out", "−", false).on_click(
-                cx.listener(|this, _: &ClickEvent, window, cx| this.ui_zoom_by(-1, window, cx)),
-            ))
-            .child(
-                chip("ui-zoom-reset", format!("{}%", s.ui_zoom), s.ui_zoom != 100).on_click(
-                    cx.listener(|this, _: &ClickEvent, window, cx| {
-                        this.set_ui_zoom(100, window, cx)
-                    }),
-                ),
-            )
-            .child(chip("ui-zoom-in", "+", false).on_click(
-                cx.listener(|this, _: &ClickEvent, window, cx| this.ui_zoom_by(1, window, cx)),
-            ));
-        let zoom = diff_view::group()
-            .child(
-                chip("zoom-out", "−", false)
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.zoom_by(-1, cx))),
-            )
-            .child(
-                chip("zoom-reset", format!("{}%", s.zoom), s.zoom != 100)
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.set_zoom(100, cx))),
-            )
-            .child(
-                chip("zoom-in", "+", false)
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.zoom_by(1, cx))),
-            );
         let fold = switch("fold-generated", s.fold_generated).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.change_settings(
@@ -238,16 +211,6 @@ impl Workspace {
                     "Default mode",
                     "",
                     modes,
-                ))
-                .child(item(
-                    "Interface size",
-                    "⌘+ ⌘− ⌘0",
-                    ui_zoom,
-                ))
-                .child(item(
-                    "Code size",
-                    "Relative to the interface size.",
-                    zoom,
                 ))
                 .child(item(
                     "Fold generated files",

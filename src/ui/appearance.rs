@@ -234,7 +234,7 @@ fn code_face(t: &Theme) -> Div {
         .rounded(px(6.))
         .overflow_hidden()
         .bg(c(t, T::Bg3))
-        .font_family(theme::CODE_FONT)
+        .font_family(theme::code_font())
         .text_size(px(12.))
         .line_height(px(17.))
         .text_color(c(t, T::Text1))
@@ -360,7 +360,7 @@ fn sample_diff(window: &Theme, code: &Theme) -> Div {
     div()
         .py(px(4.))
         .bg(c(window, T::Bg3))
-        .font_family(theme::CODE_FONT)
+        .font_family(theme::code_font())
         .text_size(px(12.))
         .text_color(c(window, T::Text1))
         .children(SAMPLE.iter().map(|&(kind, old, new, text, word)| {
@@ -624,7 +624,7 @@ fn rows_of_three(cards: Vec<AnyElement>) -> Div {
     div().flex().flex_col().gap(px(8.)).children(rows)
 }
 
-fn section(title: &'static str, sub: &'static str) -> Div {
+pub(super) fn section(title: &'static str, sub: &'static str) -> Div {
     div()
         .flex()
         .flex_col()
@@ -817,6 +817,7 @@ impl Workspace {
                     .border_color(theme::island_border())
                     .child(sample_diff(window, code.unwrap_or(window))),
             )
+            .child(self.render_fonts(cx))
             .child(projects)
             .child(panes)
             .child(fold)
@@ -846,7 +847,7 @@ impl Workspace {
                     )
                     .child(
                         super::hover::cut("themes-folder", folder)
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .text_size(px(11.))
                             .text_color(theme::faint()),
                     ),
@@ -946,7 +947,7 @@ impl Workspace {
                     )
                     .child(
                         super::hover::cut("icons-folder", folder)
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .text_size(px(11.))
                             .text_color(theme::faint()),
                     ),
@@ -1367,7 +1368,7 @@ impl Workspace {
                         div()
                             .w(px(150.))
                             .flex_none()
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .text_color(if own { theme::text() } else { theme::faint() })
                             .child(name),
                     )
@@ -1375,7 +1376,7 @@ impl Workspace {
                         div()
                             .w(px(90.))
                             .flex_none()
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .text_color(if own { theme::text() } else { theme::faint() })
                             .child(themes::hex(value(t, i))),
                     )
@@ -1606,7 +1607,7 @@ impl Workspace {
                     .text_color(theme::faint())
                     .child(format!("{set} set · {} from {from_label}", ROWS - set))
                     .child(div().flex_1())
-                    .child(div().font_family(theme::CODE_FONT).child(file)),
+                    .child(div().font_family(theme::code_font()).child(file)),
             )
             .into_any_element()
     }
@@ -1668,7 +1669,7 @@ impl Workspace {
                             } else {
                                 theme::island_border()
                             })
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .cursor_text()
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                 this.start_field(Field::ThemeValue, cx)

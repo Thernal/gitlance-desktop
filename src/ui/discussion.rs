@@ -67,7 +67,7 @@ pub fn frame(source: Source, selected: bool) -> Div {
         .pr(px(14.))
         .pt(px(10.))
         .pb(px(12.))
-        .font_family(theme::UI_FONT)
+        .font_family(theme::ui_font())
         .text_size(px(13.))
         .line_height(px(20.))
         .text_color(theme::text())

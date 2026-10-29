@@ -1221,7 +1221,7 @@ impl Workspace {
             .text_color(theme::muted())
             .child(
                 div()
-                    .font_family(theme::CODE_FONT)
+                    .font_family(theme::code_font())
                     .text_color(theme::accent())
                     .child(words::number(iid)),
             )
@@ -1238,7 +1238,7 @@ impl Workspace {
                     .child(div().text_color(theme::faint()).child("·"))
                     .child(
                         div()
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .child(format!("{} → {}", m.source, m.target)),
                     ),
             )
@@ -1699,7 +1699,7 @@ impl Workspace {
                                 name.to_owned(),
                             )
                             .flex_1()
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .when(b.kind == RefKind::Local, |s| {
                                 s.font_weight(FontWeight::SEMIBOLD)
                             })
@@ -2026,7 +2026,7 @@ impl Workspace {
             .text_size(px(19.))
             .line_height(px(26.))
             .font_weight(FontWeight::SEMIBOLD)
-            .font_family(theme::CODE_FONT)
+            .font_family(theme::code_font())
             .child(b.name.clone());
         let mut facts: Vec<String> = Vec::new();
         if let Some((against, ahead, behind)) = fact.and_then(|f| f.against.as_ref()) {

@@ -469,7 +469,7 @@ impl Workspace {
                                     .child(kind.to_owned())
                                     .child(
                                         div()
-                                            .font_family(theme::CODE_FONT)
+                                            .font_family(theme::code_font())
                                             .text_size(px(11.))
                                             .text_color(theme::muted())
                                             .child(format::short(v.tip)),
@@ -553,7 +553,7 @@ impl Workspace {
                                 .child(
                                     div()
                                         .w(px(14.))
-                                        .font_family(theme::CODE_FONT)
+                                        .font_family(theme::code_font())
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(color)
                                         .child(mark),
@@ -562,7 +562,7 @@ impl Workspace {
                                     div()
                                         .w(px(150.))
                                         .flex_none()
-                                        .font_family(theme::CODE_FONT)
+                                        .font_family(theme::code_font())
                                         .text_size(px(11.))
                                         .text_color(theme::muted())
                                         .child(ids),
@@ -632,7 +632,7 @@ impl Workspace {
                     .text_color(theme::muted())
                     .child(
                         div()
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .child(format::short(commit.id)),
                     )
                     .when(room.third(), |s| {
@@ -742,9 +742,10 @@ impl Render for Workspace {
             self.relayout_all();
         }
         self.follow_scroll(cx);
-        if self.char_width == 0. {
+        if self.char_width == 0. || self.char_face != theme::code_font() {
+            self.char_face = theme::code_font();
             let text = window.text_system();
-            let id = text.resolve_font(&font(theme::CODE_FONT));
+            let id = text.resolve_font(&font(self.char_face.clone()));
             self.char_width = text
                 .advance(id, px(self.code_size()), 'm')
                 .map_or(7.2, |size| f32::from(size.width));
@@ -1066,7 +1067,7 @@ impl Render for Workspace {
             .flex_col()
             .bg(theme::base())
             .text_color(theme::text())
-            .font_family(theme::UI_FONT)
+            .font_family(theme::ui_font())
             .text_size(px(13.))
             .child(self.render_title_bar(cx))
             .children(self.render_toasts(cx))

@@ -4,7 +4,9 @@
 //! page's panels as icons under a line, a click or ⌃3 opening it as a drawer over the content,
 //! docked again when there is room — a list's preview goes, the bar's path is ‹ and the id,
 //! secondary actions keep their icon and search its icon. Under 1000 a tool window floats over the
-//! diff, and a drawer and a floating tool window are never open together.
+//! diff, and a drawer and a floating tool window are never open together. The steps are the
+//! design's pixels, so at a larger interface size they come sooner (#24): at 115 % the menu folds
+//! under 1472.
 
 use super::hover::CutInTip;
 use super::zones::Zone;
@@ -37,30 +39,39 @@ pub struct Narrowed {
 }
 
 impl Workspace {
+    /// The window's width in the design's pixels: what the steps are measured against.
+    pub(super) fn design_width(&self) -> f32 {
+        self.win_width / super::ui_zoom()
+    }
+
     /// The window has crossed a step: what it folded comes back as it was.
     pub(super) fn follow_width(&mut self) {
-        if self.win_width >= MENU {
+        if self.design_width() >= MENU {
             self.narrowed.menu = None;
         }
-        if self.win_width >= SIDE {
+        if self.design_width() >= SIDE {
             self.narrowed.drawer = false;
         }
     }
 
     /// Under 1280 px: the menu folds, unless opened here, and the diff is unified.
     pub(super) fn menu_narrow(&self) -> bool {
-        self.win_width < MENU
+        self.design_width() < MENU
     }
 
     /// Under 1100 px: the side panel in the menu's column, a list without its preview, the bar's
     /// path as ‹ and the id, its secondary actions and search as icons.
     pub(super) fn compact(&self) -> bool {
-        self.win_width < SIDE
+        self.design_width() < SIDE
     }
 
     /// The menu folded to icons: the setting, or under 1280 px folded unless opened here.
     pub(super) fn menu_folded(&self) -> bool {
-        menu_fold(self.win_width, self.layout.fold_places, self.narrowed.menu)
+        menu_fold(
+            self.design_width(),
+            self.layout.fold_places,
+            self.narrowed.menu,
+        )
     }
 
     /// ◧ and ⌘B: the menu to icons and back — kept in `layout.txt`, or for while the window is

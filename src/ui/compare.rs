@@ -250,7 +250,7 @@ impl Workspace {
             .child(
                 div()
                     .flex_none()
-                    .font_family(theme::CODE_FONT)
+                    .font_family(theme::code_font())
                     .text_size(px(11.))
                     .text_color(theme::faint())
                     .child(format::short(info.id)),
@@ -311,7 +311,7 @@ impl Workspace {
                         .size(px(13.))
                         .text_color(theme::muted()),
                 )
-                .child(div().font_family(theme::CODE_FONT).child(what))
+                .child(div().font_family(theme::code_font()).child(what))
                 .child("only")
                 .child(
                     div()

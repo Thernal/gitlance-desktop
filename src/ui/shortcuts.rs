@@ -139,7 +139,7 @@ impl Workspace {
                             div()
                                 .w(px(124.))
                                 .flex_none()
-                                .font_family(theme::CODE_FONT)
+                                .font_family(theme::code_font())
                                 .text_size(px(12.))
                                 .text_color(theme::accent())
                                 .child(super::keys::text(keys).into_owned()),

@@ -525,7 +525,7 @@ pub fn mark_preview(marks: MarkStyle) -> impl IntoElement {
             .h(px(DIFF_ROW))
             .px_3()
             .when_some(line_bg, |s, bg| s.bg(bg))
-            .font_family(theme::CODE_FONT)
+            .font_family(theme::code_font())
             .text_size(px(super::CODE_SIZE))
             .line_height(px(DIFF_ROW))
             .child(

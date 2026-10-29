@@ -407,7 +407,7 @@ impl Workspace {
                     .child(
                         div()
                             .flex_none()
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .text_size(px(12.))
                             .text_color(theme::faint())
                             .child(format::short(c.id)),
@@ -763,7 +763,7 @@ fn person(name: String, login: Option<String>, state: Option<(&'static str, Rgba
 }
 
 fn mono(text: &str) -> Div {
-    div().font_family(theme::CODE_FONT).child(text.to_owned())
+    div().font_family(theme::code_font()).child(text.to_owned())
 }
 
 fn faint(text: &'static str) -> Div {

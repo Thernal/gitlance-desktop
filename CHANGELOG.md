@@ -16,6 +16,11 @@ for someone using the app, not for someone reading the code; the commits follow 
 - **A comparison's commits.** Comparing two branches, tags or commits lists the commits it holds over its
   files, newest first. A click shows one commit's own changes, a ⇧-click a run of them, ↑ ↓ step through them;
   "a41f9c0 only" says so over the diff, and esc or its × bring the whole comparison back.
+- **Fonts and size.** Settings → Appearance → Fonts and size picks the interface's face and the code's from
+  every face installed, each drawn in its own type: a few in the menu, Other… for all of them, filtered as you
+  type. The code's size is in points there, beside the interface size, which moved from Settings → Diff too. At a
+  larger interface size the narrow layout comes sooner, as the text needs more room — at 115 % the menu folds
+  under 1 472 px instead of 1 280 —, and a line under the rows says where.
 - **Staged and not staged, apart.** The working tree's files are in two groups, Staged and Not staged, each under
   a header that folds it and says how many; the filter is over both. A file partly staged is in each with its
   own part's lines, and every file's card says which part it is. Not staged only shows that group alone.

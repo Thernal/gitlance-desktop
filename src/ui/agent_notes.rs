@@ -447,7 +447,7 @@ fn note_frame(hue: gpui::Rgba) -> gpui::Div {
         .pr(px(14.))
         .pt(px(8.))
         .pb(px(10.))
-        .font_family(theme::UI_FONT)
+        .font_family(theme::ui_font())
         .text_size(px(13.))
         .line_height(px(20.))
         .text_color(theme::text())

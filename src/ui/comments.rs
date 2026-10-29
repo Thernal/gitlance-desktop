@@ -1731,10 +1731,10 @@ impl Workspace {
                     .border_2()
                     .border_color(theme::focus())
                     .bg(theme::panel())
-                    .font_family(theme::UI_FONT)
+                    .font_family(theme::ui_font())
                     .text_size(px(12.))
                     .child(div().text_color(theme::muted()).child("Comment on line"))
-                    .child(div().min_w(px(56.)).font_family(theme::CODE_FONT).child(
+                    .child(div().min_w(px(56.)).font_family(theme::code_font()).child(
                         self.field_look(
                             text,
                             active,
@@ -1793,7 +1793,7 @@ impl Workspace {
                     .items_center()
                     .gap_2()
                     .child(div().text_color(theme::muted()).child("Comment on line"))
-                    .child(div().min_w(px(60.)).font_family(theme::CODE_FONT).child(
+                    .child(div().min_w(px(60.)).font_family(theme::code_font()).child(
                         self.field_look(
                             text,
                             active,
@@ -1811,7 +1811,7 @@ impl Workspace {
             )
             .children(preview.map(|code| {
                 super::hover::cut("preview", code)
-                    .font_family(theme::CODE_FONT)
+                    .font_family(theme::code_font())
                     .text_size(px(12.))
                     .text_color(theme::muted())
             }))
@@ -2688,7 +2688,7 @@ impl Workspace {
                 .gap(px(4.))
                 .child(
                     div()
-                        .font_family(theme::UI_FONT)
+                        .font_family(theme::ui_font())
                         .text_size(px(12.))
                         .text_color(theme::muted())
                         .child(format!("Lines {first}–{}", compose.line)),
@@ -3010,7 +3010,7 @@ impl Workspace {
             .border_color(tone)
             .bg(theme::base())
             .overflow_hidden()
-            .font_family(theme::UI_FONT)
+            .font_family(theme::ui_font())
             .text_size(px(13.))
             .line_height(px(20.))
             .text_color(theme::text())

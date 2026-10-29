@@ -252,7 +252,7 @@ impl Workspace {
                                 } else {
                                     theme::added_line()
                                 })
-                                .font_family(theme::CODE_FONT)
+                                .font_family(theme::code_font())
                                 .text_size(px(12.))
                                 .text_color(theme::text())
                                 .overflow_hidden()

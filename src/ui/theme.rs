@@ -4,11 +4,89 @@
 //! Appearance → Code picks another) gives the diff's tints and the syntax colours (D16).
 
 use crate::themes::{self, T, TOKENS, Theme};
-use gpui::{Hsla, Rgba, rgba};
+use gpui::{Hsla, Rgba, SharedString, rgba};
 use std::sync::RwLock;
 
+/// The interface's face unless another is chosen: the system's.
 pub const UI_FONT: &str = ".SystemUIFont";
+/// The code's face unless another is chosen.
 pub const CODE_FONT: &str = "Menlo";
+
+// ---- the faces chosen (#24) -----------------------------------------------------------------
+
+/// The faces chosen in Settings → Appearance → Fonts and size (`fonts.txt`: `ui=` and `code=`
+/// lines, a face's family name each; none is the default).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Faces {
+    pub ui: Option<String>,
+    pub code: Option<String>,
+}
+
+impl Faces {
+    fn parse(text: &str) -> Self {
+        let mut faces = Self::default();
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let value = Some(value.trim().to_owned()).filter(|v| !v.is_empty());
+            match key.trim() {
+                "ui" => faces.ui = value,
+                "code" => faces.code = value,
+                _ => {}
+            }
+        }
+        faces
+    }
+
+    fn text(&self) -> String {
+        let line =
+            |key: &str, face: &Option<String>| format!("{key}={}\n", face.as_deref().unwrap_or(""));
+        line("ui", &self.ui) + &line("code", &self.code)
+    }
+}
+
+/// The interface's face and the code's, as drawn.
+static FACES: RwLock<(SharedString, SharedString)> = RwLock::new((
+    SharedString::new_static(UI_FONT),
+    SharedString::new_static(CODE_FONT),
+));
+
+fn draw_faces(faces: &Faces) {
+    let face = |chosen: &Option<String>, default: &'static str| {
+        chosen
+            .clone()
+            .map_or(SharedString::new_static(default), SharedString::from)
+    };
+    if let Ok(mut drawn) = FACES.write() {
+        *drawn = (face(&faces.ui, UI_FONT), face(&faces.code, CODE_FONT));
+    }
+}
+
+/// The face the interface is drawn in.
+pub fn ui_font() -> SharedString {
+    FACES.read().map_or(UI_FONT.into(), |f| f.0.clone())
+}
+
+/// The face the code is drawn in.
+pub fn code_font() -> SharedString {
+    FACES.read().map_or(CODE_FONT.into(), |f| f.1.clone())
+}
+
+/// The faces chosen.
+pub fn faces() -> Faces {
+    let chosen = |face: SharedString, default: &str| (face != default).then(|| face.to_string());
+    Faces {
+        ui: chosen(ui_font(), UI_FONT),
+        code: chosen(code_font(), CODE_FONT),
+    }
+}
+
+/// Draws with `faces` and keeps them.
+pub fn choose_faces(faces: &Faces) {
+    crate::storage::save("fonts.txt", faces.text());
+    draw_faces(faces);
+}
 
 /// The tokens in use.
 type Colors = [u32; TOKENS.len()];
@@ -294,6 +372,7 @@ static REGISTRY: RwLock<Option<Registry>> = RwLock::new(None);
 
 /// Reads the themes (built in and the folder's) and the choice, and draws with it.
 pub fn load() {
+    draw_faces(&Faces::parse(&crate::storage::read("fonts.txt")));
     let registry = Registry {
         themes: themes::resolve(&themes::read_folder()),
         choice: Choice::read(),
@@ -376,5 +455,28 @@ pub fn reload() {
     apply(&registry, &registry.choice);
     if let Ok(mut r) = REGISTRY.write() {
         *r = Some(registry);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Faces;
+
+    #[test]
+    fn the_faces_chosen_read_back_as_they_were_kept() {
+        let faces = Faces {
+            ui: Some("Avenir Next".into()),
+            code: None,
+        };
+        assert_eq!(faces.text(), "ui=Avenir Next\ncode=\n");
+        assert_eq!(Faces::parse(&faces.text()), faces);
+        assert_eq!(Faces::parse(""), Faces::default());
+        assert_eq!(
+            Faces::parse("code= JetBrains Mono \nwhat=else"),
+            Faces {
+                ui: None,
+                code: Some("JetBrains Mono".into())
+            }
+        );
     }
 }

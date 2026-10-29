@@ -786,7 +786,7 @@ impl Workspace {
                         div()
                             .cut_in_tip()
                             .text_size(px(12.))
-                            .font_family(theme::CODE_FONT)
+                            .font_family(theme::code_font())
                             .text_color(theme::agent())
                             .child(place),
                     )
@@ -845,7 +845,7 @@ impl Workspace {
                             .size(px(14.))
                             .text_color(theme::muted()),
                     )
-                    .child(div().font_family(theme::CODE_FONT).child(b))
+                    .child(div().font_family(theme::code_font()).child(b))
             }))
             .child(div().flex_1())
             .child(format!(
@@ -925,7 +925,7 @@ impl Workspace {
             .text_color(theme::muted())
             .child(
                 div()
-                    .font_family(theme::CODE_FONT)
+                    .font_family(theme::code_font())
                     .text_color(theme::accent())
                     .child(words::number(n.iid)),
             )
@@ -1189,7 +1189,7 @@ fn excerpt_view(path: &str, line: u32, ex: Option<Option<&Excerpt>>) -> Div {
             .child(super::motion::shimmer("inbox-excerpt-loading", 4)),
         Some(Some(ex)) => div()
             .pb(px(6.))
-            .font_family(theme::CODE_FONT)
+            .font_family(theme::code_font())
             .text_size(px(12.))
             .children(ex.lines.iter().map(|l| {
                 let number = |n: Option<u32>| {
