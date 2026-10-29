@@ -4,7 +4,7 @@ What is new in each release of GitLance. A release's notes on GitHub are its sec
 (`.github/release-notes.sh`); a release tag whose version has no section here does not build. Write what changed
 for someone using the app, not for someone reading the code; the commits follow anyway.
 
-## Unreleased
+## 1.3.0 — 2026-10-29
 
 - **Pin a tab in Code.** Pin tab — in a tab's right click, ⌘K or ⌥⌘P — keeps a file or a folder first among the
   tabs, a pin where its × was and a line after the last one. A preview is never put in its place, Close others,
