@@ -1,0 +1,3 @@
+# Text stays LF on every OS: assets are compiled in with include_str!, and a Windows checkout turned
+# the skill's front matter into CRLF.
+* text=auto eol=lf
