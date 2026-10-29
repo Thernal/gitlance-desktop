@@ -6,6 +6,7 @@ mod agent_notes;
 mod annotate;
 mod appearance;
 mod bar;
+mod beside;
 mod bookmarks;
 mod branch_page;
 mod code;
@@ -1239,6 +1240,14 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
             });
             wait(1500).await;
         }
+        // What is beside a folder of Code's path, its list open under `src/ui` (#132).
+        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("code-beside")) {
+            ws.update(cx, |this, cx| {
+                this.open_code_file("src/ui/bar.rs".into(), true, cx);
+                this.open_beside("src/ui".into(), cx);
+            });
+            wait(1500).await;
+        }
         if let Ok(keys) = std::env::var("GITLANCE_SNAPSHOT_KEYS") {
             // Keystrokes sent to the window itself (not the keyboard), e.g. `right right cmd-t`.
             // `wait` gives a diff a second to load before the next key.
@@ -1578,6 +1587,8 @@ pub struct Workspace {
     notices: notifications::Notices,
     /// The "this tab or a new tab?" card (`opening.rs`).
     open_ask: Option<opening::OpenAsk>,
+    /// What is beside a folder of Code's path, listed under it (`beside.rs`, #132).
+    beside: Option<beside::Beside>,
     /// The "send to which chat?" card (`agent.rs`).
     agent_pick: Option<agent::AgentPick>,
     /// When the agents' answers were last read (`agent.rs`).
@@ -1893,6 +1904,7 @@ impl Workspace {
             spot: None,
             window: window.window_handle(),
             open_ask: None,
+            beside: None,
             agent_pick: None,
             answers_stamp: None,
             agent_marks: Vec::new(),
@@ -3426,12 +3438,18 @@ impl Workspace {
         if self.ffind.is_some() {
             return self.ffind_step(false, cx);
         }
+        if self.beside.is_some() {
+            return self.step_beside(false, cx);
+        }
         self.palette_step(false, cx);
     }
 
     fn palette_down(&mut self, _: &PaletteDown, _: &mut Window, cx: &mut Context<Self>) {
         if self.ffind.is_some() {
             return self.ffind_step(true, cx);
+        }
+        if self.beside.is_some() {
+            return self.step_beside(true, cx);
         }
         self.palette_step(true, cx);
     }

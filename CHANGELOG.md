@@ -10,6 +10,9 @@ for someone using the app, not for someone reading the code; the commits follow 
   tabs, a pin where its × was and a line after the last one. A preview is never put in its place, Close others,
   Close to the right and Close all leave it, ⌘W leaves it too, and it is there again after a restart. A click on
   its pin unpins it. Close to the right is new in a tab's right click.
+- **What is beside a folder, from Code's path.** A click on a folder's name in the path over a file lists what
+  is beside it — folders first, then files, the one you came through saying "here" — and typing filters it. ↑ ↓
+  and ↵ open a folder's page or a file's tab; the first row opens the folder itself, as the click used to.
 - **Pictures in comments, kept.** An image in a comment or a merge request's description — a screenshot uploaded
   to GitLab, a picture from the web — is drawn under its words, and a click opens it; a document's web images and
   badges are drawn too, not only named. Each is fetched once and kept on disk with people's pictures, so it shows at

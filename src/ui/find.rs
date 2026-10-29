@@ -302,6 +302,7 @@ impl Workspace {
             Some(Input::OpenAsk) => return self.open_ask_key(event, cx),
             Some(Input::AgentPick) => return self.agent_pick_key(event, cx),
             Some(Input::UpdateCard) => return self.update_card_key(event, cx),
+            Some(Input::Beside) => return self.beside_key(event, cx),
             Some(Input::Reactions) => return self.reaction_key(event, cx),
             Some(Input::Submit) => return self.submit_key(event, cx),
             Some(Input::NewRequest) => return self.newreq_key(event, cx),

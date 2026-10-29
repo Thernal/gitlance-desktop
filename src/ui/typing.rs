@@ -3,7 +3,7 @@
 //! which inputs are open. It loses the keyboard to a press outside its box, to another page (a
 //! composer also to another file), to another input, to esc while it holds text; it gets it back
 //! from a press in its box, from its page coming back, from the action that opened it. A card over
-//! everything (⌘K, Go to file …) holds the keyboard while it is open and gives it back on closing.
+//! everything (⌘K, Go to file, the list beside a folder …) holds the keyboard while it is open and gives it back on closing.
 
 use super::Workspace;
 use super::lists::Field;
@@ -26,6 +26,8 @@ pub(super) enum Input {
     Reactions,
     /// The new version's card (#135).
     UpdateCard,
+    /// What is beside a folder of Code's path (`beside.rs`).
+    Beside,
     /// A one-line field: a list's filter, the token, the host, a name being given … —
     /// `Workspace::field` says which, and is set only while it has the keyboard.
     Field,
@@ -46,13 +48,14 @@ pub(super) enum Input {
 }
 
 impl Input {
-    const ALL: [Input; 14] = [
+    const ALL: [Input; 15] = [
         Input::Palette,
         Input::FindFiles,
         Input::OpenAsk,
         Input::AgentPick,
         Input::Reactions,
         Input::UpdateCard,
+        Input::Beside,
         Input::Field,
         Input::Compose,
         Input::GoLine,
@@ -74,6 +77,7 @@ impl Input {
                 | Input::AgentPick
                 | Input::Reactions
                 | Input::UpdateCard
+                | Input::Beside
         )
     }
 
@@ -123,6 +127,7 @@ impl Workspace {
             Input::AgentPick => self.agent_pick.is_some(),
             Input::Reactions => self.reaction_grid.is_some(),
             Input::UpdateCard => self.update_card.is_some(),
+            Input::Beside => self.beside.is_some(),
             Input::Field => self.field.is_some(),
             Input::Compose => self.compose.is_some(),
             Input::GoLine => self.goline.is_some(),
@@ -347,9 +352,10 @@ pub(super) fn field_box_out<E: InteractiveElement>(
 #[cfg(test)]
 mod tests {
     /// The key handlers `find_key` routes to by `Input`: the only places a key may edit a text.
-    const ROUTED: [&str; 11] = [
+    const ROUTED: [&str; 12] = [
         "ffind_key",
         "palette_key",
+        "beside_key",
         "reaction_key",
         "submit_key",
         "newreq_key",

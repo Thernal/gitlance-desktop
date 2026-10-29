@@ -759,7 +759,9 @@ impl Render for Workspace {
                 } else {
                     match self.typing() {
                         None => "Workspace",
-                        Some(Input::Palette | Input::FindFiles) => "Workspace Typing Palette",
+                        Some(Input::Palette | Input::FindFiles | Input::Beside) => {
+                            "Workspace Typing Palette"
+                        }
                         // ↑ ↓ belong to the field: they move its caret or its line. The new
                         // version's card scrolls with them (#135).
                         Some(
@@ -1112,6 +1114,7 @@ impl Render for Workspace {
             .children(self.render_blame_tip())
             .children(self.render_find_files(cx))
             .children(self.render_open_ask(cx))
+            .children(self.render_beside_backdrop(cx))
             .children(self.render_agent_pick(cx))
             .children(self.render_label_card(cx))
             .children(self.render_update_card(cx))

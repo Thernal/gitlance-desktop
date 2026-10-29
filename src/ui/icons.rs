@@ -234,6 +234,10 @@ const ICONS: &[(&str, &str)] = &[
         ),
     ),
     (
+        "corner-left-up",
+        lucide!(r#"<path d="M14 9 9 4 4 9"/>"# r#"<path d="M20 20h-7a4 4 0 0 1-4-4V4"/>"#),
+    ),
+    (
         "message",
         lucide!(r#"<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>"#),
     ),

@@ -24,7 +24,8 @@ impl Crumb {
         }
     }
 
-    /// A folder above a file or folder in Code: a way to its page (A, 2026-10-23).
+    /// A folder above a file or folder in Code: its name lists what is beside it, the first row
+    /// its page (#132, B).
     fn folder(label: &str, path: String) -> Self {
         Self {
             label: label.to_owned(),
@@ -68,6 +69,10 @@ impl Workspace {
             // waiting there is its dot, as in the tree (A, 2026-10-23).
             let folder = crumb.code_folder().map(str::to_owned);
             let noted = folder.as_deref().is_some_and(|f| self.folder_note_waits(f));
+            let open = folder
+                .as_deref()
+                .is_some_and(|f| self.beside.as_ref().is_some_and(|b| b.folder == f));
+            let list = folder.as_deref().and_then(|f| self.render_beside(f, cx));
             div()
                 .flex()
                 .items_center()
@@ -75,15 +80,17 @@ impl Workspace {
                 .child(
                     div()
                         .id(SharedString::from(format!("crumb-{n}")))
+                        .relative()
                         .flex()
                         .items_center()
                         .gap(px(4.))
                         .when(crumb.mono, |s| s.font_family(theme::CODE_FONT))
+                        .when(open, |s| s.text_color(theme::accent()))
                         .child(words::say(&crumb.label).into_owned())
                         .when(noted, |s| {
                             s.child(div().size(px(6.)).rounded_full().bg(theme::agent()))
                         })
-                        .when_some(link, |s, to| {
+                        .when_some(link.filter(|_| folder.is_none()), |s, to| {
                             s.cursor_pointer()
                                 .hover(|s| s.text_color(theme::accent()))
                                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -92,13 +99,20 @@ impl Workspace {
                                 }))
                         })
                         .when_some(folder, |s, folder| {
-                            s.on_mouse_down(
-                                gpui::MouseButton::Right,
-                                cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
-                                    this.crumb_menu(folder.clone(), e.position, cx)
-                                }),
-                            )
-                        }),
+                            let menu = folder.clone();
+                            s.cursor_pointer()
+                                .hover(|s| s.text_color(theme::accent()))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    this.open_beside(folder.clone(), cx)
+                                }))
+                                .on_mouse_down(
+                                    gpui::MouseButton::Right,
+                                    cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                                        this.crumb_menu(menu.clone(), e.position, cx)
+                                    }),
+                                )
+                        })
+                        .children(list),
                 )
                 .child(div().text_color(theme::faint()).child("›"))
         });
