@@ -239,18 +239,14 @@ impl Workspace {
                                 .flex()
                                 .flex_col()
                                 .child(
-                                    div()
-                                        .truncate()
+                                    super::hover::cut(("complete-name", i), c.label.clone())
                                         .font_weight(FontWeight::MEDIUM)
-                                        .when(faint, |s| s.text_color(theme::faint()))
-                                        .child(c.label.clone()),
+                                        .when(faint, |s| s.text_color(theme::faint())),
                                 )
                                 .child(
-                                    div()
-                                        .truncate()
+                                    super::hover::cut(("complete-login", i), c.detail.clone())
                                         .text_size(px(11.))
-                                        .text_color(theme::faint())
-                                        .child(c.detail.clone()),
+                                        .text_color(theme::faint()),
                                 ),
                         );
                 }
@@ -263,15 +259,12 @@ impl Workspace {
                     .rounded(px(ROW_RADIUS))
                     .when(i == pick, |s| s.bg(theme::selected()))
                     .child(
-                        div()
+                        super::hover::cut(("complete-label", i), c.label.clone())
                             .flex_1()
-                            .min_w_0()
-                            .truncate()
                             .font_weight(FontWeight::MEDIUM)
                             .when(c.detail.ends_with("not notified"), |s| {
                                 s.text_color(theme::faint())
-                            })
-                            .child(c.label.clone()),
+                            }),
                     )
                     .child(
                         div()

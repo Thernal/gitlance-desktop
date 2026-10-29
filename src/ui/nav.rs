@@ -166,7 +166,7 @@ impl Page {
 }
 
 /// What stays open under a space in the menu.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Item {
     Request(u64),
     Branch(String),
@@ -362,7 +362,7 @@ impl Nav {
         self.at = self.time.len() - 1;
     }
 
-    fn opened(&self, item: &Item) -> Option<&Opened> {
+    pub(super) fn opened(&self, item: &Item) -> Option<&Opened> {
         self.open.iter().find(|o| &o.item == item)
     }
 

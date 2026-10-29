@@ -268,7 +268,8 @@ pub fn get_request(bus: &Bus, here: &Path, project: &Path, args: &Value) -> Resu
         for n in &t.notes {
             let _ = writeln!(
                 out,
-                "  - {}: {}",
+                "  - {} · {}: {}",
+                n.id,
                 n.author,
                 n.body.trim().replace('\n', "\n    ")
             );
@@ -282,10 +283,24 @@ pub fn get_request(bus: &Bus, here: &Path, project: &Path, args: &Value) -> Resu
         drafts.len()
     );
     for d in &drafts {
-        let at = match (&d.path, d.new_line, d.old_line) {
+        // A reply in a discussion is where the discussion is (#166).
+        let thread = d
+            .reply_to
+            .as_deref()
+            .and_then(|id| threads.iter().find(|t| t.id == id));
+        let (path, new, old) = match thread {
+            Some(t) => (&t.path, t.new_line, t.old_line),
+            None => (&d.path, d.new_line, d.old_line),
+        };
+        let at = match (path, new, old) {
             (Some(p), Some(n), _) => format!("{p}:{n}"),
             (Some(p), None, Some(o)) => format!("{p}:{o} (old)"),
+            _ if d.reply_to.is_some() => "a discussion not listed".to_owned(),
             _ => "the request".to_owned(),
+        };
+        let at = match thread.and_then(|t| t.notes.first()) {
+            Some(n) => format!("{at}, a reply to {}", n.author),
+            None => at,
         };
         let by = mine
             .iter()
@@ -514,6 +529,47 @@ pub fn gather_requests(
     Ok(format!("{}{}", out.trim_end(), super::unseen(bus)))
 }
 
+/// Request `iid` as `show` points at it (#154): at comment `comment` of one of its discussions or
+/// at that pending comment, refused with why when it has no such one; and how it is said.
+pub fn request_place(
+    here: &Path,
+    iid: u64,
+    comment: Option<u64>,
+) -> Result<(agents::Place, String), String> {
+    let (_, remote) = host(here)?;
+    let m = find(&remote, iid)?;
+    let said = format!("!{iid} {}", m.title);
+    let Some(id) = comment else {
+        let place = agents::Place::Request {
+            iid,
+            note: None,
+            draft: None,
+        };
+        return Ok((place, said));
+    };
+    let threads = mr::threads(&remote, iid).map_err(|e| format!("{e:#}"))?;
+    if let Some(n) = threads.iter().flat_map(|t| &t.notes).find(|n| n.id == id) {
+        let place = agents::Place::Request {
+            iid,
+            note: Some(id),
+            draft: None,
+        };
+        return Ok((place, format!("{said}, {}'s comment {id}", n.author)));
+    }
+    let drafts = mr::drafts(&remote, iid).map_err(|e| format!("{e:#}"))?;
+    if drafts.iter().any(|d| d.id == id) {
+        let place = agents::Place::Request {
+            iid,
+            note: None,
+            draft: Some(id),
+        };
+        return Ok((place, format!("{said}, pending comment {id}")));
+    }
+    Err(format!(
+        "!{iid} has no comment {id}, in its discussions or pending: get_request lists their ids."
+    ))
+}
+
 /// `draft_request` (#152): a merge request for a branch, drafted by the agent and opened in the New
 /// merge request card, filled in, for the reviewer to check and create. Read here: the branch has
 /// commits its target has not; one not on origin, or with commits origin has not, is said, as the
@@ -626,7 +682,7 @@ pub fn draft_request(
     bus.event(&Event::new(project.to_path_buf(), What::NewRequest(draft)))
         .map_err(|e| e.to_string())?;
     let mut out = format!(
-        "The New merge request card waits in GitLance with your draft: {source} → {target}, \"{title}\", {commits} commit(s). Nothing was created or sent: the reviewer checks it, edits it and creates it."
+        "Your draft is in GitLance: {source} → {target}, \"{title}\", {commits} commit(s). It is not on the reviewer's screen yet: the branch is under Branches with a dot, and the New merge request card opens, filled in, when the reviewer opens that branch or the toast's Open. Nothing was created or sent: the reviewer checks it, edits it and creates it."
     );
     // GitLance never pushes: the host makes the request from what origin has.
     if pushed.is_none() {
@@ -856,7 +912,7 @@ mod tests {
         }))
         .unwrap();
         assert!(
-            said.starts_with("The New merge request card waits in GitLance with your draft: feature → main, \"Say two\", 1 commit(s). Nothing was created"),
+            said.starts_with("Your draft is in GitLance: feature → main, \"Say two\", 1 commit(s). It is not on the reviewer's screen yet"),
             "{said}"
         );
         assert!(!said.contains("pushed"), "{said}");

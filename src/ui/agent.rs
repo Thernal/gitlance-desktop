@@ -3,6 +3,7 @@
 //! then Claude Code's recent ones, which get the comments when they listen — and a new chat. The
 //! agent's answers come back every couple of seconds, and the reviewer resolves or reopens each.
 
+use super::hover::CutInTip;
 use super::icons;
 use super::keys::{self, On};
 use super::px;
@@ -425,7 +426,10 @@ impl Workspace {
                             .border_color(if on { theme::agent() } else { theme::faint() })
                             .when(on, |s| s.bg(theme::agent())),
                     })
-                    .child(div().min_w_0().truncate().child(label))
+                    .child(super::hover::cut(
+                        gpui::SharedString::from(format!("answer-{label}")),
+                        label,
+                    ))
             }))
             .child(
                 div()
@@ -1078,6 +1082,11 @@ impl Workspace {
 
     /// Takes in what the agents answered since the last look (from the 2-second poll).
     pub(super) fn poll_agents(&mut self, cx: &mut Context<Self>) {
+        // A row an agent called the reviewer to, once its page is on screen, has been seen (#160);
+        // however it was reached, a row, a link, a search.
+        if let Some(item) = self.nav_page().and_then(super::nav::Page::item) {
+            self.agent_calls.remove(&item);
+        }
         // The chats are read on every beat: the stripe shows who listens, a toast who comes and
         // goes (#77).
         let before = self.agent_chats.clone();
@@ -1104,9 +1113,15 @@ impl Workspace {
             return;
         }
         self.answers_stamp = stamp;
+        let before: Vec<(u64, crate::review::State, usize)> = self
+            .comments
+            .iter()
+            .map(|c| (c.id, c.state, c.replies.len()))
+            .collect();
         if agents::apply(&mut self.comments, &bus.answers(&root)) {
             self.save_comments();
             self.refresh_rows();
+            self.notify_answers(&before, cx);
             cx.notify();
         }
     }
@@ -1333,7 +1348,7 @@ impl Workspace {
                                         div()
                                             .flex_1()
                                             .min_w_0()
-                                            .truncate()
+                                            .cut_in_tip()
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child(if c.title.is_empty() {
                                                 c.agent.clone()
@@ -1415,13 +1430,7 @@ impl Workspace {
                 .text_color(theme::muted())
                 .child("Goes to")
                 .child(chat_badge(letter, hue, false))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(theme::text())
-                        .child(name),
-                )
+                .child(super::hover::cut("goes-to", name).text_color(theme::text()))
                 .child(
                     div()
                         .id("route-change")
@@ -1764,7 +1773,7 @@ impl Workspace {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .truncate()
+                            .cut_in_tip()
                             .font_family(theme::CODE_FONT)
                             .text_color(theme::muted())
                             .child(place),
@@ -1796,7 +1805,7 @@ impl Workspace {
             .child(
                 div()
                     .text_size(px(12.))
-                    .line_clamp(2)
+                    .clamp_in_tip(2)
                     .child(self.one_line(&c.body)),
             )
             // What can be done with it opens under the picked row, in size and alpha (#110).

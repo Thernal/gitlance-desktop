@@ -371,6 +371,9 @@ pub struct Settings {
     pub animations: bool,
     /// Ask GitHub whether a newer GitLance is out (#135).
     pub check_updates: bool,
+    /// What the Inbox and the agents bring while GitLance is not in front goes to the system's
+    /// notifications too (#26).
+    pub system_notifications: bool,
 }
 
 impl Default for Settings {
@@ -392,6 +395,7 @@ impl Default for Settings {
             flat: false,
             animations: true,
             check_updates: true,
+            system_notifications: false,
         }
     }
 }
@@ -430,6 +434,7 @@ impl Settings {
                 "flat" => settings.flat = value == "true",
                 "animations" => settings.animations = value != "false",
                 "check_updates" => settings.check_updates = value != "false",
+                "system_notifications" => settings.system_notifications = value == "true",
                 "ui_zoom" => {
                     settings.ui_zoom = value.parse().map_or(100, |z: u16| {
                         z.clamp(Settings::ZOOM_MIN, Settings::ZOOM_MAX)
@@ -463,6 +468,7 @@ impl std::fmt::Display for Settings {
         writeln!(f, "flat={}", self.flat)?;
         writeln!(f, "animations={}", self.animations)?;
         writeln!(f, "check_updates={}", self.check_updates)?;
+        writeln!(f, "system_notifications={}", self.system_notifications)?;
         writeln!(f, "zoom={}", self.zoom)?;
         writeln!(f, "ui_zoom={}", self.ui_zoom)?;
         if let Some(editor) = self.editor {
@@ -578,6 +584,7 @@ mod tests {
             flat: true,
             animations: false,
             check_updates: false,
+            system_notifications: true,
         };
         assert_eq!(Settings::parse(&settings.to_string()), settings);
     }

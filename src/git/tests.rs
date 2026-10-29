@@ -77,9 +77,34 @@ fn log_lists_newest_first() {
     let mut fx = Fixture::new();
     let a = fx.commit("refs/heads/main", &[], &[("a.txt", "1\n")], "first");
     let b = fx.commit("refs/heads/main", &[a], &[("a.txt", "2\n")], "second");
-    let log = fx.open().log(b, 10).unwrap();
+    let log = fx.open().log(b, 0, 10, None).unwrap();
     assert_eq!(log.iter().map(|c| c.id).collect::<Vec<_>>(), [b, a]);
     assert_eq!(log[0].summary, "second");
+}
+
+#[test]
+fn log_reads_a_page_and_on_to_a_commit_asked_for() {
+    let mut fx = Fixture::new();
+    let mut ids = Vec::new();
+    for n in 0..6 {
+        let parents: Vec<_> = ids.last().copied().into_iter().collect();
+        let text = format!("{n}\n");
+        ids.push(fx.commit("refs/heads/main", &parents, &[("a.txt", &text)], "next"));
+    }
+    let tip = ids[5];
+    let repo = fx.open();
+    let read = |skip, count, until| -> Vec<_> {
+        let log = repo.log(tip, skip, count, until).unwrap();
+        log.iter().map(|c| c.id).collect()
+    };
+    assert_eq!(read(0, 2, None), [ids[5], ids[4]]);
+    assert_eq!(read(2, 2, None), [ids[3], ids[2]]);
+    assert_eq!(read(4, 5, None), [ids[1], ids[0]]);
+    // The oldest asked for: read down to it, the page past it not.
+    assert_eq!(read(0, 2, Some(ids[1])).len(), 5);
+    // One not in this history changes nothing.
+    let other = fx.commit("refs/heads/other", &[], &[("b.txt", "x\n")], "other");
+    assert_eq!(read(0, 2, Some(other)).len(), 2);
 }
 
 #[test]
@@ -337,16 +362,51 @@ fn clone_urls_become_web_addresses() {
         https.commit("abc"),
         "https://github.com/Thernal/gitlance-desktop/commit/abc"
     );
-    assert_eq!(
-        https.branch("origin/feature/x"),
-        "https://github.com/Thernal/gitlance-desktop/tree/feature/x"
-    );
-    assert_eq!(
-        gitlab.branch("main"),
-        "https://gitlab.digigo.example/mobile/payments-service/-/tree/main"
-    );
     assert!(WebRemote::parse("/local/path/repo").is_none());
     assert!(WebRemote::parse("").is_none());
+}
+
+#[test]
+fn links_to_share_are_the_hosts_own() {
+    let gitlab = WebRemote::parse("git@gitlab.example:g/p.git").unwrap();
+    let github = WebRemote::parse("git@github.com:o/r.git").unwrap();
+    assert_eq!(
+        gitlab.request(398),
+        "https://gitlab.example/g/p/-/merge_requests/398"
+    );
+    assert_eq!(github.request(12), "https://github.com/o/r/pull/12");
+    assert_eq!(
+        gitlab.compare("main", "feat/x", false),
+        "https://gitlab.example/g/p/-/compare/main...feat/x"
+    );
+    assert_eq!(
+        gitlab.compare("main", "feat/x", true),
+        "https://gitlab.example/g/p/-/compare/main...feat/x?straight=true"
+    );
+    assert_eq!(
+        github.compare("main", "feat/x", true),
+        "https://github.com/o/r/compare/main..feat/x"
+    );
+    assert_eq!(
+        gitlab.tree("main", ""),
+        "https://gitlab.example/g/p/-/tree/main"
+    );
+    assert_eq!(
+        github.tree("abc", "src/ui"),
+        "https://github.com/o/r/tree/abc/src/ui"
+    );
+    assert_eq!(
+        gitlab.file("main", "src/main.rs"),
+        "https://gitlab.example/g/p/-/blob/main/src/main.rs"
+    );
+    assert_eq!(
+        gitlab.file_anchor("src/main.rs"),
+        "4b569f42a6967dec04275af54f4ca9ab6a4eee64"
+    );
+    assert_eq!(
+        github.file_anchor("src/main.rs"),
+        "diff-42cb6807ad74b3e201c5a7ca98b911c5fa08380e942be6e4ac5807f8377f87fc"
+    );
 }
 
 #[test]

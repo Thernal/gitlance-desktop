@@ -7,6 +7,7 @@ use super::input::{self, Edit};
 use super::keys::{self, On};
 use super::px;
 use super::tools::ToolView;
+use super::typing::{self, Input};
 use super::waiting::Op;
 use super::{ROW_RADIUS, Workspace, plural, theme};
 use crate::mr;
@@ -58,6 +59,7 @@ impl Workspace {
             verdict: Verdict::Comment,
             error: None,
         });
+        self.take_keyboard(Input::Submit);
         cx.notify();
     }
 
@@ -278,12 +280,7 @@ impl Workspace {
                 }))
         };
         let pending = self.requests.drafts.iter().enumerate().map(|(ix, d)| {
-            let target = d.path.clone().zip(d.new_line.or(d.old_line));
-            let old = d.new_line.is_none();
-            let place = match &target {
-                Some((p, n)) => format!("{}:{n}", p.rsplit('/').next().unwrap_or(p)),
-                None => "General".to_owned(),
-            };
+            let (place, target, old) = self.draft_where(d);
             div()
                 .id(("submit-draft", ix))
                 .flex()
@@ -303,13 +300,10 @@ impl Workspace {
                         .child(place),
                 )
                 .child(
-                    div()
+                    super::hover::cut("draft-line", self.draft_line(d))
                         .flex_1()
-                        .min_w_0()
-                        .truncate()
                         .text_size(px(12.))
-                        .text_color(theme::muted())
-                        .child(self.draft_line(d)),
+                        .text_color(theme::muted()),
                 )
                 .relative()
                 .group("submit-pending-row")
@@ -330,9 +324,10 @@ impl Workspace {
             Verdict::Approve => "Submit and approve",
             Verdict::RequestChanges => "Submit, request changes",
         };
+        let active = self.has_keyboard(Input::Submit);
         let field = self.field_look(
             &s.summary,
-            true,
+            active,
             "A summary, if you want one…",
             input::Look {
                 wrap: true,
@@ -352,11 +347,12 @@ impl Workspace {
             .gap_3()
             .text_size(px(13.))
             .child(
-                div()
-                    .truncate()
-                    .text_size(px(12.))
-                    .text_color(theme::faint())
-                    .child(format!("{} {title}", super::words::number(iid))),
+                super::hover::cut(
+                    "submit-title",
+                    format!("{} {title}", super::words::number(iid)),
+                )
+                .text_size(px(12.))
+                .text_color(theme::faint()),
             )
             .child(
                 div()
@@ -396,7 +392,11 @@ impl Workspace {
                     .items_start()
                     .rounded(px(ROW_RADIUS))
                     .border_2()
-                    .border_color(theme::focus())
+                    .border_color(if active {
+                        theme::focus()
+                    } else {
+                        theme::island_border()
+                    })
                     .bg(theme::base())
                     .cursor_text()
                     .child(field),
@@ -472,8 +472,9 @@ impl Workspace {
             title: "Submit review".into(),
             count: None,
             actions: Vec::new(),
-            body: body.into_any_element(),
-            foot: Some(foot.into_any_element()),
+            // A press anywhere in the window gives it the keyboard (#168).
+            body: typing::input_box(body, Input::Submit, cx).into_any_element(),
+            foot: Some(typing::input_box(foot, Input::Submit, cx).into_any_element()),
         })
     }
 }

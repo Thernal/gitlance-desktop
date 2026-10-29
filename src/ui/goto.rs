@@ -182,9 +182,8 @@ impl Workspace {
                 .map(|(.., ix)| ix)
                 .find(|&ix| ids.contains(&self.requests.drafts[ix].id))
                 .and_then(|ix| {
-                    let d = &self.requests.drafts[ix];
-                    let line = d.new_line.or(d.old_line)?;
-                    Some((None, Some(ix), d.path.clone()?, line, d.new_line.is_none()))
+                    let (path, new, old) = self.draft_place(&self.requests.drafts[ix])?;
+                    Some((None, Some(ix), path, new.or(old)?, new.is_none()))
                 }),
             Spot::Line(l) => self.diff.as_ref().and_then(|d| {
                 let file = d

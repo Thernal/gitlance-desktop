@@ -263,11 +263,9 @@ impl Workspace {
                                                 .child(title),
                                         )
                                         .child(
-                                            div()
+                                            super::hover::cut("place", place)
                                                 .text_size(px(11.))
-                                                .text_color(theme::faint())
-                                                .truncate()
-                                                .child(place),
+                                                .text_color(theme::faint()),
                                         ),
                                 )
                                 .child(

@@ -5,6 +5,7 @@
 //! have never been inside opens on it, later ones on Changes (`nav::first_section`). Commits lists
 //! the request's commits with the version each came with; one opens as a level under it.
 
+use super::hover::CutInTip;
 use super::nav::{Item, Page, Section};
 use super::{Workspace, format, icons, island, markdown, plural, px, theme, words};
 use crate::mr::{Details, Mr, MrState};
@@ -32,7 +33,7 @@ impl Workspace {
         let body = match (self.page_request(), tab) {
             _ if matches!(self.nav_page(), Some(Page::Branch(_))) => {
                 let line = self
-                    .render_branch_line()
+                    .render_branch_line(cx)
                     .unwrap_or_else(|| div().into_any_element());
                 div()
                     .flex_1()
@@ -196,16 +197,17 @@ impl Workspace {
                     .items_center()
                     .gap(px(10.))
                     .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(17.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(self.selectable(
+                        super::hover::cut_with(
+                            "overview-title",
+                            m.title.clone(),
+                            self.selectable(
                                 format!("title-{}", m.iid),
                                 &m.title,
                                 cx.entity().downgrade(),
-                            )),
+                            ),
+                        )
+                        .text_size(px(17.))
+                        .font_weight(FontWeight::SEMIBOLD),
                     )
                     .child(state_chip(m))
                     .child(div().flex_1())
@@ -410,12 +412,18 @@ impl Workspace {
                             .text_color(theme::faint())
                             .child(format::short(c.id)),
                     )
-                    .child(div().flex_1().min_w_0().truncate().child(c.summary.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .cut_in_tip()
+                            .child(c.summary.clone()),
+                    )
                     .children((several && room.second()).then(|| {
                         div()
                             .flex_none()
                             .max_w(px(140.))
-                            .truncate()
+                            .cut_in_tip()
                             .text_size(px(11.))
                             .text_color(theme::muted())
                             .child(c.author.clone())
@@ -441,6 +449,13 @@ impl Workspace {
                         )
                     })
                     .tip(tip.join("\n"))
+                    // Its SHA, its message, its link (#162).
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                            this.commit_context(ix, e.position, cx)
+                        }),
+                    )
                     .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                         let id = this.commits.get(ix).map(|c| c.id);
                         if event.modifiers().shift {
@@ -615,7 +630,15 @@ impl Workspace {
     }
 
     fn request_line(&self, m: &Mr, cx: &mut Context<Self>) -> Div {
+        let iid = m.iid;
         island()
+            // Its link and its number (#162).
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                    this.request_context(iid, e.position, cx)
+                }),
+            )
             .flex_none()
             .flex_row()
             .items_center()
@@ -626,19 +649,21 @@ impl Workspace {
             // 2026-10-23).
             .child({
                 use super::hover::Hover;
-                let title = div()
-                    .id("request-line-title")
-                    .min_w_0()
-                    .truncate()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(self.selectable(
-                        format!("line-title-{}", m.iid),
-                        &m.title,
-                        cx.entity().downgrade(),
-                    ));
+                let title = self.selectable(
+                    format!("line-title-{}", m.iid),
+                    &m.title,
+                    cx.entity().downgrade(),
+                );
                 match self.request_tip(m.iid) {
-                    Some(tip) => title.tip(tip),
-                    None => title,
+                    Some(tip) => div()
+                        .id("request-line-title")
+                        .min_w_0()
+                        .cut_in_tip()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title)
+                        .tip(tip),
+                    None => super::hover::cut_with("request-line-title", m.title.clone(), title)
+                        .font_weight(FontWeight::SEMIBOLD),
                 }
             })
             .child(state_chip(m))

@@ -184,18 +184,27 @@ impl Workspace {
 
     /// The text selected in the field that has the keyboard (never in the token's).
     fn field_selection(&self) -> Option<String> {
-        if let Some(compose) = &self.compose {
-            return compose.edit.selected_text().map(str::to_owned);
-        }
-        let typing = self.find.text.is_some()
-            || self.dfind.is_some()
-            || self.palette.is_some()
-            || self.ffind.is_some()
-            || self.goline.is_some()
-            || self.newreq.is_some()
-            || self.submit.is_some()
-            || self.field.is_some_and(|f| f != super::lists::Field::Token);
-        typing
+        use super::typing::Input;
+        let shared = match self.typing()? {
+            Input::Compose => {
+                return self
+                    .compose
+                    .as_ref()?
+                    .edit
+                    .selected_text()
+                    .map(str::to_owned);
+            }
+            Input::Field => self.field != Some(super::lists::Field::Token),
+            Input::CommitSearch
+            | Input::DiffFind
+            | Input::Palette
+            | Input::FindFiles
+            | Input::GoLine
+            | Input::NewRequest
+            | Input::Submit => true,
+            _ => false,
+        };
+        shared
             .then(|| self.field_edit.selected_text().map(str::to_owned))
             .flatten()
     }

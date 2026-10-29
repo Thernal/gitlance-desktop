@@ -158,6 +158,54 @@ pub enum What {
     },
     /// A merge request drafted for the reviewer to check and create (`draft_request`, #152).
     NewRequest(RequestDraft),
+    /// One place the agent points the reviewer at (`show`, #154).
+    Point { place: Place },
+}
+
+/// A place an agent points at (#154): the toast says it, and its Show goes there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "at", rename_all = "snake_case")]
+pub enum Place {
+    /// A file of the project's working tree, at a line.
+    File {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line: Option<u32>,
+    },
+    /// A commit, by its whole id.
+    Commit { id: String },
+    /// Request `iid`, at a comment of one of its discussions or at a pending comment.
+    Request {
+        iid: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        draft: Option<u64>,
+    },
+}
+
+impl Place {
+    /// How the toast says it: `nav.rs:785`, `commit a1b2c3d`, `!12, a comment`.
+    pub fn said(&self, github: bool) -> String {
+        match self {
+            Place::File { path, line } => {
+                let name = path.rsplit('/').next().unwrap_or(path);
+                match line {
+                    Some(line) => format!("{name}:{line}"),
+                    None => name.to_owned(),
+                }
+            }
+            Place::Commit { id } => format!("commit {}", &id[..id.len().min(7)]),
+            Place::Request { iid, note, draft } => {
+                let number = format!("{}{iid}", if github { '#' } else { '!' });
+                match (note, draft) {
+                    (Some(_), _) => format!("{number}, a comment"),
+                    (_, Some(_)) => format!("{number}, a pending comment"),
+                    _ => number,
+                }
+            }
+        }
+    }
 }
 
 /// An agent's draft of a merge request (#152): the New merge request card opens with it filled in;
@@ -1151,6 +1199,44 @@ mod tests {
         assert!(bus.take_event(&event.uid));
         assert!(!bus.take_event(&event.uid));
         assert!(bus.events().is_empty());
+    }
+
+    #[test]
+    fn a_place_pointed_at_reaches_the_app_and_is_said_short() {
+        let dir = tempfile::tempdir().unwrap();
+        let bus = Bus::at(dir.path().join("agents"));
+        let places = [
+            Place::File {
+                path: "src/ui/nav.rs".into(),
+                line: Some(785),
+            },
+            Place::Commit {
+                id: "a1b2c3d4e5f6".into(),
+            },
+            Place::Request {
+                iid: 12,
+                note: None,
+                draft: Some(9),
+            },
+        ];
+        for place in &places {
+            let what = What::Point {
+                place: place.clone(),
+            };
+            bus.event(&Event::new("/p".into(), what)).unwrap();
+        }
+        let read: Vec<String> = bus
+            .events()
+            .into_iter()
+            .filter_map(|e| match e.what {
+                What::Point { place } => Some(place.said(false)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(read.len(), 3);
+        for said in ["nav.rs:785", "commit a1b2c3d", "!12, a pending comment"] {
+            assert!(read.iter().any(|r| r == said), "{read:?}");
+        }
     }
 
     #[test]

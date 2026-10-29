@@ -8,6 +8,7 @@ use super::input::{self, Edit};
 use super::markdown;
 use super::px;
 use super::rows::{FileData, Row};
+use super::typing::{self, Input};
 use super::waiting::Op;
 use super::{ROW_RADIUS, Selection, Workspace, format, theme};
 use crate::markdown::Helper;
@@ -384,16 +385,31 @@ impl Workspace {
                         .filter(|(_, o, n)| *o == old && *n == line)
                         .map(|(id, _, _)| Row::Thread(*id)),
                 );
-                out.extend(
-                    theirs
-                        .iter()
-                        .filter(|(_, o, n)| *o == old && *n == line)
-                        .map(|(ix, _, _)| Row::Request(*ix)),
-                );
+                let at = |&&(_, o, n): &&(usize, bool, u32)| o == old && n == line;
+                let reply_of = |ix: usize| {
+                    self.requests
+                        .drafts
+                        .get(ix)
+                        .and_then(|d| self.draft_thread(d))
+                };
+                // A reply waiting to be sent comes right under its own discussion (#166).
+                for &(t, ..) in theirs.iter().filter(at) {
+                    out.push(Row::Request(t));
+                    out.extend(
+                        drafts
+                            .iter()
+                            .filter(at)
+                            .filter(|(ix, ..)| reply_of(*ix) == Some(t))
+                            .map(|(ix, ..)| Row::Draft(*ix)),
+                    );
+                }
                 out.extend(
                     drafts
                         .iter()
-                        .filter(|(_, o, n)| *o == old && *n == line)
+                        .filter(at)
+                        .filter(|(ix, ..)| {
+                            reply_of(*ix).is_none_or(|t| !theirs.iter().any(|(x, ..)| *x == t))
+                        })
                         .map(|(ix, _, _)| Row::Draft(*ix)),
                 );
                 if compose.is_some_and(|c| {
@@ -505,6 +521,7 @@ impl Workspace {
             file: None,
             answers: None,
         });
+        self.take_keyboard(Input::Compose);
         self.reset_field_edit();
         self.remeasure_pages();
         cx.notify();
@@ -541,6 +558,7 @@ impl Workspace {
             file: Some(view.rev()),
             answers: None,
         });
+        self.take_keyboard(Input::Compose);
         self.reset_field_edit();
         cx.notify();
     }
@@ -581,6 +599,7 @@ impl Workspace {
             file: Some(self.code.at()),
             answers: None,
         });
+        self.take_keyboard(Input::Compose);
         self.reset_field_edit();
         cx.notify();
     }
@@ -673,6 +692,7 @@ impl Workspace {
             file: None,
             answers: None,
         });
+        self.take_keyboard(Input::Compose);
         self.refresh_rows();
         cx.notify();
     }
@@ -750,6 +770,7 @@ impl Workspace {
             file: None,
             answers: None,
         });
+        self.take_keyboard(Input::Compose);
         self.reset_field_edit();
         self.refresh_rows();
         cx.notify();
@@ -883,6 +904,7 @@ impl Workspace {
             file: None,
             answers: None,
         });
+        self.take_keyboard(Input::Compose);
         self.reset_field_edit();
         self.thread_at = Some(ix);
         if !self.mr_open(ix) {
@@ -927,6 +949,7 @@ impl Workspace {
             file: None,
             answers: None,
         });
+        self.take_keyboard(Input::Compose);
         self.reset_field_edit();
         self.inbox_view.reply = Some((iid, discussion));
         cx.notify();
@@ -1019,6 +1042,7 @@ impl Workspace {
             file: None,
             answers: None,
         });
+        self.take_keyboard(Input::Compose);
         self.reset_field_edit();
         self.refresh_rows();
         cx.notify();
@@ -1295,6 +1319,7 @@ impl Workspace {
                 path: Some(path.clone()),
                 new_line,
                 old_line,
+                reply_to: None,
             })
         } else {
             Op::Discussion {
@@ -1408,6 +1433,7 @@ impl Workspace {
                         this.inbox_view.reply = reply;
                     }
                     this.compose = Some(compose);
+                    this.take_keyboard(Input::Compose);
                     this.reset_field_edit();
                     this.refresh_rows();
                     this.remeasure_pages();
@@ -1472,6 +1498,10 @@ impl Workspace {
     /// `c`: on the lines selected in the diff, the composer at once; else a marker appears on the
     /// diff, typing a line number moves it, ↵ opens the comment there.
     pub(super) fn open_goline(&mut self, cx: &mut Context<Self>) {
+        // A comment left unfinished here: `c` goes back to it (#168).
+        if self.compose.is_some() && self.give_back(Input::Compose) {
+            return cx.notify();
+        }
         // On a folder's page in Code: a note for the agent on the folder (#97).
         if let Some(super::nav::Page::Folder(path)) = self.nav_page().cloned()
             && self.nav.space == super::spaces::Space::Code
@@ -1493,6 +1523,7 @@ impl Workspace {
         if self.code_file_shown() && !self.settings_open && self.compose.is_none() {
             self.reset_field_edit();
             self.goline = Some(String::new());
+            self.take_keyboard(Input::GoLine);
             return cx.notify();
         }
         if self.data.is_none() || self.settings_open || self.compose.is_some() {
@@ -1505,8 +1536,16 @@ impl Workspace {
         self.reset_field_edit();
         self.zone = super::zones::Zone::Diff;
         self.goline = Some(String::new());
+        self.take_keyboard(Input::GoLine);
         self.move_marker();
         cx.notify();
+    }
+
+    /// The line marker goes, nothing written.
+    pub(super) fn close_goline(&mut self) {
+        self.goline = None;
+        self.goline_row = None;
+        self.refresh_rows();
     }
 
     pub(super) fn goline_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
@@ -1524,11 +1563,7 @@ impl Workspace {
             return cx.notify();
         }
         match input::edit(text, &mut self.field_edit, &event.keystroke, cx) {
-            Edit::Escape => {
-                self.goline = None;
-                self.goline_row = None;
-                self.refresh_rows();
-            }
+            Edit::Escape => self.close_goline(),
             // Digits, and a minus first for a removed line.
             Edit::Changed => {
                 let keep = |(i, c): &(usize, char)| c.is_ascii_digit() || (*i == 0 && *c == '-');
@@ -1682,12 +1717,9 @@ impl Workspace {
         let Some(text) = self.goline.as_ref() else {
             return div().into_any_element();
         };
-        div()
-            .w_full()
-            .pl(px(indent))
-            .pr(px(12.))
-            .py(px(4.))
-            .child(
+        let active = self.has_keyboard(Input::GoLine);
+        let row =
+            div().w_full().pl(px(indent)).pr(px(12.)).py(px(4.)).child(
                 div()
                     .max_w(px(640.))
                     .flex()
@@ -1705,7 +1737,7 @@ impl Workspace {
                     .child(div().min_w(px(56.)).font_family(theme::CODE_FONT).child(
                         self.field_look(
                             text,
-                            true,
+                            active,
                             "first change",
                             Default::default(),
                             this.clone(),
@@ -1717,8 +1749,8 @@ impl Workspace {
                             .text_color(theme::faint())
                             .child("↵ write · ↑↓ step · −12 a removed line · esc"),
                     ),
-            )
-            .into_any_element()
+            );
+        typing::input_box_of(row, Input::GoLine, this).into_any_element()
     }
 
     pub(super) fn render_goline(&self, this: WeakEntity<Self>) -> Option<impl IntoElement + use<>> {
@@ -1739,58 +1771,57 @@ impl Workspace {
             (Some(_), Some(_), None) => "inside unchanged lines · ↵ opens them".to_owned(),
             _ => "↵ comment here".to_owned(),
         };
-        Some(
-            div()
-                .absolute()
-                .bottom(px(16.))
-                .left(px(16.))
-                .max_w(px(520.))
-                .flex()
-                .flex_col()
-                .gap_1()
-                .px_3()
-                .py_2()
-                .rounded(px(ROW_RADIUS))
-                .border_2()
-                .border_color(theme::focus())
-                .bg(theme::panel())
-                .shadow_lg()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(div().text_color(theme::muted()).child("Comment on line"))
-                        .child(div().min_w(px(60.)).font_family(theme::CODE_FONT).child(
-                            self.field_look(
-                                text,
-                                true,
-                                "first change",
-                                Default::default(),
-                                this.clone(),
-                            ),
-                        ))
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(theme::faint())
-                                .child(hint),
+        let active = self.has_keyboard(Input::GoLine);
+        let card = div()
+            .absolute()
+            .bottom(px(16.))
+            .left(px(16.))
+            .max_w(px(520.))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .px_3()
+            .py_2()
+            .rounded(px(ROW_RADIUS))
+            .border_2()
+            .border_color(theme::focus())
+            .bg(theme::panel())
+            .shadow_lg()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().text_color(theme::muted()).child("Comment on line"))
+                    .child(div().min_w(px(60.)).font_family(theme::CODE_FONT).child(
+                        self.field_look(
+                            text,
+                            active,
+                            "first change",
+                            Default::default(),
+                            this.clone(),
                         ),
-                )
-                .children(preview.map(|code| {
-                    div()
-                        .truncate()
-                        .font_family(theme::CODE_FONT)
-                        .text_size(px(12.))
-                        .text_color(theme::muted())
-                        .child(code)
-                }))
-                .child(
-                    div().text_size(px(11.)).text_color(theme::faint()).child(
-                        "digits move the marker · ↑↓ step · −12 a removed line · ↵ open · esc",
+                    ))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme::faint())
+                            .child(hint),
                     ),
-                ),
-        )
+            )
+            .children(preview.map(|code| {
+                super::hover::cut("preview", code)
+                    .font_family(theme::CODE_FONT)
+                    .text_size(px(12.))
+                    .text_color(theme::muted())
+            }))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(theme::faint())
+                    .child("digits move the marker · ↑↓ step · −12 a removed line · ↵ open · esc"),
+            );
+        Some(typing::input_box_of(card, Input::GoLine, this))
     }
 
     pub(super) fn delete_comment(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -1809,7 +1840,8 @@ impl Workspace {
 
     /// Typing into the composer: a real text field (caret, selection, ⌥ words, ⌘ lines, undo),
     /// return carries a list on, ⇧↵ a plain new line; ⌘B ⌘I ⌘⇧X ⌘⇧E ⌘⇧K for markdown, ⌘⇧P to
-    /// preview it, Tab for who sees it, ⌘↵ to send, ⇧⌘↵ to add it to the review, esc to cancel.
+    /// preview it, Tab for who sees it, ⌘↵ to send, ⇧⌘↵ to add it to the review, esc to cancel —
+    /// or, written in, to leave it.
     pub(super) fn compose_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = &event.keystroke;
         let m = key.modifiers;
@@ -1859,6 +1891,10 @@ impl Workspace {
             return;
         };
         match input::edit_text(&mut compose.edit, key, cx) {
+            // Written in, it keeps what was written and lets the keyboard go (#168).
+            Edit::Escape if !compose.edit.text().trim().is_empty() => {
+                return self.leave_input(cx);
+            }
             Edit::Escape => return self.cancel_comment(cx),
             Edit::Ignored => return,
             Edit::Enter { shift: true } => compose.edit.insert("\n"),
@@ -1875,6 +1911,28 @@ impl Workspace {
         if let Some(c) = self.compose.as_mut() {
             c.edit.insert(text);
         }
+    }
+
+    /// On the files list's row of `path`: a pencil while a comment written there waits without
+    /// the keyboard (#168).
+    pub(super) fn draft_mark(&self, path: &str) -> Option<gpui::AnyElement> {
+        let c = self.compose.as_ref()?;
+        if c.path != path || c.edit.text().trim().is_empty() || self.has_keyboard(Input::Compose) {
+            return None;
+        }
+        Some(
+            div()
+                .id("draft-mark")
+                .flex_none()
+                .child(
+                    super::icons::icon("pencil")
+                        .size(px(13.))
+                        .text_color(theme::focus()),
+                )
+                .tooltip_show_delay(crate::ui::hover::LONG)
+                .tooltip(|_, cx| cx.new(|_| super::Tip("A comment being written")).into())
+                .into_any_element(),
+        )
     }
 
     /// The list for the token being typed in the composer, if one is open.
@@ -1975,12 +2033,14 @@ impl Workspace {
         lower: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.compose.is_none() {
+            return;
+        }
+        // Clicked, it has the keys again, and a filter that had them lets go.
+        self.take_keyboard(Input::Compose);
         let Some(compose) = self.compose.as_mut() else {
             return;
         };
-        // Clicked, it has the keys again, and a filter that had them lets go.
-        self.compose_aside = false;
-        self.field = None;
         compose.edit.click(at, clicks, shift || drag);
         if clicks == 1 && !shift && !drag {
             compose.edit.set_downstream(lower);
@@ -1991,6 +2051,9 @@ impl Workspace {
 
     /// A markdown helper of the composer's toolbar, on the selection or at the caret.
     pub(super) fn apply_helper(&mut self, helper: Helper, cx: &mut Context<Self>) {
+        if self.compose.is_some() {
+            self.take_keyboard(Input::Compose);
+        }
         let Some(compose) = self.compose.as_mut() else {
             return;
         };
@@ -2000,6 +2063,9 @@ impl Workspace {
     }
 
     pub(super) fn toggle_preview(&mut self, cx: &mut Context<Self>) {
+        if self.compose.is_some() {
+            self.take_keyboard(Input::Compose);
+        }
         if let Some(compose) = self.compose.as_mut() {
             compose.preview = !compose.preview;
             self.diff_list.remeasure();
@@ -2112,11 +2178,17 @@ impl Workspace {
         };
         let bar = discussion::bar(("agent-bar", id), open)
             .child(discussion::source_pill(Source::Agent))
-            .child(div().flex_1().min_w_0().truncate().child(if open {
-                format!("· {status}")
-            } else {
-                self.one_line(&comment.body)
-            }))
+            .child(
+                super::hover::cut(
+                    "summary",
+                    if open {
+                        format!("· {status}")
+                    } else {
+                        self.one_line(&comment.body)
+                    },
+                )
+                .flex_1(),
+            )
             .children((open && markdown::has_markdown(&comment.body)).then(|| {
                 self.rich_switch(("agent-rich", id))
                     .on_click(move |_, _, cx| {
@@ -2762,6 +2834,7 @@ impl Workspace {
         tail: Vec<gpui::AnyElement>,
         this: WeakEntity<Self>,
     ) -> gpui::Div {
+        let keys = this.clone();
         let text = if compose.preview {
             div()
                 .min_h(px(66.))
@@ -2926,7 +2999,7 @@ impl Workspace {
                     .gap(px(6.))
                     .children(tail),
             );
-        div()
+        let el = div()
             .relative()
             .flex_1()
             .min_w_0()
@@ -2961,7 +3034,8 @@ impl Workspace {
                     .text_color(theme::removed())
                     .child(e)
             }))
-            .child(edge)
+            .child(edge);
+        typing::input_box_of(el, Input::Compose, keys)
     }
 
     /// The composer's text as a field: the text wrapping in its box, the selection tinted, the
@@ -3000,8 +3074,8 @@ impl Workspace {
         }
         let (for_caret, for_down, for_move) = (layout.clone(), layout.clone(), layout);
         let (caret, downstream) = (compose.edit.caret(), compose.edit.downstream());
-        // Stepped aside, it shows no caret: the field that has the keys does.
-        let focused = !self.compose_stepped_aside();
+        // Without the keyboard it shows no caret (#168).
+        let focused = self.has_keyboard(Input::Compose);
         let (down, drag) = (this.clone(), this);
         div()
             .relative()
@@ -3060,12 +3134,6 @@ impl Workspace {
                 }
             })
             .into_any_element()
-    }
-
-    /// Whether the open composer has stepped aside for a field still open (a filter, a find).
-    pub(super) fn compose_stepped_aside(&self) -> bool {
-        self.compose_aside
-            && (self.field.is_some() || self.dfind.is_some() || self.find.text.is_some())
     }
 
     /// Shows a comment: in the open file, scrolled to; in another file of the diff, that file first.

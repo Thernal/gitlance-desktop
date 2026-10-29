@@ -87,6 +87,9 @@ pub struct Notices {
     poll: Option<Task<()>>,
     /// A first read finished, whatever it found: before it the Inbox shows rows loading (#72).
     pub loaded: bool,
+    /// Notices already there or already said to the system's notifications: each is said once,
+    /// and none of those listed at the first read (#26).
+    told: HashSet<String>,
 }
 
 impl Notice {
@@ -143,6 +146,16 @@ impl Notices {
     }
 
     /// Whether `key` (a notice's, or an agent's answer's in the Inbox) was looked at.
+    /// The notices of `list` not listed before, and not read: each once, none at the `first`
+    /// read (#26).
+    fn news(&mut self, list: &[Notice], first: bool) -> Vec<Notice> {
+        list.iter()
+            .filter(|n| self.told.insert(n.key.clone()))
+            .filter(|n| !first && !self.read.contains(&n.key))
+            .cloned()
+            .collect()
+    }
+
     pub fn is_read(&self, key: &str) -> bool {
         self.read.contains(key)
     }
@@ -416,10 +429,14 @@ impl Workspace {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                let first = !this.notices.loaded;
                 this.notices.loaded = true;
                 if let Ok((list, floors, first_resolved, reopened, (fresh, read_again), complete)) =
                     found
                 {
+                    // What came since the last read, not read yet: to the system too (#26).
+                    let news = this.notices.news(&list, first);
+                    this.notify_notices(news, cx);
                     let changed =
                         !floors.is_empty() || !first_resolved.is_empty() || !reopened.is_empty();
                     this.notices.seen.extend(floors);
@@ -692,6 +709,29 @@ mod tests {
             vec![Some(8)]
         );
         assert_eq!(got[0].kind, Kind::Reply);
+    }
+
+    #[test]
+    fn only_what_comes_after_the_first_read_is_news_and_once() {
+        let notice = |key: &str| Notice {
+            key: key.into(),
+            kind: Kind::Review,
+            iid: 1,
+            title: String::new(),
+            who: String::new(),
+            text: String::new(),
+            created: 0,
+            note: None,
+            todo: None,
+            resolved: None,
+        };
+        let mut notices = Notices::default();
+        let keys = |news: Vec<Notice>| news.into_iter().map(|n| n.key).collect::<Vec<_>>();
+        assert!(notices.news(&[notice("todo:1")], true).is_empty());
+        notices.read.insert("todo:3".into());
+        let list = [notice("todo:1"), notice("todo:2"), notice("todo:3")];
+        assert_eq!(keys(notices.news(&list, false)), ["todo:2"]);
+        assert!(notices.news(&list, false).is_empty());
     }
 
     #[test]

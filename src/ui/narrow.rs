@@ -6,6 +6,7 @@
 //! secondary actions keep their icon and search its icon. Under 1000 a tool window floats over the
 //! diff, and a drawer and a floating tool window are never open together.
 
+use super::hover::CutInTip;
 use super::zones::Zone;
 use super::{Workspace, icons, keys, px, theme};
 use gpui::{AnyElement, ClickEvent, Context, SharedString, div, prelude::*};
@@ -176,7 +177,7 @@ impl Workspace {
                         theme::muted()
                     }))
                     .when(named, |s| {
-                        s.child(div().flex_1().min_w_0().truncate().child(name))
+                        s.child(div().flex_1().min_w_0().cut_in_tip().child(name))
                             .when(!narrow, |s| s.child(keys::caps("⌘J", keys::On::Plain)))
                     })
                     .tooltip_show_delay(super::hover::LONG)

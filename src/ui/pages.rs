@@ -91,7 +91,7 @@ impl Workspace {
                     head
                 } else if let Some(head) = self.render_request_line(cx) {
                     head
-                } else if let Some(head) = self.render_branch_line() {
+                } else if let Some(head) = self.render_branch_line(cx) {
                     head
                 } else {
                     self.render_header(diff, cx).into_any_element()
@@ -220,7 +220,7 @@ impl Workspace {
                             .h(px(28.))
                             .gap_2()
                             .child(super::icons::file_icon(&path, 16.))
-                            .child(div().flex_1().min_w_0().truncate().child(path))
+                            .child(super::hover::cut("path", path).flex_1())
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 this.open_file_view(open.clone(), cx)
                             }))

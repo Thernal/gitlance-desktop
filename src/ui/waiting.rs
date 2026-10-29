@@ -542,6 +542,7 @@ mod tests {
             path: Some("a.rs".into()),
             new_line: Some(7),
             old_line: None,
+            reply_to: None,
         }
     }
 

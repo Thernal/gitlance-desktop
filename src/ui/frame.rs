@@ -2,7 +2,8 @@
 //! welcome, the sidebar (versions and commits), zen's line and the splitters.
 
 use super::*;
-use hover::Hover;
+use hover::{CutInTip, Hover};
+use typing::Input;
 
 impl Workspace {
     /// Zen's line at the foot of the diff: the keys of a review, from the keyboard alone.
@@ -312,11 +313,8 @@ impl Workspace {
                                     .text_color(theme::faint()),
                             )
                             .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child("Search or run a command"),
+                                super::hover::cut("search-hint", "Search or run a command")
+                                    .flex_1(),
                             )
                             .child(keys::caps("⌘K", keys::On::Plain))
                             // A double click here is not the bar's: the window keeps its size.
@@ -489,7 +487,7 @@ impl Workspace {
                             .child(
                                 div()
                                     .w_full()
-                                    .truncate()
+                                    .cut_in_tip()
                                     .text_size(px(11.))
                                     .text_color(theme::muted())
                                     .child(detail.join(" · ")),
@@ -570,14 +568,11 @@ impl Workspace {
                                         .child(ids),
                                 )
                                 .child(
-                                    div()
+                                    super::hover::cut("summary", summary)
                                         .flex_1()
-                                        .min_w_0()
-                                        .truncate()
                                         .when(p.kind == PairKind::Dropped, |s| {
                                             s.line_through().text_color(theme::muted())
-                                        })
-                                        .child(summary),
+                                        }),
                                 )
                                 .child(
                                     div()
@@ -625,8 +620,7 @@ impl Workspace {
                 div()
                     .w_full()
                     .line_height(px(17.))
-                    .overflow_hidden()
-                    .line_clamp(2)
+                    .clamp_in_tip(2)
                     .child(self.summary_text(&commit.summary.clone().into())),
             )
             .child(
@@ -659,7 +653,7 @@ impl Workspace {
                             div()
                                 .flex_none()
                                 .max_w(px(160.))
-                                .truncate()
+                                .cut_in_tip()
                                 .child(commit.author.clone()),
                         )
                         .child(div().flex_1())
@@ -704,6 +698,8 @@ impl Render for Workspace {
         if !self.settings_open && self.theme_edit.is_some() {
             self.close_theme_edit(cx);
         }
+        // Before anything is drawn: which input has the keyboard now (#168).
+        self.sync_keyboard();
         let title = match &self.root {
             Some(root) => format!(
                 "GitLance — {} · {}",
@@ -760,38 +756,24 @@ impl Render for Workspace {
                 // Recording a key in Settings → Keyboard: no binding may take it first.
                 if self.recording.is_some() {
                     "Recording"
-                } else if self.find.text.is_some()
-                    || self.dfind.is_some()
-                    || self.compose.is_some()
-                    || self.field.is_some()
-                    || self.palette.is_some()
-                    || self.ffind.is_some()
-                    || self.goline.is_some()
-                    || self.newreq.is_some()
-                    || self.submit.is_some()
-                    || self.open_ask.is_some()
-                    || self.agent_pick.is_some()
-                    || self.reaction_grid.is_some()
-                    || self.report_typing()
-                    || self.update_card.is_some()
-                {
-                    if self.palette.is_some() || self.ffind.is_some() {
-                        "Workspace Typing Palette"
-                    } else if self.compose.is_some()
-                        || self.goline.is_some()
-                        || self.typing_description()
-                        || self.submit.is_some()
-                        || self.report_typing()
-                        // The new version's card scrolls with ↑ ↓ (#135).
-                        || self.update_card.is_some()
-                    {
-                        // ↑ ↓ belong to the field: they move its caret or its line.
-                        "Workspace Typing Caret"
-                    } else {
-                        "Workspace Typing"
-                    }
                 } else {
-                    "Workspace"
+                    match self.typing() {
+                        None => "Workspace",
+                        Some(Input::Palette | Input::FindFiles) => "Workspace Typing Palette",
+                        // ↑ ↓ belong to the field: they move its caret or its line. The new
+                        // version's card scrolls with them (#135).
+                        Some(
+                            Input::Compose
+                            | Input::GoLine
+                            | Input::Submit
+                            | Input::Report
+                            | Input::UpdateCard,
+                        ) => "Workspace Typing Caret",
+                        Some(Input::NewRequest) if self.typing_description() => {
+                            "Workspace Typing Caret"
+                        }
+                        Some(_) => "Workspace Typing",
+                    }
                 },
             )
             .track_focus(&self.focus)
@@ -1031,6 +1013,7 @@ impl Render for Workspace {
                 this.search(palette::Scope::Actions, cx)
             }))
             .on_action(cx.listener(Self::compare_action))
+            .on_action(cx.listener(Self::copy_link_action))
             .on_action(cx.listener(Self::palette_up))
             .on_action(cx.listener(Self::palette_down))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {

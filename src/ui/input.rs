@@ -400,14 +400,12 @@ impl Workspace {
     ) -> Div {
         let row = div().flex_1().min_w_0().flex().items_center();
         if text.is_empty() {
+            let shown = super::keys::text(placeholder).into_owned();
             return row.children(active.then(caret)).child(
-                div()
-                    .min_w_0()
-                    .when(!look.wrap, |s| s.truncate())
-                    .text_color(theme::faint())
-                    .child(super::keys::text(placeholder).into_owned()),
+                cut_unless_wrapped(look.wrap, placeholder, shown).text_color(theme::faint()),
             );
         }
+        // Left, its text stays, dimmed, without a caret (#168).
         if !active {
             let shown = if look.mask {
                 "•".repeat(text.chars().count())
@@ -415,10 +413,7 @@ impl Workspace {
                 text.to_owned()
             };
             return row.child(
-                div()
-                    .min_w_0()
-                    .when(!look.wrap, |s| s.truncate())
-                    .child(shown),
+                cut_unless_wrapped(look.wrap, placeholder, shown).text_color(theme::muted()),
             );
         }
         let look = Look {
@@ -537,5 +532,16 @@ fn edit_with(edit: &mut TextEdit, key: &Keystroke, cx: &mut App, lines: bool) ->
             Edit::Changed
         }
         _ => Edit::Ignored,
+    }
+}
+
+/// A field's text not being typed in: wrapped, or cut to one line with the whole in its long
+/// hover (#161), its id from the field's placeholder.
+fn cut_unless_wrapped(wrap: bool, placeholder: &str, text: String) -> gpui::Stateful<Div> {
+    let id = gpui::SharedString::from(format!("field-{placeholder}"));
+    if wrap {
+        div().id(id).min_w_0().child(text)
+    } else {
+        super::hover::cut(id, text)
     }
 }

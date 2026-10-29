@@ -107,6 +107,10 @@ impl Workspace {
 
     /// ↑ and ↓ in the zone that has the keyboard.
     pub(super) fn zone_vertical(&mut self, down: bool, cx: &mut Context<Self>) {
+        // The New merge request card's From or Into list (#159).
+        if self.step_branch_list(down, cx) {
+            return;
+        }
         // The connect panel with its field: ↑ ↓ move between the ways (#156).
         if self.requests.connectable
             && self.field == Some(super::lists::Field::Token)

@@ -434,13 +434,10 @@ fn theme_preview(t: &Theme) -> Div {
         )
         .child("!398")
         .child(
-            div()
+            super::hover::cut("sample-title", "Refactor the login screen state")
                 .flex_1()
-                .min_w_0()
-                .truncate()
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(c(t, T::Text1))
-                .child("Refactor the login screen state"),
+                .text_color(c(t, T::Text1)),
         )
         .child(
             div()
@@ -587,7 +584,7 @@ fn card(
                 .items_center()
                 .gap(px(6.))
                 .text_size(px(12.))
-                .child(div().flex_1().min_w_0().truncate().child(name))
+                .child(super::hover::cut("name", name).flex_1())
                 // A word under the card; what it means in its long hover.
                 .children(tag.map(|(t, bad, tip)| {
                     let word = div()
@@ -848,13 +845,10 @@ impl Workspace {
                         )),
                     )
                     .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
+                        super::hover::cut("themes-folder", folder)
                             .font_family(theme::CODE_FONT)
                             .text_size(px(11.))
-                            .text_color(theme::faint())
-                            .child(folder),
+                            .text_color(theme::faint()),
                     ),
             )
             .children(troubled.into_iter().map(|t| {
@@ -951,13 +945,10 @@ impl Workspace {
                             )),
                     )
                     .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
+                        super::hover::cut("icons-folder", folder)
                             .font_family(theme::CODE_FONT)
                             .text_size(px(11.))
-                            .text_color(theme::faint())
-                            .child(folder),
+                            .text_color(theme::faint()),
                     ),
             )
             .children((!problems.is_empty()).then(|| {
@@ -1549,18 +1540,24 @@ impl Workspace {
                         theme::hover()
                     })
                     .text_size(px(12.))
-                    .child(div().flex_1().min_w_0().truncate().child(match bad {
-                        Some((tok, ratio, on)) => format!(
-                            "{} — {} is {ratio:.1}:1 on {}; text needs 4.5:1.",
-                            match low.len() {
-                                1 => "1 problem".to_owned(),
-                                n => format!("{n} problems"),
+                    .child(
+                        super::hover::cut(
+                            "contrast-line",
+                            match bad {
+                                Some((tok, ratio, on)) => format!(
+                                    "{} — {} is {ratio:.1}:1 on {}; text needs 4.5:1.",
+                                    match low.len() {
+                                        1 => "1 problem".to_owned(),
+                                        n => format!("{n} problems"),
+                                    },
+                                    TOKENS[tok as usize].0,
+                                    TOKENS[on as usize].0
+                                ),
+                                None => "Every text colour reads at 4.5:1 or more.".to_owned(),
                             },
-                            TOKENS[tok as usize].0,
-                            TOKENS[on as usize].0
-                        ),
-                        None => "Every text colour reads at 4.5:1 or more.".to_owned(),
-                    }))
+                        )
+                        .flex_1(),
+                    )
                     .children(bad.is_some().then(|| {
                         small_button("theme-raise-all", "Raise to 4.5:1")
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.raise_all(cx)))
@@ -1656,7 +1653,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .child(
+                    .child(super::typing::field_box_out(
                         div()
                             .id("theme-value")
                             .w(px(130.))
@@ -1683,7 +1680,9 @@ impl Workspace {
                                 Default::default(),
                                 cx.entity().downgrade(),
                             )),
-                    )
+                        Field::ThemeValue,
+                        cx,
+                    ))
                     .child(
                         div()
                             .text_color(theme::faint())

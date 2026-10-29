@@ -8,7 +8,7 @@ use super::{Header, ROW_RADIUS, Workspace, theme};
 use crate::git::FileDiff;
 use crate::storage;
 use gpui::{ClickEvent, Context, FontWeight, IntoElement, MouseButton, div, prelude::*};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// How a file stands in the review.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -50,16 +50,36 @@ impl Mark {
     }
 }
 
+/// Past `limit` entries, the one written longest ago (`age`, smallest first) goes, never `keep`,
+/// the one just written: a `HashMap`'s first key is none of the two, and was often the new one
+/// (#163).
+fn cap<V, A: Ord>(map: &mut HashMap<String, V>, limit: usize, keep: &str, age: impl Fn(&V) -> A) {
+    while map.len() > limit {
+        let Some(oldest) = map
+            .iter()
+            .filter(|(key, _)| *key != keep)
+            .min_by_key(|(_, v)| age(v))
+            .map(|(key, _)| key.clone())
+        else {
+            return;
+        };
+        map.remove(&oldest);
+    }
+}
+
 /// Every mark ever made: per scope, per path, the file when it was marked.
 #[derive(Default)]
 pub struct Store {
     marks: HashMap<String, HashMap<String, Mark>>,
     /// `root|commit` of every head whose whole diff was reviewed: a branch or merge request whose tip
-    /// is one of them shows ✓, and a new push (a new tip) takes it away.
-    heads: HashSet<String>,
-    /// `root|commit` → (files reviewed, files) of the last whole diff read up to that head: how far
-    /// a branch or request got, for the lists.
-    progress: HashMap<String, (u32, u32)>,
+    /// is one of them shows ✓, and a new push (a new tip) takes it away. The value is the order it
+    /// was written in: the file keeps them oldest first.
+    heads: HashMap<String, u64>,
+    /// `root|commit` → (files reviewed, files, order written) of the last whole diff read up to that
+    /// head: how far a branch or request got, for the lists. Kept oldest first too.
+    progress: HashMap<String, (u32, u32, u64)>,
+    /// The order the next head or progress written takes.
+    next: u64,
 }
 
 impl Store {
@@ -67,53 +87,61 @@ impl Store {
         let mut store = Self::parse(&storage::read("reviewed.txt"));
         store.heads = storage::read("reviewed-heads.txt")
             .lines()
-            .map(str::to_owned)
+            .zip(0..)
+            .map(|(key, order)| (key.to_owned(), order))
             .collect();
         store.progress = storage::read("reviewed-progress.txt")
             .lines()
-            .filter_map(|line| {
+            .zip(0..)
+            .filter_map(|(line, order)| {
                 let mut parts = line.split('\t');
                 let key = parts.next()?.to_owned();
                 let done = parts.next()?.parse().ok()?;
                 let total = parts.next()?.parse().ok()?;
-                Some((key, (done, total)))
+                Some((key, (done, total, order)))
             })
             .collect();
+        store.next = store.heads.len().max(store.progress.len()) as u64;
         store
+    }
+
+    fn tick(&mut self) -> u64 {
+        self.next += 1;
+        self.next
     }
 
     /// How far the whole diff up to `head` got: (files reviewed, files).
     pub fn head_progress(&self, root: &str, head: git2::Oid) -> Option<(u32, u32)> {
-        self.progress.get(&Self::head_key(root, head)).copied()
+        self.progress
+            .get(&Self::head_key(root, head))
+            .map(|&(done, total, _)| (done, total))
     }
 
     fn set_progress(&mut self, root: &str, head: git2::Oid, done: u32, total: u32) {
         let key = Self::head_key(root, head);
-        if self.progress.get(&key) == Some(&(done, total)) {
+        if self.head_progress(root, head) == Some((done, total)) {
             return;
         }
         if done == 0 {
             self.progress.remove(&key);
         } else {
-            self.progress.insert(key, (done, total));
+            let order = self.tick();
+            self.progress.insert(key.clone(), (done, total, order));
         }
-        while self.progress.len() > 500 {
-            if let Some(k) = self.progress.keys().next().cloned() {
-                self.progress.remove(&k);
-            }
-        }
-        let mut lines: Vec<String> = self
-            .progress
-            .iter()
-            .map(|(k, (d, t))| format!("{k}\t{d}\t{t}"))
+        cap(&mut self.progress, 500, &key, |&(_, _, order)| order);
+        let mut rows: Vec<_> = self.progress.iter().collect();
+        rows.sort_unstable_by_key(|(_, (_, _, order))| *order);
+        let lines: Vec<String> = rows
+            .into_iter()
+            .map(|(k, (d, t, _))| format!("{k}\t{d}\t{t}"))
             .collect();
-        lines.sort_unstable();
         storage::save("reviewed-progress.txt", lines.join("\n") + "\n");
     }
 
     fn save_heads(&self) {
-        let mut lines: Vec<&str> = self.heads.iter().map(String::as_str).collect();
-        lines.sort_unstable();
+        let mut rows: Vec<_> = self.heads.iter().collect();
+        rows.sort_unstable_by_key(|(_, order)| **order);
+        let lines: Vec<&str> = rows.into_iter().map(|(k, _)| k.as_str()).collect();
         storage::save("reviewed-heads.txt", lines.join("\n") + "\n");
     }
 
@@ -122,22 +150,22 @@ impl Store {
     }
 
     pub fn head_done(&self, root: &str, head: git2::Oid) -> bool {
-        self.heads.contains(&Self::head_key(root, head))
+        self.heads.contains_key(&Self::head_key(root, head))
     }
 
     fn set_head(&mut self, root: &str, head: git2::Oid, done: bool) {
         let key = Self::head_key(root, head);
         let changed = if done {
-            self.heads.insert(key)
+            !self.heads.contains_key(&key) && {
+                let order = self.tick();
+                self.heads.insert(key.clone(), order);
+                true
+            }
         } else {
-            self.heads.remove(&key)
+            self.heads.remove(&key).is_some()
         };
         if changed {
-            while self.heads.len() > 500 {
-                if let Some(k) = self.heads.iter().next().cloned() {
-                    self.heads.remove(&k);
-                }
-            }
+            cap(&mut self.heads, 500, &key, |&order| order);
             self.save_heads();
         }
     }
@@ -161,7 +189,7 @@ impl Store {
         if entry.is_empty() {
             self.marks.remove(scope);
         }
-        self.prune();
+        self.prune(scope);
         self.save();
     }
 
@@ -241,7 +269,7 @@ impl Store {
             .entry(scope.to_owned())
             .or_default()
             .insert(path.to_owned(), Mark::now(fp, head));
-        self.prune();
+        self.prune(scope);
         self.save();
     }
 
@@ -255,14 +283,23 @@ impl Store {
         self.save();
     }
 
-    /// The file does not grow without end: the newest scopes are kept (a random 300).
-    fn prune(&mut self) {
-        while self.marks.len() > 300 {
-            if let Some(key) = self.marks.keys().next().cloned() {
-                self.marks.remove(&key);
-            }
-        }
+    /// The file does not grow without end: past 300 scopes, the one whose newest mark is oldest
+    /// goes, never `scope`, the one just marked.
+    fn prune(&mut self, scope: &str) {
+        cap(&mut self.marks, 300, scope, |files| {
+            files.values().map(|m| m.time).max().unwrap_or(0)
+        });
     }
+}
+
+/// The file after `now` in `order`, going round, that is not `done`; none when it is the only one
+/// left or there is none.
+fn next_open(order: &[usize], now: usize, done: impl Fn(usize) -> bool) -> Option<usize> {
+    let at = order.iter().position(|&ix| ix == now).unwrap_or(0);
+    (1..=order.len())
+        .map(|step| order[(at + step) % order.len()])
+        .find(|&ix| !done(ix))
+        .filter(|&ix| ix != now)
 }
 
 /// What a file is, for the purpose of "is it the same file I read": its kind of change, its
@@ -585,14 +622,22 @@ impl Workspace {
         self.next_unreviewed(cx);
     }
 
-    /// Opens the next file, in the order the list shows them, that is not marked read.
+    /// Opens the next file, in the tree's order, that is not marked read: one in a collapsed folder
+    /// too, which then opens (#167).
     pub(super) fn next_unreviewed(&mut self, cx: &mut Context<Self>) {
-        let order = self.file_order();
-        let at = order.iter().position(|&ix| ix == self.file).unwrap_or(0);
-        let next = (1..=order.len())
-            .map(|step| order[(at + step) % order.len().max(1)])
-            .find(|&ix| self.review_state(ix) != Some(State::Done));
-        if let Some(ix) = next.filter(|&ix| ix != self.file) {
+        let order = self.file_order_all();
+        let next = next_open(&order, self.file, |ix| {
+            self.review_state(ix) == Some(State::Done)
+        });
+        if let Some(ix) = next {
+            if let Some(path) = self
+                .diff
+                .as_ref()
+                .and_then(|d| d.files.get(ix))
+                .map(|f| f.path().to_owned())
+            {
+                self.open_folders_of(&path);
+            }
             // It is read next: a generated file folded opens too, as its "Show it anyway" (#144).
             if let Some(path) = self
                 .diff
@@ -605,6 +650,7 @@ impl Workspace {
                 self.sync_stack();
             }
             self.select_file(ix, cx);
+            self.scroll_file_into_view(ix);
         }
     }
 
@@ -875,6 +921,68 @@ mod tests {
         assert!(!store.head_done("/other", old));
         store.set_head("/r", old, false);
         assert!(!store.head_done("/r", old));
+    }
+
+    #[test]
+    fn past_the_limit_the_oldest_goes_and_the_new_one_stays() {
+        let mut store = Store::default();
+        let mark = |time| Mark {
+            fp: 1,
+            time,
+            head: None,
+        };
+        for i in 0..300 {
+            store.marks.insert(
+                format!("/r|mr:{i}"),
+                HashMap::from([("a".to_owned(), mark(1_000 + i))]),
+            );
+        }
+        // A scope is as old as its newest mark: mr:0's second file makes it the newest of them.
+        store
+            .marks
+            .get_mut("/r|mr:0")
+            .unwrap()
+            .insert("b".into(), mark(2_000));
+        store.set("/r|mr:300", "a", 1, None);
+        assert!(store.marks.contains_key("/r|mr:0") && !store.marks.contains_key("/r|mr:1"));
+        for i in 301..600 {
+            let scope = format!("/r|mr:{i}");
+            store.set(&scope, "a", 1, None);
+            assert_eq!(store.get(&scope, "a"), Some(1), "{scope} lost its mark");
+            assert_eq!(store.marks.len(), 300);
+        }
+        assert!(
+            store
+                .marks
+                .keys()
+                .all(|s| s["/r|mr:".len()..].parse::<u32>().unwrap() >= 300)
+        );
+
+        let head =
+            |i: u32| git2::Oid::from_bytes(&[&[0; 16][..], &i.to_be_bytes()].concat()).unwrap();
+        for i in 0..600 {
+            store.set_head("/r", head(i), true);
+            store.set_progress("/r", head(i), 1, 2);
+            assert!(store.head_done("/r", head(i)));
+            assert_eq!(store.head_progress("/r", head(i)), Some((1, 2)));
+        }
+        assert_eq!((store.heads.len(), store.progress.len()), (500, 500));
+        assert!(!store.head_done("/r", head(99)) && store.head_done("/r", head(100)));
+        assert_eq!(store.head_progress("/r", head(99)), None);
+    }
+
+    #[test]
+    fn v_walks_every_file_and_goes_round() {
+        // Tree order with every folder open: A/a.kt, B/b.kt, C/d.kt, c.kt, e.kt (#167).
+        let order = [0, 1, 3, 2, 4];
+        let done = |set: &'static [usize]| move |ix| set.contains(&ix);
+        // From c.kt: e.kt; from e.kt round to a.kt; b.kt, reviewed, is passed.
+        assert_eq!(next_open(&order, 2, done(&[])), Some(4));
+        assert_eq!(next_open(&order, 4, done(&[0])), Some(1));
+        assert_eq!(next_open(&order, 4, done(&[0, 1])), Some(3));
+        // Everything else reviewed: nowhere to go.
+        assert_eq!(next_open(&order, 2, done(&[0, 1, 3, 4])), None);
+        assert_eq!(next_open(&[], 0, done(&[])), None);
     }
 
     #[test]

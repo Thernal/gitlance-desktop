@@ -71,23 +71,59 @@ impl WebRemote {
         }
     }
 
-    /// `branch` as `main` or `origin/main`; a remote prefix is dropped.
-    pub fn branch(&self, branch: &str) -> String {
-        let name = branch.split_once('/').map_or(branch, |(_, rest)| rest);
-        let name = if self.is_remote_prefix(branch) {
-            name
-        } else {
-            branch
-        };
+    /// Request `iid`'s page.
+    pub fn request(&self, iid: u64) -> String {
         if self.github {
-            format!("{}/tree/{name}", self.base)
+            format!("{}/pull/{iid}", self.base)
         } else {
-            format!("{}/-/tree/{name}", self.base)
+            format!("{}/-/merge_requests/{iid}", self.base)
         }
     }
 
-    fn is_remote_prefix(&self, branch: &str) -> bool {
-        branch.starts_with("origin/") || branch.starts_with("upstream/")
+    /// File `path` at `rev`, a branch, a tag or a commit.
+    pub fn file(&self, rev: &str, path: &str) -> String {
+        if self.github {
+            format!("{}/blob/{rev}/{path}", self.base)
+        } else {
+            format!("{}/-/blob/{rev}/{path}", self.base)
+        }
+    }
+
+    /// Folder `path` at `rev`; the whole project when `path` is empty.
+    pub fn tree(&self, rev: &str, path: &str) -> String {
+        let path = if path.is_empty() {
+            String::new()
+        } else {
+            format!("/{path}")
+        };
+        if self.github {
+            format!("{}/tree/{rev}{path}", self.base)
+        } else {
+            format!("{}/-/tree/{rev}{path}", self.base)
+        }
+    }
+
+    /// What `head` changed against `base`: since their merge base, or `direct`ly.
+    pub fn compare(&self, base: &str, head: &str, direct: bool) -> String {
+        match (self.github, direct) {
+            (true, false) => format!("{}/compare/{base}...{head}", self.base),
+            (true, true) => format!("{}/compare/{base}..{head}", self.base),
+            (false, false) => format!("{}/-/compare/{base}...{head}", self.base),
+            (false, true) => format!("{}/-/compare/{base}...{head}?straight=true", self.base),
+        }
+    }
+
+    /// The anchor a diff's page gives file `path`: GitLab the SHA-1 of the path, GitHub `diff-`
+    /// and its SHA-256.
+    pub fn file_anchor(&self, path: &str) -> String {
+        if self.github {
+            use sha2::Digest;
+            let hash = sha2::Sha256::digest(path.as_bytes());
+            let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+            format!("diff-{hex}")
+        } else {
+            crate::links::path_hash(path)
+        }
     }
 }
 
@@ -478,12 +514,29 @@ impl Repo {
         Ok(out)
     }
 
-    /// Up to `limit` commits reachable from `tip`, newest first.
-    pub fn log(&self, tip: Oid, limit: usize) -> Result<Vec<CommitInfo>> {
+    /// Commits reachable from `tip`, newest first, from the `skip`th on: `count` of them, and on
+    /// down to `until` when it is one of them further down (#25).
+    pub fn log(
+        &self,
+        tip: Oid,
+        skip: usize,
+        count: usize,
+        until: Option<Oid>,
+    ) -> Result<Vec<CommitInfo>> {
         let mut walk = self.inner.revwalk()?;
         walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
         walk.push(tip)?;
-        walk.take(limit).map(|id| self.commit(id?)).collect()
+        let mut reached = until.is_none_or(|id| !self.contains(tip, id));
+        let mut out = Vec::new();
+        for id in walk.skip(skip) {
+            if out.len() >= count && reached {
+                break;
+            }
+            let id = id?;
+            reached |= until == Some(id);
+            out.push(self.commit(id)?);
+        }
+        Ok(out)
     }
 
     pub fn commit(&self, id: Oid) -> Result<CommitInfo> {

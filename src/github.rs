@@ -315,32 +315,163 @@ pub fn list(remote: &WebRemote) -> Result<Vec<Mr>> {
     Ok(parse_pulls(&value))
 }
 
-/// Page `page` of the merged or the closed pull requests (GitHub lists both as closed, newest
-/// first), and whether another may follow.
+/// The page at `at` (none: the first) of `whose` merged or closed pull requests, newest first.
+/// GitHub lists both as closed; one person's are searched for, so their list ends at its own
+/// last page and says how many there are (#169).
 pub fn list_past(
     remote: &WebRemote,
     state: crate::mr::MrState,
-    page: u32,
-) -> Result<(Vec<Mr>, bool)> {
+    whose: &crate::mr::Whose,
+    at: Option<&str>,
+) -> Result<crate::mr::PastPage> {
+    use crate::mr::{PastPage, Whose};
     let per = crate::mr::PAST_PAGE;
-    let value = match read_fixture("pulls-closed.json") {
-        Some(v) => {
-            let all: Vec<Value> = v?.as_array().cloned().unwrap_or_default();
-            Value::Array(
-                all.into_iter()
-                    .skip((page as usize - 1) * per)
-                    .take(per)
-                    .collect(),
-            )
-        }
-        None => get(
-            remote,
-            &format!("pulls?state=closed&sort=updated&direction=desc&per_page={per}&page={page}"),
-        )?,
+    let qualifier = match whose {
+        Whose::All => None,
+        Whose::Author(login) => Some(format!("author:{login}")),
+        // Asked for a review that was then given: GitHub no longer lists them as requested.
+        Whose::Reviewer(login) => Some(format!("reviewed-by:{login}")),
     };
-    let all = parse_pulls(&value);
-    let more = all.len() == per;
-    Ok((all.into_iter().filter(|m| m.state == state).collect(), more))
+    let Some(qualifier) = qualifier else {
+        let page: usize = at.and_then(|a| a.parse().ok()).unwrap_or(1).max(1);
+        let value = match read_fixture("pulls-closed.json") {
+            Some(v) => {
+                let all: Vec<Value> = v?.as_array().cloned().unwrap_or_default();
+                Value::Array(all.into_iter().skip((page - 1) * per).take(per).collect())
+            }
+            None => get(
+                remote,
+                &format!(
+                    "pulls?state=closed&sort=updated&direction=desc&per_page={per}&page={page}"
+                ),
+            )?,
+        };
+        let all = parse_pulls(&value);
+        let next = (all.len() == per).then(|| (page + 1).to_string());
+        let list = all.into_iter().filter(|m| m.state == state).collect();
+        return Ok(PastPage {
+            list,
+            next,
+            total: None,
+        });
+    };
+    let found = match read_fixture("pulls-closed.json") {
+        Some(v) => search_fixture(&v?, state, whose, at),
+        None => {
+            let (owner, name) = owner_name(remote)?;
+            let is = match state {
+                crate::mr::MrState::Merged => "is:merged",
+                _ => "is:closed is:unmerged",
+            };
+            let q = format!("repo:{owner}/{name} is:pr {is} {qualifier} sort:updated-desc");
+            graphql(remote, SEARCH, json!({ "q": q, "after": at }))?["search"].clone()
+        }
+    };
+    let nodes: Vec<Value> = found["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(rest_shape)
+        .collect();
+    let list = parse_pulls(&Value::Array(nodes));
+    let next = found["pageInfo"]["hasNextPage"]
+        .as_bool()
+        .unwrap_or(false)
+        .then(|| s(&found["pageInfo"]["endCursor"]))
+        .filter(|c| !c.is_empty());
+    let total = found["issueCount"].as_u64().map(|n| n as u32);
+    Ok(PastPage { list, next, total })
+}
+
+const SEARCH: &str = "query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: 30, after: $after) {
+    issueCount pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest {
+      number title url updatedAt createdAt body isDraft state mergedAt
+      headRefName headRefOid baseRefName mergeCommit { oid }
+      author { login ... on User { name } }
+      comments { totalCount }
+      reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }
+    } }
+  }
+}";
+
+/// A searched pull request in the shape the REST lists give, for `parse_pull`.
+fn rest_shape(n: &Value) -> Value {
+    let reviewers: Vec<Value> = n["reviewRequests"]["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| json!({ "login": r["requestedReviewer"]["login"] }))
+        .collect();
+    json!({
+        "number": n["number"],
+        "title": n["title"],
+        "user": n["author"],
+        "head": { "ref": n["headRefName"], "sha": n["headRefOid"] },
+        "base": { "ref": n["baseRefName"] },
+        "html_url": n["url"],
+        "updated_at": n["updatedAt"],
+        "created_at": n["createdAt"],
+        "comments": n["comments"]["totalCount"],
+        "draft": n["isDraft"],
+        "requested_reviewers": reviewers,
+        "body": n["body"],
+        "state": n["state"].as_str().unwrap_or_default().to_lowercase(),
+        "merged_at": n["mergedAt"],
+        "merge_commit_sha": n["mergeCommit"]["oid"],
+    })
+}
+
+/// What the search would find in `pulls-closed.json`: a reviewer is one asked for a review.
+fn search_fixture(
+    all: &Value,
+    state: crate::mr::MrState,
+    whose: &crate::mr::Whose,
+    at: Option<&str>,
+) -> Value {
+    use crate::mr::Whose;
+    let theirs: Vec<Value> = all
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| parse_pull(p).is_some_and(|m| m.state == state))
+        .filter(|p| match whose {
+            Whose::All => true,
+            Whose::Author(login) => p["user"]["login"].as_str() == Some(login),
+            Whose::Reviewer(login) => p["requested_reviewers"]
+                .as_array()
+                .is_some_and(|r| r.iter().any(|r| r["login"].as_str() == Some(login))),
+        })
+        .cloned()
+        .collect();
+    let per = crate::mr::PAST_PAGE;
+    let from: usize = at.and_then(|a| a.parse().ok()).unwrap_or(0);
+    let nodes: Vec<Value> = theirs
+        .iter()
+        .skip(from)
+        .take(per)
+        .map(|p| {
+            json!({
+                "number": p["number"], "title": p["title"], "url": p["html_url"],
+                "updatedAt": p["updated_at"], "createdAt": p["created_at"], "body": p["body"],
+                "isDraft": p["draft"], "state": "CLOSED", "mergedAt": p["merged_at"],
+                "headRefName": p["head"]["ref"], "headRefOid": p["head"]["sha"],
+                "baseRefName": p["base"]["ref"],
+                "mergeCommit": { "oid": p["merge_commit_sha"] },
+                "author": p["user"],
+                "comments": { "totalCount": p["comments"] },
+                "reviewRequests": { "nodes": p["requested_reviewers"].as_array().into_iter()
+                    .flatten().map(|r| json!({ "requestedReviewer": r })).collect::<Vec<_>>() },
+            })
+        })
+        .collect();
+    let more = from + per < theirs.len();
+    json!({
+        "issueCount": theirs.len(),
+        "pageInfo": { "hasNextPage": more, "endCursor": (from + per).to_string() },
+        "nodes": nodes,
+    })
 }
 
 /// One pull request, whatever its state.
@@ -656,8 +787,15 @@ pub fn parse_drafts(data: &Value) -> Vec<Draft> {
         .flatten()
         .flat_map(|t| {
             let (new_line, old_line) = thread_lines(t);
-            t["comments"]["nodes"]
-                .as_array()
+            let comments = t["comments"]["nodes"].as_array();
+            // A pending comment in a thread already published replies to it, under its id (#166).
+            let reply_to = comments
+                .into_iter()
+                .flatten()
+                .find(|c| !pending(c))
+                .and_then(|c| c["databaseId"].as_u64())
+                .map(|first| format!("{}|{first}", s(&t["id"])));
+            comments
                 .into_iter()
                 .flatten()
                 .filter(|c| pending(c))
@@ -668,6 +806,7 @@ pub fn parse_drafts(data: &Value) -> Vec<Draft> {
                         path: t["path"].as_str().map(str::to_owned),
                         new_line,
                         old_line,
+                        reply_to: reply_to.clone(),
                     })
                 })
         })
@@ -783,6 +922,7 @@ pub fn parse_versions(data: &Value) -> Vec<Push> {
         let before = s(&e["beforeCommit"]["oid"]);
         if !before.is_empty() {
             out.push(Push {
+                id: 0,
                 head: before,
                 base: base.clone(),
                 created: since,
@@ -791,6 +931,7 @@ pub fn parse_versions(data: &Value) -> Vec<Push> {
         since = epoch(&e["createdAt"]);
     }
     out.push(Push {
+        id: 0,
         head,
         base,
         created: since,
@@ -1279,6 +1420,43 @@ mod tests {
     }
 
     #[test]
+    fn ones_merged_pull_requests_are_searched_for() {
+        use crate::mr::{MrState, TEST_FIXTURE, Whose};
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("github")).unwrap();
+        let pull = |number: u64, login: &str, merged: bool| {
+            json!({
+                "number": number, "title": format!("PR {number}"), "user": {"login": login},
+                "head": {"ref": "topic", "sha": "abc"}, "base": {"ref": "main"},
+                "state": "closed", "merged_at": merged.then_some("2026-10-01T00:00:00Z"),
+                "merge_commit_sha": "def", "requested_reviewers": [{"login": "me"}],
+            })
+        };
+        let all = json!([
+            pull(4, "me", true),
+            pull(3, "ann", true),
+            pull(2, "me", false)
+        ]);
+        std::fs::write(dir.path().join("github/pulls-closed.json"), all.to_string()).unwrap();
+        TEST_FIXTURE.with(|f| *f.borrow_mut() = Some(dir.path().to_owned()));
+        let at = remote("https://github.com/o/r");
+        let mine = list_past(&at, MrState::Merged, &Whose::Author("me".into()), None).unwrap();
+        assert_eq!((mine.list.len(), mine.next, mine.total), (1, None, Some(1)));
+        let m = &mine.list[0];
+        assert_eq!(
+            (m.iid, m.source.as_str(), m.state),
+            (4, "topic", MrState::Merged)
+        );
+        assert_eq!(m.merged_with.as_deref(), Some("def"));
+        assert_eq!(m.reviewers, ["me"]);
+        let closed = list_past(&at, MrState::Closed, &Whose::Author("me".into()), None).unwrap();
+        assert_eq!(closed.list.iter().map(|m| m.iid).collect::<Vec<_>>(), [2]);
+        let reviewed = list_past(&at, MrState::Merged, &Whose::Reviewer("me".into()), None);
+        assert_eq!(reviewed.unwrap().total, Some(2));
+        TEST_FIXTURE.with(|f| *f.borrow_mut() = None);
+    }
+
+    #[test]
     fn github_com_and_enterprise_have_their_api() {
         let (rest, graphql, repo) = api(&remote("https://github.com/Thernal/gitlance")).unwrap();
         assert_eq!(rest, "https://api.github.com");
@@ -1318,7 +1496,9 @@ mod tests {
                 {"databaseId": 101, "body": "Clamp it", "createdAt": "2026-10-01T10:00:00Z",
                  "author": {"login": "ann", "name": "Ann"}, "pullRequestReview": {"state": "COMMENTED"}},
                 {"databaseId": 102, "body": "Done", "createdAt": "2026-10-01T11:00:00Z",
-                 "author": {"login": "bob"}, "pullRequestReview": {"state": "COMMENTED"}}
+                 "author": {"login": "bob"}, "pullRequestReview": {"state": "COMMENTED"}},
+                {"databaseId": 103, "body": "my reply, unpublished", "createdAt": "2026-10-01T12:30:00Z",
+                 "author": {"login": "me"}, "pullRequestReview": {"state": "PENDING"}}
              ]}},
             {"id": "T2", "isResolved": false, "path": "src/b.rs", "line": null, "originalLine": 3,
              "diffSide": "LEFT",
@@ -1344,11 +1524,17 @@ mod tests {
         assert_eq!(threads[1].id, "issue|9");
         assert!(!threads[1].resolvable);
         let drafts = parse_drafts(&threads_data());
-        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts.len(), 2);
+        // A pending comment in a published thread replies to it (#166); one alone opens its own.
         assert_eq!(
-            (drafts[0].id, drafts[0].new_line, drafts[0].old_line),
+            (drafts[0].id, drafts[0].reply_to.as_deref()),
+            (103, Some("T1|101"))
+        );
+        assert_eq!(
+            (drafts[1].id, drafts[1].new_line, drafts[1].old_line),
             (201, None, Some(3))
         );
+        assert_eq!(drafts[1].reply_to, None);
     }
 
     #[test]

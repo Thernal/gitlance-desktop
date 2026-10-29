@@ -10,6 +10,11 @@ use gpui::{ClipboardItem, Context, MouseButton, Pixels, Point, div, prelude::*};
 #[derive(Clone)]
 pub enum Act {
     Copy(String),
+    /// A link or a number copied, and a toast saying what (#162): `said` is `Link to !398`.
+    CopySaid {
+        text: String,
+        said: String,
+    },
     OpenUrl(String),
     OpenEditor {
         path: String,
@@ -82,6 +87,8 @@ pub struct Entry {
     pub key: &'static str,
     /// `Some` for a choice: whether it is on.
     pub checked: Option<bool>,
+    /// Shown dimmed, taking no click: its label says why (a branch only on this Mac, #162).
+    pub off: bool,
     pub act: Act,
 }
 
@@ -91,7 +98,16 @@ impl Entry {
             label: label.into(),
             key: "",
             checked: None,
+            off: false,
             act,
+        }
+    }
+
+    /// What cannot be done here, and why: `Copy link — only on this Mac`.
+    pub fn off(label: impl Into<String>) -> Self {
+        Self {
+            off: true,
+            ..Self::new(label, Act::Copy(String::new()))
         }
     }
 
@@ -167,6 +183,10 @@ impl Workspace {
         self.let_menu_go(cx);
         match act {
             Act::Copy(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
+            Act::CopySaid { text, said } => {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                self.toast_info(format!("{said} copied").into(), cx);
+            }
             Act::OpenUrl(url) => cx.open_url(&url),
             Act::OpenEditor { path, line } => self.open_in_editor(&path, line),
             Act::Comment { old, line } => self.start_comment(old, line, cx),
@@ -353,9 +373,17 @@ impl Workspace {
                 }))
                 .children(entries.iter().enumerate().map(|(i, entry)| {
                     let act = entry.act.clone();
-                    row(("ctx-entry", (g * 100 + i) as u64), false)
+                    let off = entry.off;
+                    // One that cannot be done takes no hover: `row` gives it none as "selected",
+                    // and its fill is taken away.
+                    row(("ctx-entry", (g * 100 + i) as u64), off)
                         .h(px(ROW))
                         .gap_2()
+                        .when(off, |s| {
+                            s.bg(gpui::transparent_black())
+                                .text_color(theme::faint())
+                                .cursor_default()
+                        })
                         .child(div().w(px(14.)).text_color(theme::accent()).child(
                             if entry.checked == Some(true) {
                                 "✓"
@@ -364,10 +392,11 @@ impl Workspace {
                             },
                         ))
                         .child(
-                            div()
-                                .flex_1()
-                                .truncate()
-                                .child(super::keys::text(&entry.label).into_owned()),
+                            super::hover::cut(
+                                "label",
+                                super::keys::text(&entry.label).into_owned(),
+                            )
+                            .flex_1(),
                         )
                         .child(
                             div()
@@ -375,7 +404,7 @@ impl Workspace {
                                 .text_color(theme::faint())
                                 .child(super::keys::text(entry.key).into_owned()),
                         )
-                        .when(live, |s| {
+                        .when(live && !off, |s| {
                             s.on_click(cx.listener(move |this, _, window, cx| {
                                 this.run_act_in(act.clone(), window, cx)
                             }))

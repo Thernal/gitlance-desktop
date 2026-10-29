@@ -2,6 +2,7 @@
 //! `git::fetch` when the window gains focus and every few minutes; the auto-refresh then sees the
 //! moved refs and marks new versions.
 
+use super::hover::CutInTip;
 use super::px;
 use super::{Workspace, format, theme};
 use crate::storage;
@@ -136,7 +137,7 @@ impl Workspace {
                 .id("fetch-status")
                 .flex_none()
                 .max_w(px(420.))
-                .truncate()
+                .cut_in_tip()
                 .h(px(24.))
                 .flex()
                 .items_center()

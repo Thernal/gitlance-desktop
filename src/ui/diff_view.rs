@@ -1,5 +1,6 @@
 //! Drawing one row of a file diff, and the small controls above it.
 
+use super::hover::CutInTip;
 use super::px;
 use super::rows::{self, Cell, FileData, Row, Side};
 use super::select::Sel;
@@ -252,7 +253,7 @@ fn annot_col(style: RowStyle<'_>, line: Option<u32>, events: OnEvents) -> Option
     let tip = cell.tip.clone();
     Some(
         col.id(("annot", u64::from(n)))
-            .truncate()
+            .cut_in_tip()
             .text_color(if cell.current {
                 theme::accent()
             } else {

@@ -9,6 +9,7 @@
 
 use super::comments::Target;
 use super::discussion::{self, Kind as Button, Source};
+use super::hover::CutInTip;
 use super::keys::{self, On};
 use super::notifications::{Kind, Notice};
 use super::{Workspace, chip, format, icons, island, markdown, px, theme, words};
@@ -142,7 +143,7 @@ impl Workspace {
     }
 
     /// The Inbox's selected row: an agent's answer while it waits for you, else the notice.
-    fn inbox_current(&self) -> Option<InboxRow> {
+    pub(super) fn inbox_current(&self) -> Option<InboxRow> {
         match self.inbox_view.agent {
             Some(id) if self.agent_notices().iter().any(|(i, ..)| *i == id) => {
                 Some(InboxRow::Agent(id))
@@ -588,8 +589,15 @@ impl Workspace {
         if !text.trim().is_empty() {
             tip.push(text.trim().to_owned());
         }
+        let iid = n.iid;
         div()
             .id(("inbox-row", ix))
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                    this.request_context(iid, e.position, cx)
+                }),
+            )
             .mx(px(6.))
             .px(px(10.))
             .py(px(8.))
@@ -623,7 +631,7 @@ impl Workspace {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .truncate()
+                                    .cut_in_tip()
                                     .when(fresh, |s| s.font_weight(FontWeight::SEMIBOLD))
                                     .child(format!("{} {}", n.who, n.kind_verb())),
                             )
@@ -637,14 +645,14 @@ impl Workspace {
                     )
                     .child(
                         div()
-                            .truncate()
+                            .cut_in_tip()
                             .text_size(px(12.))
                             .text_color(theme::accent())
                             .child(format!("{} {}", words::number(n.iid), n.title)),
                     )
                     .children((room.second() && !gist.is_empty()).then(|| {
                         div()
-                            .truncate()
+                            .cut_in_tip()
                             .text_size(px(12.))
                             .text_color(theme::muted())
                             .child(gist.to_owned())
@@ -776,7 +784,7 @@ impl Workspace {
                     )
                     .child(
                         div()
-                            .truncate()
+                            .cut_in_tip()
                             .text_size(px(12.))
                             .font_family(theme::CODE_FONT)
                             .text_color(theme::agent())
@@ -784,7 +792,7 @@ impl Workspace {
                     )
                     .children((room.second() && !gist.is_empty()).then(|| {
                         div()
-                            .truncate()
+                            .cut_in_tip()
                             .text_size(px(12.))
                             .text_color(theme::muted())
                             .child(gist)
@@ -1171,7 +1179,7 @@ fn excerpt_view(path: &str, line: u32, ex: Option<Option<&Excerpt>>) -> Div {
                 .size(px(14.))
                 .text_color(theme::muted()),
         )
-        .child(div().flex_1().min_w_0().truncate().child(path.to_owned()))
+        .child(super::hover::cut("excerpt-path", path.to_owned()).flex_1())
         .child(format!("line {line}"));
     let body = match ex {
         None => div()

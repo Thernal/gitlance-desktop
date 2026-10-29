@@ -40,6 +40,26 @@ impl MrState {
 
 /// Merged and closed requests come a page of this many at a time, as the list is scrolled.
 pub const PAST_PAGE: usize = 30;
+
+/// Whose merged or closed requests a list reads. The host picks them, so a short list ends at its
+/// own last page instead of reading the whole project's (#169).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Whose {
+    All,
+    /// Written by this username.
+    Author(String),
+    /// With this username among the reviewers.
+    Reviewer(String),
+}
+
+/// A page of merged or closed requests: what is on it, where the next one starts (none: it was
+/// the last), and how many there are in all where the host says.
+#[derive(Debug, Default)]
+pub struct PastPage {
+    pub list: Vec<Mr>,
+    pub next: Option<String>,
+    pub total: Option<u32>,
+}
 /// Open requests, a request's discussions, are read a page of this many at a time, every page.
 const OPEN_PAGE: usize = 100;
 /// No more than this many pages of one listing.
@@ -125,6 +145,9 @@ pub struct Draft {
     pub path: Option<String>,
     pub new_line: Option<u32>,
     pub old_line: Option<u32>,
+    /// The discussion it replies to (its `Thread::id`): a reply in another's thread has no place of
+    /// its own on GitLab, it is where its thread is (#166).
+    pub reply_to: Option<String>,
 }
 
 /// A GitLab to-do on a merge request of this project: someone mentioned the user, asked for a
@@ -163,6 +186,9 @@ pub struct Approvals {
 /// the merge request was based on then, and when.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Push {
+    /// GitLab's id of the version it made (a link to two versions compared names it, #162); 0 on
+    /// GitHub, which has none.
+    pub id: u64,
     pub head: String,
     pub base: String,
     pub created: i64,
@@ -453,35 +479,97 @@ fn get_all(remote: &WebRemote, endpoint: &str) -> Result<Value> {
     Ok(Value::Array(all))
 }
 
-/// Page `page` (from 1) of the merged or the closed requests, newest first, and whether another
-/// may follow (#114).
-pub fn list_past(remote: &WebRemote, state: MrState, page: u32) -> Result<(Vec<Mr>, bool)> {
+/// The page at `at` (none: the first) of `whose` merged or closed requests, newest first
+/// (#114, #169).
+pub fn list_past(
+    remote: &WebRemote,
+    state: MrState,
+    whose: &Whose,
+    at: Option<&str>,
+) -> Result<PastPage> {
     if remote.github {
-        return github::list_past(remote, state, page);
+        return github::list_past(remote, state, whose, at);
     }
-    let value = match fixture() {
-        // `mrs-merged.json`, `mrs-closed.json`: every one, cut into pages here.
+    let page: usize = at.and_then(|a| a.parse().ok()).unwrap_or(1).max(1);
+    let (value, total) = match fixture() {
+        // `mrs-merged.json`, `mrs-closed.json`: every one, picked and cut into pages here.
         Some(dir) => {
             let file = dir.join(format!("mrs-{}.json", state.query()));
             let all: Vec<Value> = std::fs::read_to_string(file)
                 .ok()
                 .and_then(|t| serde_json::from_str(&t).ok())
                 .unwrap_or_default();
-            let from = (page as usize - 1) * PAST_PAGE;
-            Value::Array(all.into_iter().skip(from).take(PAST_PAGE).collect())
+            let theirs: Vec<Value> = all.into_iter().filter(|m| whose_is(m, whose)).collect();
+            let total = Some(theirs.len() as u32);
+            let from = (page - 1) * PAST_PAGE;
+            let value = Value::Array(theirs.into_iter().skip(from).take(PAST_PAGE).collect());
+            (value, total)
         }
-        None => get(
-            remote,
-            &format!(
-                "merge_requests?state={}&order_by=updated_at&per_page={PAST_PAGE}&page={page}",
-                state.query()
-            ),
-        )?,
+        None => {
+            let filter = match whose {
+                Whose::All => String::new(),
+                Whose::Author(login) => format!("&author_username={login}"),
+                Whose::Reviewer(login) => format!("&reviewer_username={login}"),
+            };
+            let value = get(
+                remote,
+                &format!(
+                    "merge_requests?state={}{filter}&order_by=updated_at&per_page={PAST_PAGE}&page={page}",
+                    state.query()
+                ),
+            )?;
+            let total = (page == 1)
+                .then(|| past_count(remote, state, whose))
+                .flatten();
+            (value, total)
+        }
     };
     crate::avatars::harvest(&value);
-    let mrs = parse_mrs(&value);
-    let more = mrs.len() == PAST_PAGE;
-    Ok((mrs, more))
+    let list = parse_mrs(&value);
+    let next = (list.len() == PAST_PAGE).then(|| (page + 1).to_string());
+    Ok(PastPage { list, next, total })
+}
+
+/// Whether request `m`, as GitLab lists it, is `whose`.
+fn whose_is(m: &Value, whose: &Whose) -> bool {
+    match whose {
+        Whose::All => true,
+        Whose::Author(login) => m["author"]["username"].as_str() == Some(login),
+        Whose::Reviewer(login) => m["reviewers"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|r| r["username"].as_str() == Some(login))),
+    }
+}
+
+/// How many of `whose` merged or closed requests there are: GitLab's GraphQL counts them, its
+/// REST lists do not say; none when it will not (an older GitLab).
+fn past_count(remote: &WebRemote, state: MrState, whose: &Whose) -> Option<u32> {
+    const COUNT: &str =
+        "query($path: ID!, $state: MergeRequestState, $author: String, $reviewer: String) {
+  project(fullPath: $path) {
+    mergeRequests(state: $state, authorUsername: $author, reviewerUsername: $reviewer) { count }
+  }
+}";
+    let (_, path) = api(remote).ok()?;
+    let (author, reviewer) = match whose {
+        Whose::All => (None, None),
+        Whose::Author(login) => (Some(login), None),
+        Whose::Reviewer(login) => (None, Some(login)),
+    };
+    let value = graphql(
+        remote,
+        COUNT,
+        serde_json::json!({
+            "path": path.replace("%2F", "/"),
+            "state": state.query(),
+            "author": author,
+            "reviewer": reviewer,
+        }),
+    )
+    .ok()?;
+    value["data"]["project"]["mergeRequests"]["count"]
+        .as_u64()
+        .map(|n| n as u32)
 }
 
 /// One request, whatever its state: one that left the open list, to say what became of it.
@@ -1828,6 +1916,11 @@ pub fn parse_drafts(value: &Value) -> Vec<Draft> {
                     .filter(|p| !p.is_empty()),
                 new_line: line("new_line"),
                 old_line: line("old_line"),
+                reply_to: d
+                    .get("discussion_id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned),
             })
         })
         .collect()
@@ -1910,6 +2003,7 @@ pub fn parse_versions(value: &Value) -> Vec<Push> {
         .filter_map(|v| {
             let head = text(v, "head_commit_sha");
             (!head.is_empty()).then(|| Push {
+                id: v["id"].as_u64().unwrap_or(0),
                 head,
                 base: text(v, "base_commit_sha"),
                 created: epoch(&text(v, "created_at")),
@@ -2126,13 +2220,23 @@ mod tests {
         let value = json!([
             {"id": 7, "note": "Rename?", "position": {"new_path": "a.rs", "old_path": "a.rs", "new_line": 3, "old_line": null}},
             {"id": 8, "note": "General"},
-            {"note": "no id"}
+            {"note": "no id"},
+            // A reply in a discussion: no place of its own (#166).
+            {"id": 9, "note": "And this breaks", "discussion_id": "d1",
+             "position": {"new_path": null, "old_path": null, "new_line": null, "old_line": null}}
         ]);
         let drafts = parse_drafts(&value);
-        assert_eq!(drafts.len(), 2);
+        assert_eq!(drafts.len(), 3);
         assert_eq!((drafts[0].id, drafts[0].new_line), (7, Some(3)));
         assert_eq!(drafts[0].path.as_deref(), Some("a.rs"));
-        assert_eq!(drafts[1].path, None);
+        assert_eq!(
+            (drafts[0].reply_to.as_deref(), drafts[1].path.as_deref()),
+            (None, None)
+        );
+        assert_eq!(
+            (drafts[2].path.as_deref(), drafts[2].reply_to.as_deref()),
+            (None, Some("d1"))
+        );
     }
 
     #[test]
@@ -2151,8 +2255,8 @@ mod tests {
     #[test]
     fn versions_come_oldest_first() {
         let value = json!([
-            {"head_commit_sha": "bbb", "base_commit_sha": "000", "created_at": "2026-10-08T01:00:00Z"},
-            {"head_commit_sha": "aaa", "base_commit_sha": "000", "created_at": "2026-10-08T00:00:00Z"},
+            {"id": 12, "head_commit_sha": "bbb", "base_commit_sha": "000", "created_at": "2026-10-08T01:00:00Z"},
+            {"id": 11, "head_commit_sha": "aaa", "base_commit_sha": "000", "created_at": "2026-10-08T00:00:00Z"},
             {"id": 3}
         ]);
         let pushes = parse_versions(&value);
@@ -2160,6 +2264,8 @@ mod tests {
             pushes.iter().map(|p| p.head.as_str()).collect::<Vec<_>>(),
             ["aaa", "bbb"]
         );
+        // A link to two versions compared names the newer by its id (#162).
+        assert_eq!(pushes.iter().map(|p| p.id).collect::<Vec<_>>(), [11, 12]);
     }
 
     #[test]
@@ -2300,6 +2406,44 @@ mod tests {
         assert!(posted.contains("publish-draft 412 9001"));
         TEST_FIXTURE.with(|f| *f.borrow_mut() = None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_persons_merged_list_ends_at_their_own_last_page() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // 35 merged: the 3 first by "me", every one but the last 4 reviewed by "me".
+        let merged: Vec<Value> = (1..=35)
+            .map(|iid| {
+                let author = if iid <= 3 { "me" } else { "ann" };
+                let reviewers = if iid <= 31 {
+                    vec![json!({"username": "me"})]
+                } else {
+                    vec![]
+                };
+                json!({"iid": iid, "author": {"username": author}, "reviewers": reviewers})
+            })
+            .collect();
+        std::fs::write(
+            dir.path().join("mrs-merged.json"),
+            Value::Array(merged).to_string(),
+        )
+        .unwrap();
+        TEST_FIXTURE.with(|f| *f.borrow_mut() = Some(dir.path().to_owned()));
+        let remote = WebRemote {
+            base: "https://git.example.com/g/p".into(),
+            github: false,
+        };
+        let read = |whose: Whose, at: Option<&str>| {
+            let page = list_past(&remote, MrState::Merged, &whose, at).unwrap();
+            (page.list.len(), page.next, page.total)
+        };
+        let mine = Whose::Author("me".into());
+        assert_eq!(read(mine, None), (3, None, Some(3)));
+        let theirs = Whose::Reviewer("me".into());
+        assert_eq!(read(theirs.clone(), None), (30, Some("2".into()), Some(31)));
+        assert_eq!(read(theirs, Some("2")), (1, None, Some(31)));
+        assert_eq!(read(Whose::All, Some("2")), (5, None, Some(35)));
+        TEST_FIXTURE.with(|f| *f.borrow_mut() = None);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! reads — fetching is a separate, opt-in feature.
 
 use super::px;
-use super::{COMMIT_LIMIT, Selection, Workspace, theme};
+use super::{COMMIT_PAGE, Selection, Workspace, theme};
 use crate::git::{self, BranchRef, CommitInfo, Repo, Version};
 use gpui::{ClickEvent, Context, Rgba, Task, div, prelude::*};
 use std::path::PathBuf;
@@ -173,6 +173,8 @@ impl Workspace {
             .branch
             .and_then(|ix| self.branches.get(ix))
             .map(|b| b.refname.clone());
+        // As much history as is listed, the pages scrolled to included (#25).
+        let count = self.commits.len().max(COMMIT_PAGE);
         self.watch.task = Some(cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_executor()
@@ -187,7 +189,7 @@ impl Workspace {
                         (Some(r), Some(tip)) => Some((
                             r.clone(),
                             repo.versions(r).unwrap_or_default(),
-                            repo.log(tip, COMMIT_LIMIT)?,
+                            repo.log(tip, 0, count, None)?,
                         )),
                         _ => None,
                     };
@@ -279,6 +281,18 @@ impl Workspace {
         self.mark_new_versions(pending.versions.len());
         self.versions = pending.versions;
         self.commits = pending.commits;
+        // Older history goes on from the new tip.
+        if let Some(older) = &mut self.older {
+            match self.commits.first() {
+                Some(tip) => {
+                    *older = super::Older {
+                        tip: tip.id,
+                        task: None,
+                    }
+                }
+                None => self.older = None,
+            }
+        }
         self.refilter();
         self.index_paths(cx);
         match (self.selection, selected) {

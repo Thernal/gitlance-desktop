@@ -483,7 +483,11 @@ impl Workspace {
     /// Settings → Diff → *Mark reviewed as I scroll past*, a file left above while scrolling down
     /// is marked reviewed.
     pub(super) fn follow_scroll(&mut self, cx: &mut Context<Self>) {
-        if self.compose.is_some() || self.goline.is_some() || self.selecting {
+        // The file being written in stays while the diff scrolls; one left does not (#168).
+        if self.has_keyboard(super::typing::Input::Compose)
+            || self.goline.is_some()
+            || self.selecting
+        {
             return;
         }
         let Some(stack) = &self.stack else {

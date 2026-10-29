@@ -161,6 +161,7 @@ pub enum Cmd {
     ZoomOut,
     ZoomReset,
     Switch,
+    CopyLink,
     Space(Space),
 }
 
@@ -171,6 +172,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Merge requests", "⌃⌘4", Cmd::Space(Space::Requests)),
     ("Switch to a branch or a merge request…", "", Cmd::Switch),
     ("Compare two refs…", "⌥⌘C", Cmd::Compare),
+    ("Copy link to this page", "⌥⇧⌘C", Cmd::CopyLink),
     ("Create merge request…", "⌥⌘M", Cmd::CreateRequest),
     (
         "Send the comments to an agent's chat…",
@@ -593,6 +595,14 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A command's label: Copy link names what is on screen.
+    fn command_label(&self, label: &str, cmd: Cmd) -> String {
+        match cmd {
+            Cmd::CopyLink => format!("Copy link to {}", self.page_kind()),
+            _ => label.to_owned(),
+        }
+    }
+
     /// What tab `scope` lists for the palette's text.
     fn scope_items(&self, scope: Scope, p: &Palette) -> Vec<Item> {
         let query = p.query.trim();
@@ -604,7 +614,7 @@ impl Workspace {
                 .filter(|(label, ..)| matches(&words, label))
                 .map(|&(label, key, cmd)| Item {
                     group: "Actions",
-                    label: label.to_owned(),
+                    label: self.command_label(label, cmd),
                     detail: String::new(),
                     key,
                     pick: Pick::Command(cmd),
@@ -907,7 +917,7 @@ impl Workspace {
                     .take(cap(5))
                     .map(|&(label, key, cmd)| Item {
                         group: "Commands",
-                        label: label.to_owned(),
+                        label: self.command_label(label, cmd),
                         detail: String::new(),
                         key,
                         pick: Pick::Command(cmd),
@@ -1303,20 +1313,19 @@ impl Workspace {
                     .gap_3()
                     .children(path.map(|p| super::icons::file_icon(&p, 16.)))
                     .child(
-                        div()
+                        super::hover::cut("label", super::keys::text(&item.label).into_owned())
                             .when(!file, |s| s.flex_1())
-                            .when(file, |s| s.flex_none().max_w(px(320.)))
-                            .min_w_0()
-                            .truncate()
-                            .child(super::keys::text(&item.label).into_owned()),
+                            .when(file, |s| s.flex_none().max_w(px(320.))),
                     )
                     .child(
-                        div()
-                            .when(!file, |s| s.flex_none())
-                            .when(file, |s| s.flex_1().min_w_0().truncate())
-                            .text_size(px(11.))
-                            .text_color(theme::muted())
-                            .child(item.detail.clone()),
+                        // A file's folder gives way first; a command's key never does.
+                        if file {
+                            super::hover::cut("detail", item.detail.clone()).flex_1()
+                        } else {
+                            div().id("detail").flex_none().child(item.detail.clone())
+                        }
+                        .text_size(px(11.))
+                        .text_color(theme::muted()),
                     )
                     .children({
                         // A command whose key was changed in Settings → Keyboard shows the new one.
@@ -1577,6 +1586,7 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::ZoomOut => Box::new(ZoomOut),
         Cmd::ZoomReset => Box::new(ZoomReset),
         Cmd::Switch => Box::new(SwitchTo),
+        Cmd::CopyLink => Box::new(super::CopyLink),
         Cmd::Space(Space::Inbox) => Box::new(super::GoToInbox),
         Cmd::Space(Space::Code) => Box::new(super::GoToCode),
         Cmd::Space(Space::Branches) => Box::new(super::GoToBranches),

@@ -340,13 +340,10 @@ impl Workspace {
                             .child(format!("{}{}", if hit.old { "−" } else { "" }, hit.line)),
                     )
                     .child(
-                        div()
+                        super::hover::cut_with("hit-text", trimmed.to_owned(), styled)
                             .flex_1()
-                            .min_w_0()
-                            .truncate()
                             .font_family(theme::CODE_FONT)
-                            .text_size(px(12.))
-                            .child(styled),
+                            .text_size(px(12.)),
                     )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_hit(ix, cx)))
                     .into_any_element(),

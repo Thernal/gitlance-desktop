@@ -76,6 +76,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌘⇧F", "search commits"),
             ("⌥⌘P", "filter the changed files by path"),
             ("⌥⌘C", "compare two refs"),
+            ("⌥⇧⌘C", "copy the link to this page"),
             ("⌘E", "recent places"),
             ("⌘⇧O", "functions and types this file changes"),
             ("F3  ⌘F3", "bookmark a line · list the bookmarks"),

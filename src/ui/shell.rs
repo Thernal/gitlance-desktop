@@ -93,6 +93,13 @@ impl Shell {
             if let Some(bus) = crate::agents::Bus::new() {
                 bus.absent(std::process::id(), key);
             }
+            super::system_notes::set_front(key, false);
+        })
+        .detach();
+        // While a window is in front, news is not sent to the system's notifications (#26).
+        super::system_notes::set_front(key, window.is_window_active());
+        cx.observe_window_activation(window, move |_, window, _| {
+            super::system_notes::set_front(key, window.is_window_active());
         })
         .detach();
         // An explicit path opens just that; otherwise the tabs of the last session come back.
@@ -234,6 +241,11 @@ impl Shell {
     }
 
     /// The tab that has `path` open, as the tabs last said (a workspace may be mid-update).
+    /// The tab of workspace `id`.
+    pub(super) fn tab_ix(&self, id: gpui::EntityId) -> Option<usize> {
+        self.tabs.iter().position(|t| t.entity_id() == id)
+    }
+
     pub(super) fn tab_of(&self, path: &std::path::Path) -> Option<usize> {
         let same = |root: &std::path::Path| {
             root == path

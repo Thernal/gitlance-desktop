@@ -94,7 +94,7 @@ impl Workspace {
 
     /// One line over a branch's Changes and Commits: ahead of the main line, behind it, where it
     /// is pushed, its request.
-    pub(super) fn render_branch_line(&self) -> Option<AnyElement> {
+    pub(super) fn render_branch_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let Some(Page::Branch(refname)) = self.nav_page() else {
             return None;
         };
@@ -120,8 +120,18 @@ impl Workspace {
                 .child(div().text_color(theme::faint()).child(label))
                 .child(div().child(value))
         };
+        let ix = self.branch;
         Some(
             island()
+                // Its link, the branch's name, a request (#162).
+                .on_mouse_down(
+                    gpui::MouseButton::Right,
+                    cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                        if let Some(ix) = ix {
+                            this.branch_context(ix, e.position, cx)
+                        }
+                    }),
+                )
                 .flex_none()
                 .flex_row()
                 .items_center()

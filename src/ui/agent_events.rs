@@ -1,14 +1,14 @@
 //! What agents leave for the reviewer, as a tab sees it: the marks that tell an agent's pending
 //! comments from one's own (#150) and the requests it gathered (#148), and the events of the tab's
 //! project — pending comments an agent wrote on a request, requests it put under Merge requests,
-//! the changes it opened under Branches (#149) — taken once, each with a toast offering to go and
-//! see. Nothing here moves the screen until the reviewer asks.
+//! the changes it opened under Branches (#149), a place it points at (#154) — taken once, each with
+//! a toast offering to go and see. Nothing here moves the screen until the reviewer asks.
 
 use super::Workspace;
 use super::goto::Spot;
 use super::nav::{Item, Page};
 use super::toast::Act;
-use crate::agents::{Bus, Mark, RequestDraft, What};
+use crate::agents::{Bus, Mark, Place, RequestDraft, What};
 use crate::git::RefKind;
 use gpui::Context;
 use std::path::Path;
@@ -42,6 +42,7 @@ impl Workspace {
                 }
                 What::Notes { .. } => self.take_agent_notes(event, cx),
                 What::NewRequest(draft) => self.agent_drafted(event.agent, draft, cx),
+                What::Point { place } => self.agent_pointed(event.agent, place, cx),
                 What::Open => {}
             }
         }
@@ -63,6 +64,14 @@ impl Workspace {
         if self.requests.current == Some(iid) {
             self.reload_threads(cx);
         }
+        // Its row under Merge requests, quietly, with a dot (#160).
+        if self.open_quietly(Page::Request(iid)) {
+            self.save_nav();
+        }
+        self.call_reviewer(
+            Item::Request(iid),
+            format!("{agent} left {}", super::plural(count, "pending comment")),
+        );
         let number = self.number(iid);
         let act = Act::Review {
             iid,
@@ -86,6 +95,7 @@ impl Workspace {
             if !self.request_loaded(iid) {
                 self.agent_fresh.insert(iid);
             }
+            self.call_reviewer(Item::Request(iid), format!("{agent} gathered it"));
         }
         self.save_nav();
         self.toast_drop(
@@ -117,6 +127,16 @@ impl Workspace {
         let what = changes_said(&page);
         self.open_quietly(page);
         self.save_nav();
+        self.call_reviewer(
+            item.clone(),
+            match notes {
+                0 => format!("{agent} opened its changes"),
+                n => format!(
+                    "{agent} opened its changes with {}",
+                    super::plural(n, "note")
+                ),
+            },
+        );
         let act = Act::Show {
             item,
             unstaged,
@@ -139,8 +159,13 @@ impl Workspace {
         let source = draft.source.clone();
         self.agent_requests.retain(|(_, d)| d.source != source);
         self.agent_requests.push((agent.clone(), draft));
+        self.drafts_unseen.insert(source.clone());
         if let Some(ix) = self.draft_branch(&source) {
-            self.open_quietly(Page::Branch(self.branches[ix].refname.clone()));
+            let page = Page::Branch(self.branches[ix].refname.clone());
+            if let Some(item) = page.item() {
+                self.call_reviewer(item, format!("{agent} drafted a merge request: {said}"));
+            }
+            self.open_quietly(page);
             self.save_nav();
         }
         let act = Act::Drafted {
@@ -149,6 +174,67 @@ impl Workspace {
         };
         let say = move |_| format!("{agent} drafted a merge request: {said}");
         self.toast_act(act, 1, say, cx);
+    }
+
+    /// `agent` points at `place` (#154): only a toast says it, its Show going there.
+    fn agent_pointed(&mut self, agent: String, place: Place, cx: &mut Context<Self>) {
+        let said = place.said(self.web.as_ref().is_some_and(|w| w.github));
+        let act = Act::Point {
+            place,
+            agent: agent.clone(),
+        };
+        self.toast_act(act, 1, move |_| format!("{agent} points at {said}"), cx);
+    }
+
+    /// Show on that toast: a file at its line in the diff on screen when the file is in it, else
+    /// in Code; a commit where it is; a request at the comment or the pending comment.
+    pub(super) fn show_place(&mut self, place: Place, cx: &mut Context<Self>) {
+        match place {
+            Place::File { path, line } => {
+                let diff_shown = self.nav_page().is_some_and(|p| {
+                    !matches!(p, Page::File(_) | Page::Folder(_))
+                        && self.loaded_page().as_ref() == Some(p)
+                });
+                let ix = self
+                    .diff
+                    .as_ref()
+                    .filter(|_| diff_shown)
+                    .and_then(|d| d.files.iter().position(|f| f.path() == path));
+                match (ix, line) {
+                    (Some(_), Some(line)) => self.jump_to_line(&path, line, false, cx),
+                    (Some(ix), None) => self.select_file(ix, cx),
+                    // The working tree's, as the agent read it, whatever version Code was at.
+                    (None, _) => {
+                        self.file_jump = line.map(|line| (path.clone(), line));
+                        self.nav.space = super::spaces::Space::Code;
+                        if self.code.rev.take().is_some() {
+                            self.read_code_files(false, cx);
+                        }
+                        self.open_code_file(path, false, cx);
+                    }
+                }
+            }
+            Place::Commit { id } => self.go_to(crate::links::Target::Commit(id), cx),
+            Place::Request { iid, note, draft } => {
+                let line = None;
+                self.go_to(crate::links::Target::Request { iid, note, line }, cx);
+                if let Some(id) = draft {
+                    self.spot = Some(Spot::Drafts(vec![id]));
+                    if self.request_loaded(iid) && !self.requests.reading {
+                        self.resolve_spot(true, cx);
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// An orange dot on `item`'s row saying `what`, until the row is opened (#160); none on the
+    /// page on screen.
+    pub(super) fn call_reviewer(&mut self, item: Item, what: String) {
+        if !self.is_shown(&item) {
+            self.agent_calls.insert(item, what);
+        }
     }
 
     /// The branch a drafted request is for: here, else as origin has it.
@@ -182,6 +268,20 @@ impl Workspace {
     /// The card Open asked for, when its branch's page is in (`select_branch`); another page
     /// shown meanwhile lets it go.
     pub(super) fn open_waiting_draft(&mut self, cx: &mut Context<Self>) {
+        // A draft whose card has not opened yet opens with its branch, however the branch was
+        // opened: from its row, a link, the toast (#159).
+        if self.newreq.is_none()
+            && self.branch_task.is_none()
+            && let Some(ix) = self.branch
+            && let Some(branch) = self.branches.get(ix)
+            && self.drafts_unseen.contains(match branch.kind {
+                RefKind::Remote => branch.name.split_once('/').map_or("", |(_, n)| n),
+                _ => branch.name.as_str(),
+            })
+        {
+            self.create_waiting = None;
+            return self.open_create(Some(ix), cx);
+        }
         let Some(ix) = self
             .create_waiting
             .as_deref()

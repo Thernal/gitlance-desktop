@@ -6,6 +6,7 @@
 
 mod changes;
 mod requests;
+mod show;
 
 use crate::agents::{self, Answer, Bus, Kind};
 use serde_json::{Value, json};
@@ -200,7 +201,7 @@ fn tools() -> Value {
         },
         {
             "name": "draft_request",
-            "description": "Draft a merge request (a pull request on GitHub) for a branch: a title and a description written from what you did and why, with reviewers and labels if you know them. GitLance opens its New merge request card for that branch, filled in, for the reviewer to check, edit and create. Nothing is created or sent, and nothing is pushed: a branch, or commits, not on origin yet have to be pushed before the request has them.",
+            "description": "Draft a merge request (a pull request on GitHub) for a branch: a title and a description written from what you did and why, with reviewers and labels if you know them. GitLance keeps it with that branch, marked under Branches, and its New merge request card opens filled in when the reviewer opens the branch, to check, edit and create. Nothing is created or sent, and nothing is pushed: a branch, or commits, not on origin yet have to be pushed before the request has them.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -212,6 +213,20 @@ fn tools() -> Value {
                     "labels": {"type": "array", "items": {"type": "string"}, "description": "Optional: labels' names"}
                 },
                 "required": ["title", "description"]
+            }
+        },
+        {
+            "name": "show",
+            "description": "Point the reviewer at one place in GitLance when you say where something is (\"the bug is in nav.rs:785\", \"look at commit a1b2c3d\"): a file and a line (in the diff on screen when that file is in it, else in Code), a commit, or a merge request at one of its comments or pending comments. Nothing on the reviewer's screen moves; a note offers to show it. Changes you made go with open_changes instead. Answers what it pointed at, or why it could not.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "A file of this repository, from its root"},
+                    "line": {"type": "integer", "description": "With path: the line, from 1"},
+                    "commit": {"type": "string", "description": "A commit's id, or a branch or tag for its commit"},
+                    "request": {"type": "integer", "description": "A merge request's number (!123, #123)"},
+                    "comment": {"type": "integer", "description": "With request: a comment's id, of a discussion or a pending comment, as get_request lists them"}
+                }
             }
         },
         {
@@ -258,6 +273,7 @@ fn call(bus: &Bus, exe: &str, name: &str, args: &Value) -> Result<String, String
         "open_changes" => return changes::open_changes(bus, &here, &root, args),
         "annotate_changes" => return changes::annotate_changes(bus, &here, &root, args),
         "draft_request" => return requests::draft_request(bus, &here, &root, args),
+        "show" => return show::show(bus, &here, &root, args),
         _ => {}
     }
     let comments = bus.comments(&root);

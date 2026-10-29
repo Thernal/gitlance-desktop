@@ -904,12 +904,12 @@ fn fold_line(
         )
         .child(div().flex_none().child(format!("{what}:")))
         .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(names.join(", ")),
+            super::hover::cut(
+                gpui::SharedString::from(format!("{what}-names")),
+                names.join(", "),
+            )
+            .flex_1()
+            .font_weight(FontWeight::SEMIBOLD),
         )
         .child(
             div()

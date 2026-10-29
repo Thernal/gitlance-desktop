@@ -401,7 +401,7 @@ impl Workspace {
         };
         let field =
             |id: &'static str, focus: Focus, text: &str, placeholder: &'static str, tall: bool| {
-                let active = self.report_typing() && r.focus == focus;
+                let active = self.has_keyboard(super::typing::Input::Report) && r.focus == focus;
                 div()
                     .id(id)
                     .px(px(10.))
@@ -685,7 +685,13 @@ impl Workspace {
                             .text_color(theme::faint())
                             .child(s.id.clone()),
                     )
-                    .child(div().flex_1().min_w_0().truncate().child(s.title.clone()))
+                    .child(
+                        super::hover::cut(
+                            gpui::SharedString::from(format!("report-title-{}", s.id)),
+                            s.title.clone(),
+                        )
+                        .flex_1(),
+                    )
                     .child(
                         div()
                             .flex_none()

@@ -51,13 +51,18 @@ pub(super) enum Act {
     },
     /// Opens Settings → Merge requests, where the way in to a host changes (#156).
     Connected,
+    /// Goes to the place `agent` pointed at (#154).
+    Point {
+        place: crate::agents::Place,
+        agent: String,
+    },
 }
 
 impl Act {
     fn label(&self) -> &'static str {
         match self {
             Act::Review { .. } | Act::Gathered { .. } => "Review",
-            Act::Show { .. } | Act::Notes { .. } => "Show",
+            Act::Show { .. } | Act::Notes { .. } | Act::Point { .. } => "Show",
             Act::Drafted { .. } => "Open",
             Act::Connected => "Settings",
         }
@@ -108,7 +113,16 @@ impl Workspace {
             .list
             .retain(|t| t.act.as_ref().is_none_or(|(a, _)| *a != act));
         let count = before + count;
-        self.toast_with(say(count).into(), None, Some((act, count)), true, cx);
+        let text = say(count);
+        // An agent's news goes to the system's notifications too, the newer replacing the older
+        // (#26).
+        if act != Act::Connected {
+            let tag = format!("{act:?}");
+            let open = super::system_notes::Open::Act(act.clone());
+            let project = self.tab_title();
+            self.notify_system(tag, text.clone(), project, open, cx);
+        }
+        self.toast_with(text.into(), None, Some((act, count)), true, cx);
         cx.notify();
     }
 
@@ -214,6 +228,12 @@ impl Workspace {
             return;
         };
         self.dismiss(id, cx);
+        self.do_toast_act(act, cx);
+    }
+
+    /// What a toast's button says to do, done: pressed, or its system notification clicked
+    /// (#26).
+    pub(super) fn do_toast_act(&mut self, act: Act, cx: &mut Context<Self>) {
         match act {
             Act::Review { iid, agent } => self.review_agent(iid, &agent, cx),
             Act::Gathered { iid, .. } => self.review_gathered(iid, cx),
@@ -221,6 +241,7 @@ impl Workspace {
             Act::Notes { page, unstaged, .. } => self.show_agent_notes(page, unstaged, cx),
             Act::Drafted { source, .. } => self.open_agent_draft(source, cx),
             Act::Connected => self.open_requests_settings(cx),
+            Act::Point { place, .. } => self.show_place(place, cx),
         }
     }
 

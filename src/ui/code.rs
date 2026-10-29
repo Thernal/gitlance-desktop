@@ -3,6 +3,7 @@
 //! HEAD or a branch picked on the tree's chip. A plain folder, not a git repository, has only
 //! this space, its files as they are on disk.
 
+use super::hover::CutInTip;
 use super::menu::{Act, Entry};
 use super::nav::Page;
 use super::spaces::Space;
@@ -462,13 +463,10 @@ impl Workspace {
                     .gap(px(8.))
                     .text_size(px(11.))
                     .child(
-                        div()
+                        super::hover::cut("code-project", project)
                             .flex_1()
-                            .min_w_0()
-                            .truncate()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(theme::muted())
-                            .child(project),
+                            .text_color(theme::muted()),
                     )
                     .child(
                         div()
@@ -574,7 +572,7 @@ impl Workspace {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
+                    .cut_in_tip()
                     .when(preview, |s| s.italic())
                     .child(row.name.clone()),
             )
@@ -709,7 +707,7 @@ impl Workspace {
                         .text_color(theme::faint())
                         .child(kind),
                 )
-                .child(div().flex_1().min_w_0().truncate().child(name))
+                .child(super::hover::cut("name", name).flex_1())
                 .child(
                     div()
                         .flex_none()
@@ -1007,7 +1005,7 @@ impl Workspace {
                 } else {
                     icons::file_icon(&to, 16.)
                 })
-                .child(div().flex_1().min_w_0().truncate().child(name))
+                .child(super::hover::cut("name", name).flex_1())
                 .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                     if folder {
                         this.open_folder_page(to.clone(), cx)

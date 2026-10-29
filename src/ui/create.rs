@@ -11,6 +11,7 @@
 //! pushed first.
 
 use super::input::{self, Edit};
+use super::typing::{self, Input};
 use super::{ROW_RADIUS, Workspace, chip, markdown, plural, px, theme};
 use crate::codeowners;
 use crate::git::{RefKind, Repo};
@@ -20,6 +21,8 @@ use gpui::{AnyElement, ClickEvent, Context, FontWeight, KeyDownEvent, div, prelu
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Focus {
+    /// From: another branch can be picked (#159).
+    Source,
     Target,
     Title,
     Description,
@@ -65,8 +68,10 @@ pub struct NewRequest {
     delete_branch: bool,
     squash: bool,
     focus: Focus,
-    /// The target list's cursor while Into has the keyboard.
+    /// The cursor of From's or Into's list while that field has the keyboard.
     target_at: usize,
+    /// That list's scroll, so the cursor stays in sight.
+    list_scroll: gpui::ScrollHandle,
     /// The request that already exists for this pair.
     existing: Option<u64>,
     commits: usize,
@@ -80,6 +85,11 @@ pub struct NewRequest {
     quick: bool,
     error: Option<String>,
     posting: bool,
+}
+
+/// The quick way is open: its own esc leaves it.
+fn n_quick(n: &Option<NewRequest>) -> bool {
+    n.as_ref().is_some_and(|n| n.quick)
 }
 
 /// `text` cut in the middle to `n` characters: long branch names keep both ends.
@@ -173,6 +183,7 @@ impl Workspace {
             b.kind == RefKind::Remote && b.name.split_once('/').is_some_and(|(_, n)| n == source)
         });
         // An agent's draft for this branch (#152) is what the form starts from.
+        self.drafts_unseen.remove(&source);
         let drafted = self
             .agent_requests
             .iter()
@@ -224,6 +235,7 @@ impl Workspace {
             squash: false,
             focus: Focus::Title,
             target_at: 0,
+            list_scroll: gpui::ScrollHandle::new(),
             existing: None,
             commits: 0,
             reviewers: Vec::new(),
@@ -233,6 +245,7 @@ impl Workspace {
             error: None,
             posting: false,
         });
+        self.take_keyboard(Input::NewRequest);
         self.refresh_create(cx);
         // The description: the target's template, else the one commit's message body.
         let target_tip = self
@@ -321,6 +334,8 @@ impl Workspace {
 
     /// Templates ▾: the description becomes template `ix`.
     fn use_template(&mut self, ix: usize, cx: &mut Context<Self>) {
+        // Chosen from a list over the form: the form has the keyboard again.
+        self.take_keyboard(Input::NewRequest);
         if let Some(n) = self.newreq.as_mut()
             && let Some((name, text)) = n.templates.get(ix).cloned()
         {
@@ -462,31 +477,51 @@ impl Workspace {
         }
     }
 
-    /// The branches Into offers for what is typed: on origin first (the default first), then
-    /// those only on this Mac. Each with whether it is only local.
-    fn target_choices(&self) -> Vec<(String, bool)> {
+    /// The branches From (`source`) or Into offers for what is typed, the other side left out.
+    /// Into: on origin first (the default first), then those only on this Mac; From: those here
+    /// first, then those only on origin. Each with whether it is only local.
+    fn branch_choices(&self, source: bool) -> Vec<(String, bool)> {
         let Some(n) = self.newreq.as_ref() else {
             return Vec::new();
         };
-        let typed = n.target.to_lowercase();
+        let (typed, other) = if source {
+            (&n.source, &n.target)
+        } else {
+            (&n.target, &n.source)
+        };
+        let typed = typed.to_lowercase();
         let mut remote: Vec<String> = self
             .branches
             .iter()
             .filter(|b| b.kind == RefKind::Remote)
             .filter_map(|b| b.name.split_once('/').map(|(_, s)| s.to_owned()))
-            .filter(|s| s != "HEAD" && *s != n.source)
+            .filter(|s| s != "HEAD" && s != other)
             .collect();
         remote.sort_by_key(|s| (!["main", "master"].contains(&s.as_str()), s.clone()));
         remote.dedup();
-        let local: Vec<String> = self
+        let here = self
             .branches
             .iter()
-            .filter(|b| b.kind == RefKind::Local && b.name != n.source)
-            .filter(|b| !remote.contains(&b.name))
-            .map(|b| b.name.clone())
-            .collect();
-        let mut all: Vec<(String, bool)> = remote.into_iter().map(|s| (s, false)).collect();
-        all.extend(local.into_iter().map(|s| (s, true)));
+            .filter(|b| b.kind == RefKind::Local && &b.name != other);
+        let mut all: Vec<(String, bool)> = if source {
+            let mut all: Vec<(String, bool)> = here
+                .map(|b| (b.name.clone(), !remote.contains(&b.name)))
+                .collect();
+            let only_origin: Vec<String> = remote
+                .into_iter()
+                .filter(|s| !all.iter().any(|(h, _)| h == s))
+                .collect();
+            all.extend(only_origin.into_iter().map(|s| (s, false)));
+            all
+        } else {
+            let local: Vec<String> = here
+                .filter(|b| !remote.contains(&b.name))
+                .map(|b| b.name.clone())
+                .collect();
+            let mut all: Vec<(String, bool)> = remote.into_iter().map(|s| (s, false)).collect();
+            all.extend(local.into_iter().map(|s| (s, true)));
+            all
+        };
         // An exact match is the choice already made: everything is offered again.
         if all.iter().any(|(s, _)| s.to_lowercase() == typed) {
             return all;
@@ -514,7 +549,55 @@ impl Workspace {
         }
     }
 
+    /// From's list picked: the request is made from that branch, what is written kept (#159).
+    fn pick_source(&mut self, name: String, cx: &mut Context<Self>) {
+        // Chosen from a list over the form: the form has the keyboard again.
+        self.take_keyboard(Input::NewRequest);
+        let on_origin = self.remote_tip(&name).is_some();
+        if let Some(n) = self.newreq.as_mut() {
+            n.source = name;
+            n.local_only = !on_origin;
+            n.focus = Focus::Target;
+            n.target_at = 0;
+            n.error = None;
+        }
+        self.reset_field_edit();
+        self.refresh_create(cx);
+        cx.notify();
+    }
+
+    /// The list open under From or Into: whether it is From's.
+    fn branch_list(&self) -> Option<bool> {
+        match self.newreq.as_ref()?.focus {
+            Focus::Source => Some(true),
+            Focus::Target => Some(false),
+            _ => None,
+        }
+    }
+
+    /// ↑ ↓ on From's or Into's list (#159): they come as the commit keys while the field has no
+    /// caret, so the zones hand them here.
+    pub(super) fn step_branch_list(&mut self, down: bool, cx: &mut Context<Self>) -> bool {
+        let Some(source) = self.branch_list() else {
+            return false;
+        };
+        let count = self.branch_choices(source).len();
+        let Some(n) = self.newreq.as_mut() else {
+            return false;
+        };
+        n.target_at = if down {
+            (n.target_at + 1).min(count.saturating_sub(1))
+        } else {
+            n.target_at.saturating_sub(1)
+        };
+        n.list_scroll.scroll_to_item(n.target_at);
+        cx.notify();
+        true
+    }
+
     fn pick_target(&mut self, name: String, cx: &mut Context<Self>) {
+        // Chosen from a list over the form: the form has the keyboard again.
+        self.take_keyboard(Input::NewRequest);
         if let Some(n) = self.newreq.as_mut() {
             n.target = name;
             n.focus = Focus::Title;
@@ -587,25 +670,26 @@ impl Workspace {
             n.preview = !n.preview;
             return cx.notify();
         }
-        // Into's list: ↑ ↓ walk it, ↵ chooses.
-        if n.focus == Focus::Target {
-            let choices = self.target_choices();
-            let Some(n) = self.newreq.as_mut() else {
-                return;
-            };
+        // From's or Into's list: ↵ chooses (↑ ↓ come through `step_branch_list`); esc closes
+        // the list, not the card.
+        if let Some(source) = self.branch_list() {
             match key.key.as_str() {
-                "down" => {
-                    n.target_at = (n.target_at + 1).min(choices.len().saturating_sub(1));
-                    return cx.notify();
-                }
-                "up" => {
-                    n.target_at = n.target_at.saturating_sub(1);
-                    return cx.notify();
-                }
                 "enter" => {
-                    if let Some((name, _)) = choices.get(n.target_at).cloned() {
-                        return self.pick_target(name, cx);
+                    let at = self.newreq.as_ref().map_or(0, |n| n.target_at);
+                    if let Some((name, _)) = self.branch_choices(source).get(at).cloned() {
+                        return if source {
+                            self.pick_source(name, cx)
+                        } else {
+                            self.pick_target(name, cx)
+                        };
                     }
+                }
+                "escape" if !n_quick(&self.newreq) => {
+                    if let Some(n) = self.newreq.as_mut() {
+                        n.focus = Focus::Title;
+                    }
+                    self.reset_field_edit();
+                    return cx.notify();
                 }
                 _ => {}
             }
@@ -618,9 +702,10 @@ impl Workspace {
         };
         if key.key == "tab" {
             n.focus = match (n.focus, key.modifiers.shift) {
+                (Focus::Source, false) | (Focus::Title, true) => Focus::Target,
                 (Focus::Target, false) | (Focus::Description, true) => Focus::Title,
-                (Focus::Title, false) | (Focus::Target, true) => Focus::Description,
-                (Focus::Description, false) | (Focus::Title, true) => Focus::Target,
+                (Focus::Title, false) | (Focus::Source, true) => Focus::Description,
+                (Focus::Description, false) | (Focus::Target, true) => Focus::Source,
             };
             self.reset_field_edit();
             return cx.notify();
@@ -632,6 +717,7 @@ impl Workspace {
             return cx.notify();
         }
         let text = match n.focus {
+            Focus::Source => &mut n.source,
             Focus::Target => &mut n.target,
             Focus::Title => &mut n.title,
             Focus::Description => &mut n.description,
@@ -650,8 +736,9 @@ impl Workspace {
             }
             Edit::Changed => {
                 n.error = None;
-                if n.focus == Focus::Target {
+                if matches!(n.focus, Focus::Source | Focus::Target) {
                     n.target_at = 0;
+                    n.list_scroll.scroll_to_item(0);
                 }
             }
             Edit::Selected | Edit::Ignored => {}
@@ -766,13 +853,14 @@ impl Workspace {
                                 .child(super::words::say("New merge request").into_owned()),
                         )
                         .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .font_family(theme::CODE_FONT)
-                                .text_size(px(12.))
-                                .text_color(theme::muted())
-                                .child(format!("{} → {}", mid(&n.source, 52), n.target)),
+                            super::hover::shortened(
+                                "create-branches",
+                                format!("{} → {}", mid(&n.source, 52), n.target),
+                                format!("{} → {}", n.source, n.target),
+                            )
+                            .font_family(theme::CODE_FONT)
+                            .text_size(px(12.))
+                            .text_color(theme::muted()),
                         ),
                 )
                 .children(self.render_create_totals())
@@ -943,6 +1031,8 @@ impl Workspace {
             .id(id)
             .max_h(px(240.))
             .overflow_y_scroll()
+            // The wheel stays with the list, not the form around it (#159).
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
             .p(px(4.))
             .rounded(px(ROW_RADIUS))
             .border_1()
@@ -977,7 +1067,7 @@ impl Workspace {
                                     .rounded_full()
                                     .bg(gpui::rgb(c))
                             }))
-                            .child(div().flex_1().min_w_0().truncate().child(label))
+                            .child(super::hover::cut("label", label).flex_1())
                             .children(end.map(|e| {
                                 div()
                                     .flex_none()
@@ -1152,7 +1242,9 @@ impl Workspace {
             .milestone
             .and_then(|id| n.milestones.iter().find(|m| m.id == id))
         {
-            Some(m) => div().truncate().child(m.title.clone()).into_any_element(),
+            Some(m) => {
+                super::hover::cut("create-milestone-title", m.title.clone()).into_any_element()
+            }
             None if !n.lists_read => reading("create-milestone-loading"),
             None => faint(if n.milestones.is_empty() {
                 "No open milestones"
@@ -1201,13 +1293,119 @@ impl Workspace {
     }
 
     /// The form, in place of the diff.
+    /// From's (`source`) or Into's list while its field has the keyboard: hung under the field,
+    /// over the form, as wide as the field (#159).
+    fn render_branch_list(
+        &self,
+        n: &NewRequest,
+        source: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if self.branch_list() != Some(source) {
+            return None;
+        }
+        let choices = self.branch_choices(source);
+        if choices.is_empty() {
+            return None;
+        }
+        let width = self
+            .widths
+            .width(if source {
+                "create-source"
+            } else {
+                "create-target"
+            })
+            .max(260.);
+        let id = if source {
+            "create-sources"
+        } else {
+            "create-targets"
+        };
+        let list = div()
+            .id(id)
+            .w(px(width))
+            .max_h(px(260.))
+            .overflow_y_scroll()
+            .track_scroll(&n.list_scroll)
+            // The wheel stays with the list, not the form under it.
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .p(px(4.))
+            .rounded(px(ROW_RADIUS))
+            .border_1()
+            .border_color(theme::island_border())
+            .bg(theme::panel())
+            .shadow_lg()
+            .text_size(px(13.))
+            .children(choices.into_iter().enumerate().map(|(i, (name, local))| {
+                let pick = name.clone();
+                let default = !source && ["main", "master"].contains(&name.as_str());
+                div()
+                    .id((id, i))
+                    .px(px(8.))
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .rounded(px(ROW_RADIUS))
+                    .cursor_pointer()
+                    .when(i == n.target_at, |s| s.bg(theme::selected()))
+                    .hover(|s| s.bg(theme::hover()))
+                    .child(
+                        super::hover::mid(("create-target-name", i), &name, 48)
+                            .flex_1()
+                            .font_family(theme::CODE_FONT),
+                    )
+                    .children(default.then(|| {
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme::faint())
+                            .child("default")
+                    }))
+                    .children(local.then(|| {
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme::faint())
+                            .child("not on origin")
+                    }))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if source {
+                            this.pick_source(pick.clone(), cx)
+                        } else {
+                            this.pick_target(pick.clone(), cx)
+                        }
+                    }))
+            }));
+        Some(
+            div()
+                .absolute()
+                .left_0()
+                .bottom_0()
+                .size_0()
+                .child(
+                    gpui::deferred(
+                        gpui::anchored()
+                            .offset(gpui::point(px(0.), px(4.)))
+                            .snap_to_window_with_margin(px(8.))
+                            .child(list),
+                    )
+                    .with_priority(1),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn render_create_form(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let n = self.newreq.as_ref()?;
+        // The fields show their caret only while the form has the keyboard (#168).
+        let typing = self.has_keyboard(Input::NewRequest);
         let github = self.web.as_ref().is_some_and(|w| w.github);
         // Built first: they need the context to themselves.
         let template_menu =
             (n.menu == Some(Menu::Templates)).then(|| self.render_template_menu(n, cx));
         let labels_row = self.render_labels_row(n, cx);
+        // From's and Into's lists, each under its field while it has the keyboard (#159).
+        let source_list = self.render_branch_list(n, true, cx);
+        let target_list = self.render_branch_list(n, false, cx);
         let completion = (n.focus == Focus::Description && !n.preview)
             .then(|| self.field_completion(&n.description))
             .flatten()
@@ -1220,7 +1418,7 @@ impl Workspace {
                 .child(text.to_uppercase())
         };
         let boxed = |id: &'static str, focus: Option<Focus>, body: AnyElement| {
-            let on = focus.is_some_and(|f| n.focus == f);
+            let on = typing && focus.is_some_and(|f| n.focus == f);
             div()
                 .id(id)
                 .px_2()
@@ -1295,61 +1493,6 @@ impl Workspace {
                 )
             })
         };
-        // Into's list, under the field while it has the keyboard.
-        let choices = if n.focus == Focus::Target {
-            self.target_choices()
-        } else {
-            Vec::new()
-        };
-        let list = (!choices.is_empty()).then(|| {
-            div()
-                .id("create-targets")
-                .max_h(px(220.))
-                .overflow_y_scroll()
-                .p(px(4.))
-                .rounded(px(ROW_RADIUS))
-                .border_1()
-                .border_color(theme::island_border())
-                .bg(theme::panel())
-                .children(choices.into_iter().enumerate().map(|(i, (name, local))| {
-                    let pick = name.clone();
-                    let default = ["main", "master"].contains(&name.as_str());
-                    div()
-                        .id(("create-target", i))
-                        .px(px(8.))
-                        .h(px(26.))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .rounded(px(ROW_RADIUS))
-                        .cursor_pointer()
-                        .when(i == n.target_at, |s| s.bg(theme::selected()))
-                        .hover(|s| s.bg(theme::hover()))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .font_family(theme::CODE_FONT)
-                                .child(mid(&name, 48)),
-                        )
-                        .children(default.then(|| {
-                            div()
-                                .text_size(px(11.))
-                                .text_color(theme::faint())
-                                .child("default")
-                        }))
-                        .children(local.then(|| {
-                            div()
-                                .text_size(px(11.))
-                                .text_color(theme::faint())
-                                .child("not on origin")
-                        }))
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.pick_target(pick.clone(), cx)
-                        }))
-                }))
-        });
         let suggested = n.suggested.clone();
         let mut people: Vec<String> = n.reviewers.clone();
         for s in &suggested {
@@ -1431,7 +1574,7 @@ impl Workspace {
                 .items_start()
                 .child(self.field_look(
                     &n.description,
-                    n.focus == Focus::Description,
+                    typing && n.focus == Focus::Description,
                     "What it changes and why",
                     input::Look {
                         wrap: true,
@@ -1449,212 +1592,231 @@ impl Workspace {
                 cx.notify();
             })
         };
-        Some(
-            div()
-                .id("create-form")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .px(px(16.))
-                .py(px(14.))
-                .flex()
-                .flex_col()
-                .gap_3()
-                .max_w(px(920.))
-                .text_size(px(13.))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div().flex_1().min_w_0().child(boxed(
+        let form = div()
+            .id("create-form")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(16.))
+            .py(px(14.))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .max_w(px(920.))
+            .text_size(px(13.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .child(self.widths.measure("create-source"))
+                            .child(boxed(
                                 "create-source",
-                                None,
-                                div()
-                                    .truncate()
-                                    .font_family(theme::CODE_FONT)
-                                    .child(mid(&n.source, 36))
-                                    .into_any_element(),
-                            )),
-                        )
-                        .child(div().text_color(theme::faint()).child("→"))
-                        .child(
-                            div().flex_1().min_w_0().child(boxed(
+                                Some(Focus::Source),
+                                // Typed, it scrolls with the caret; shown, its whole in a
+                                // long hover.
+                                if n.focus == Focus::Source {
+                                    div()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .font_family(theme::CODE_FONT)
+                                        .child(self.field_text(&n.source, typing, "branch", cx))
+                                        .into_any_element()
+                                } else {
+                                    super::hover::mid("create-source-name", &n.source, 36)
+                                        .font_family(theme::CODE_FONT)
+                                        .into_any_element()
+                                },
+                            ))
+                            .children(source_list),
+                    )
+                    .child(div().text_color(theme::faint()).child("→"))
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .child(self.widths.measure("create-target"))
+                            .child(boxed(
                                 "create-target-field",
                                 Some(Focus::Target),
                                 div()
                                     .font_family(theme::CODE_FONT)
                                     .child(self.field_text(
                                         &n.target,
-                                        n.focus == Focus::Target,
+                                        typing && n.focus == Focus::Target,
                                         "main",
                                         cx,
                                     ))
                                     .into_any_element(),
-                            )),
-                        )
-                        .child(self.render_merge_state(n)),
-                )
-                .children(list)
-                .children(note.map(|(text, warn)| {
-                    div()
-                        .px_2()
-                        .py(px(5.))
-                        .rounded(px(ROW_RADIUS))
-                        .border_1()
-                        .border_color(if warn {
-                            theme::warning()
-                        } else {
-                            theme::island_border()
-                        })
-                        .text_size(px(12.))
-                        .text_color(if warn {
-                            theme::warning()
-                        } else {
-                            theme::muted()
-                        })
-                        .child(text)
-                }))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.))
-                        .child(label("Title"))
-                        .child(boxed(
-                            "create-title",
-                            Some(Focus::Title),
-                            self.field_look(
-                                &n.title,
-                                n.focus == Focus::Title,
-                                "Title",
-                                input::Look {
-                                    wrap: true,
-                                    ..Default::default()
-                                },
-                                cx.entity().downgrade(),
-                            )
-                            .into_any_element(),
-                        )),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(div().flex_1().child(label("Description")))
-                                .child(
-                                    super::diff_view::group()
-                                        .child(
-                                            chip("create-write", "Write", !n.preview)
-                                                .on_click(set_preview(false)),
-                                        )
-                                        .child(
-                                            chip("create-preview", "Preview", n.preview)
-                                                .on_click(set_preview(true)),
-                                        ),
-                                )
-                                .children(n.started_from.clone().map(|from| {
-                                    div()
-                                        .px(px(8.))
-                                        .h(px(22.))
-                                        .flex()
-                                        .items_center()
-                                        .rounded_full()
-                                        .bg(theme::info_bg())
-                                        .text_size(px(11.))
-                                        .text_color(theme::muted())
-                                        .child(from)
-                                }))
-                                .children((n.templates.len() > 1).then(|| {
-                                    chip(
-                                        "create-templates",
-                                        "Templates ▾",
-                                        n.menu == Some(Menu::Templates),
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _: &ClickEvent, _, cx| {
-                                            this.toggle_create_menu(Menu::Templates, cx)
-                                        },
-                                    ))
-                                })),
-                        )
-                        .children(template_menu)
-                        .child(boxed(
-                            "create-description",
-                            Some(Focus::Description),
-                            description,
-                        ))
-                        .children(completion),
-                )
-                .child(reviewers)
-                .child(labels_row)
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_x(px(20.))
-                        .gap_y(px(8.))
-                        .text_color(theme::muted())
-                        .child(
-                            check("create-draft", n.draft, "Draft  ⌘D").on_click(cx.listener(
-                                |this, _: &ClickEvent, _, cx| {
-                                    if let Some(n) = this.newreq.as_mut() {
-                                        n.draft = !n.draft;
-                                    }
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        .child(
-                            check(
-                                "create-delete",
-                                n.delete_branch,
-                                "Delete the branch after merge",
-                            )
-                            .on_click(cx.listener(
-                                |this, _: &ClickEvent, _, cx| {
-                                    if let Some(n) = this.newreq.as_mut() {
-                                        n.delete_branch = !n.delete_branch;
-                                    }
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        // GitHub squashes when merging, not when opening.
-                        .children((!github).then(|| {
-                            check("create-squash", n.squash, "Squash").on_click(cx.listener(
-                                |this, _: &ClickEvent, _, cx| {
-                                    if let Some(n) = this.newreq.as_mut() {
-                                        n.squash = !n.squash;
-                                    }
-                                    cx.notify();
-                                },
                             ))
-                        })),
-                )
-                .children(n.error.clone().map(|e| {
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme::removed())
-                        .child(e)
-                }))
-                .into_any_element(),
-        )
+                            .children(target_list),
+                    )
+                    .child(self.render_merge_state(n)),
+            )
+            .children(note.map(|(text, warn)| {
+                div()
+                    .px_2()
+                    .py(px(5.))
+                    .rounded(px(ROW_RADIUS))
+                    .border_1()
+                    .border_color(if warn {
+                        theme::warning()
+                    } else {
+                        theme::island_border()
+                    })
+                    .text_size(px(12.))
+                    .text_color(if warn {
+                        theme::warning()
+                    } else {
+                        theme::muted()
+                    })
+                    .child(text)
+            }))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(label("Title"))
+                    .child(boxed(
+                        "create-title",
+                        Some(Focus::Title),
+                        self.field_look(
+                            &n.title,
+                            typing && n.focus == Focus::Title,
+                            "Title",
+                            input::Look {
+                                wrap: true,
+                                ..Default::default()
+                            },
+                            cx.entity().downgrade(),
+                        )
+                        .into_any_element(),
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().flex_1().child(label("Description")))
+                            .child(
+                                super::diff_view::group()
+                                    .child(
+                                        chip("create-write", "Write", !n.preview)
+                                            .on_click(set_preview(false)),
+                                    )
+                                    .child(
+                                        chip("create-preview", "Preview", n.preview)
+                                            .on_click(set_preview(true)),
+                                    ),
+                            )
+                            .children(n.started_from.clone().map(|from| {
+                                div()
+                                    .px(px(8.))
+                                    .h(px(22.))
+                                    .flex()
+                                    .items_center()
+                                    .rounded_full()
+                                    .bg(theme::info_bg())
+                                    .text_size(px(11.))
+                                    .text_color(theme::muted())
+                                    .child(from)
+                            }))
+                            .children((n.templates.len() > 1).then(|| {
+                                chip(
+                                    "create-templates",
+                                    "Templates ▾",
+                                    n.menu == Some(Menu::Templates),
+                                )
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, _, cx| {
+                                        this.toggle_create_menu(Menu::Templates, cx)
+                                    },
+                                ))
+                            })),
+                    )
+                    .children(template_menu)
+                    .child(boxed(
+                        "create-description",
+                        Some(Focus::Description),
+                        description,
+                    ))
+                    .children(completion),
+            )
+            .child(reviewers)
+            .child(labels_row)
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_x(px(20.))
+                    .gap_y(px(8.))
+                    .text_color(theme::muted())
+                    .child(
+                        check("create-draft", n.draft, "Draft  ⌘D").on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                if let Some(n) = this.newreq.as_mut() {
+                                    n.draft = !n.draft;
+                                }
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        check(
+                            "create-delete",
+                            n.delete_branch,
+                            "Delete the branch after merge",
+                        )
+                        .on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                if let Some(n) = this.newreq.as_mut() {
+                                    n.delete_branch = !n.delete_branch;
+                                }
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    // GitHub squashes when merging, not when opening.
+                    .children((!github).then(|| {
+                        check("create-squash", n.squash, "Squash").on_click(cx.listener(
+                            |this, _: &ClickEvent, _, cx| {
+                                if let Some(n) = this.newreq.as_mut() {
+                                    n.squash = !n.squash;
+                                }
+                                cx.notify();
+                            },
+                        ))
+                    })),
+            )
+            .children(n.error.clone().map(|e| {
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme::removed())
+                    .child(e)
+            }));
+        Some(typing::input_box(form, Input::NewRequest, cx).into_any_element())
     }
 
     /// The quick way (D): a card over the branch view asking one thing at a time.
     pub(super) fn render_create_quick(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let n = self.newreq.as_ref().filter(|n| n.quick)?;
         let steps = ["Into", "Title", "Description", "Create"];
+        // The quick way asks Into only; From is the branch it was opened on.
         let at = match n.focus {
-            Focus::Target => 0,
+            Focus::Source | Focus::Target => 0,
             Focus::Title => 1,
             Focus::Description => 2,
         };
@@ -1681,7 +1843,7 @@ impl Workspace {
             }),
         );
         let (field, ask): (AnyElement, &str) = match n.focus {
-            Focus::Target => (
+            Focus::Source | Focus::Target => (
                 div()
                     .font_family(theme::CODE_FONT)
                     .child(self.field_text(&n.target, true, "main", cx))
@@ -1736,13 +1898,15 @@ impl Workspace {
                     .child(ask),
             );
         let body: Option<AnyElement> = match n.focus {
-            Focus::Target => {
-                let choices = self.target_choices();
+            Focus::Source | Focus::Target => {
+                let choices = self.branch_choices(false);
                 Some(
                     div()
                         .id("quick-targets")
                         .max_h(px(260.))
                         .overflow_y_scroll()
+                        .track_scroll(&n.list_scroll)
+                        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                         .p(px(4.))
                         .children(choices.into_iter().enumerate().map(|(i, (name, local))| {
                             let pick = name.clone();
@@ -1759,12 +1923,9 @@ impl Workspace {
                                 .when(i == n.target_at, |s| s.bg(theme::selected()))
                                 .hover(|s| s.bg(theme::hover()))
                                 .child(
-                                    div()
+                                    super::hover::mid(("quick-target-name", i), &name, 56)
                                         .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .font_family(theme::CODE_FONT)
-                                        .child(mid(&name, 56)),
+                                        .font_family(theme::CODE_FONT),
                                 )
                                 .children(default.then(|| {
                                     div()
@@ -1801,12 +1962,13 @@ impl Workspace {
                             .text_size(px(12.))
                             .text_color(theme::muted())
                             .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_family(theme::CODE_FONT)
-                                    .child(format!("{} → {}", mid(&n.source, 44), n.target)),
+                                super::hover::shortened(
+                                    "quick-branches",
+                                    format!("{} → {}", mid(&n.source, 44), n.target),
+                                    format!("{} → {}", n.source, n.target),
+                                )
+                                .flex_1()
+                                .font_family(theme::CODE_FONT),
                             )
                             .children(self.render_create_totals()),
                     )
@@ -1900,10 +2062,17 @@ impl Workspace {
             .border_color(theme::island_border())
             .text_size(px(12.))
             .text_color(theme::muted())
-            .child(div().flex_1().min_w_0().truncate().child(match n.focus {
-                Focus::Target => format!("From {}", mid(&n.source, 34)),
-                _ => "⇥ reviewers, draft, labels…".to_owned(),
-            }))
+            .child(
+                match n.focus {
+                    Focus::Target => super::hover::shortened(
+                        "quick-hint",
+                        format!("From {}", mid(&n.source, 34)),
+                        format!("From {}", n.source),
+                    ),
+                    _ => super::hover::cut("quick-hint", "⇥ reviewers, draft, labels…"),
+                }
+                .flex_1(),
+            )
             .children((n.focus != Focus::Target).then(|| hint("⇧⇥", "back")))
             .children((n.focus != Focus::Description).then(|| hint("↵", "next")))
             .child(hint("⌘↵", "create"))

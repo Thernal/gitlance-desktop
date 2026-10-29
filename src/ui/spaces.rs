@@ -6,6 +6,7 @@
 //! (D2); Settings is the title bar's gear. Until the spaces get pages of their own (#72, #75), Code
 //! opens search everywhere on Files, Branches and Merge requests the picker beside the menu.
 
+use super::hover::{CutInTip, Hover};
 use super::nav::{Item, Page};
 use super::requests::Scope;
 use super::{Workspace, icons, px, theme};
@@ -167,6 +168,8 @@ struct OpenRow {
     news: bool,
     /// The agent that gathered it (#148): its mark, and how many of its pending comments wait.
     agent: Option<(char, gpui::Rgba, usize)>,
+    /// What an agent put there for the reviewer, not opened since (#160).
+    call: Option<String>,
 }
 
 impl Space {
@@ -230,6 +233,7 @@ impl Workspace {
                     drafts: false,
                     news: false,
                     agent: None,
+                    call: None,
                 }],
                 _ => Vec::new(),
             };
@@ -286,6 +290,7 @@ impl Workspace {
                             drafts,
                             news: self.notices.unread_of(*iid),
                             agent,
+                            call: self.agent_calls.get(&open.item).filter(|_| !on).cloned(),
                         }
                     }
                     // Named as their page is (#149).
@@ -304,6 +309,7 @@ impl Workspace {
                             drafts,
                             news: false,
                             agent: None,
+                            call: self.agent_calls.get(&open.item).filter(|_| !on).cloned(),
                         }
                     }
                     Item::WorkingTree => OpenRow {
@@ -316,6 +322,7 @@ impl Workspace {
                         drafts,
                         news: false,
                         agent: None,
+                        call: self.agent_calls.get(&open.item).filter(|_| !on).cloned(),
                     },
                     Item::Branch(refname) => {
                         let name = self
@@ -333,6 +340,7 @@ impl Workspace {
                             drafts,
                             news: false,
                             agent: None,
+                            call: self.agent_calls.get(&open.item).filter(|_| !on).cloned(),
                         }
                     }
                 }
@@ -423,6 +431,10 @@ impl Workspace {
             let missing = self.missing(space);
             let opens = self.open_rows(space);
             let shut = self.nav.folded[space.ix()];
+            let call = opens
+                .iter()
+                .filter(|_| shut)
+                .find_map(|o| o.call.as_ref().map(|what| format!("{}: {what}", o.label)));
             // The space's row is marked when none of what is open under it is the page — at its
             // root, or with them folded away.
             let within = here == Some(space);
@@ -514,7 +526,7 @@ impl Workspace {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .truncate()
+                            .cut_in_tip()
                             .child(super::words::say(label).into_owned()),
                         (id, 1usize),
                         !folded,
@@ -522,6 +534,16 @@ impl Workspace {
                         super::motion::FAST,
                         |label, v| label.opacity(v),
                     ))
+                    // What an agent put under it, folded away: the dot on the space (#160).
+                    .children(call.filter(|_| !folded).map(|what| {
+                        div()
+                            .id((id, 7usize))
+                            .flex_none()
+                            .size(px(7.))
+                            .rounded_full()
+                            .bg(theme::warning())
+                            .tip(what)
+                    }))
                     // The count is the badge's once the menu folds.
                     .children(n.filter(|_| !folded).map(|n| {
                         div()
@@ -617,6 +639,7 @@ impl Workspace {
                         .is_some_and(|i| self.nav.picked.contains(i));
                     let item = open.item.clone();
                     let close = item.clone();
+                    let menu_item = item.clone();
                     let dot = |color: gpui::Rgba, tip: &'static str| {
                         div()
                             .id(SharedString::from(format!("{id}-dot-{n}-{tip}")))
@@ -670,13 +693,14 @@ impl Workspace {
                                 .text_color(theme::faint())
                                 .into_any_element(),
                         })
+                        // The row's long hover holds the whole of it.
                         .child(
-                            super::hover::cut(
-                                SharedString::from(format!("{id}-label-{n}")),
-                                open.label,
-                            )
-                            .flex_1()
-                            .when(open.mono, |s| s.font_family(theme::CODE_FONT)),
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .cut_in_tip()
+                                .when(open.mono, |s| s.font_family(theme::CODE_FONT))
+                                .child(open.label),
                         )
                         .children(open.agent.map(|(letter, hue, waiting)| {
                             div()
@@ -697,6 +721,15 @@ impl Workspace {
                                             .child(waiting.to_string()),
                                     )
                                 })
+                        }))
+                        .children(open.call.map(|what| {
+                            div()
+                                .id(SharedString::from(format!("{id}-call-{n}")))
+                                .flex_none()
+                                .size(px(7.))
+                                .rounded_full()
+                                .bg(theme::warning())
+                                .tip(what)
                         }))
                         .children(open.drafts.then(|| dot(theme::agent(), "Unsent drafts")))
                         .children(open.news.then(|| dot(theme::accent(), "New activity")))
@@ -727,6 +760,15 @@ impl Workspace {
                             let tip: SharedString = open.tip.into();
                             move |_, cx| cx.new(|_| super::TipOwned(tip.clone())).into()
                         })
+                        // Its link, and a request's number (#162).
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                                if let Some(item) = &menu_item {
+                                    this.item_context(item, e.position, cx)
+                                }
+                            }),
+                        )
                         // Shift picks a run of them to close together with ⌘W.
                         .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| match &item {
                             Some(item) if e.modifiers().shift => this.pick_open(item.clone(), cx),
@@ -819,12 +861,9 @@ impl Workspace {
                     .child(super::rail::project_mark(&mark, tint, 22.))
                     .when(named, |s| {
                         s.child(super::motion::toward(
-                            div()
+                            super::hover::cut(("menu-project-title", ix), tab.title.clone())
                                 .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(tab.title.clone()),
+                                .font_weight(FontWeight::MEDIUM),
                             ("menu-project-name", ix),
                             !folded,
                             moving,

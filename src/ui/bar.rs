@@ -157,19 +157,7 @@ impl Workspace {
                             }))
                     }))
                     .children(crumbs)
-                    .child(
-                        self.title_hover(
-                            page.as_ref(),
-                            div()
-                                .id("bar-title")
-                                .min_w_0()
-                                .truncate()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme::text())
-                                .when(mono, |s| s.font_family(theme::CODE_FONT))
-                                .child(words::say(&id).into_owned()),
-                        ),
-                    )
+                    .child(self.title_hover(page.as_ref(), words::say(&id).into_owned(), mono))
                     .children(count.map(|n| {
                         div()
                             .flex_none()
@@ -242,9 +230,23 @@ impl Workspace {
 
     /// The page's title with what a long hover on it says (the developer, 2026-10-23: the header
     /// names no author): a request's identity, a commit's or a branch's card, a file's or a
-    /// folder's whole path.
-    fn title_hover(&self, page: Option<&Page>, title: gpui::Stateful<gpui::Div>) -> AnyElement {
-        use super::hover::{CommitCard, Hover};
+    /// folder's whole path. Without one, its own long hover gives the whole title when it is cut.
+    fn title_hover(&self, page: Option<&Page>, text: String, mono: bool) -> AnyElement {
+        use super::hover::{CommitCard, CutInTip, Hover};
+        let style = |title: gpui::Stateful<gpui::Div>| {
+            title
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme::text())
+                .when(mono, |s| s.font_family(theme::CODE_FONT))
+        };
+        let title = style(
+            div()
+                .id("bar-title")
+                .min_w_0()
+                .cut_in_tip()
+                .child(text.clone()),
+        );
+        let plain = || style(super::hover::cut("bar-title", text.clone())).into_any_element();
         let commit = |id: &git2::Oid| {
             self.commits
                 .iter()
@@ -256,13 +258,13 @@ impl Workspace {
                 Page::Request(iid) | Page::RequestCommits(iid, ..) | Page::RequestVersions(iid, ..),
             ) => match self.request_tip(*iid) {
                 Some(tip) => title.tip(tip).into_any_element(),
-                None => title.into_any_element(),
+                None => plain(),
             },
             Some(Page::RequestCommit(_, id) | Page::BranchCommit(_, id)) => match commit(id) {
                 Some(card) => title
                     .card(move |_, cx| CommitCard::show(&card, cx))
                     .into_any_element(),
-                None => title.into_any_element(),
+                None => plain(),
             },
             Some(
                 Page::Branch(refname)
@@ -275,7 +277,7 @@ impl Workspace {
                 .and_then(|ix| self.branch_card(ix))
             {
                 Some(build) => title.card(build).into_any_element(),
-                None => title.into_any_element(),
+                None => plain(),
             },
             Some(Page::File(path)) => {
                 let at = self
@@ -287,7 +289,7 @@ impl Workspace {
                 title.tip(format!("{path}{at}")).into_any_element()
             }
             Some(Page::Folder(path)) => title.tip(format!("{path}/")).into_any_element(),
-            _ => title.into_any_element(),
+            _ => plain(),
         }
     }
 

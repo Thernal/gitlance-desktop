@@ -12,6 +12,9 @@ anyhow = "1"
 imagesize = "0.14"
 # GitLab names a diff line by the SHA-1 of its file's path (already in GPUI's graph).
 sha1_smol = "1"
+# GitHub names a diff's file by the SHA-256 of its path, for a link to it (#162; already in the
+# dependency graph).
+sha2 = "0.10"
 # PNG pictures: a snapshot's, and the window's a report carries (#118; already in GPUI's graph).
 image = { version = "0.25", default-features = false, features = ["png"] }
 # A report's picture goes to the relay as base64 (#118; already in the dependency graph).

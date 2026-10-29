@@ -125,10 +125,13 @@ impl Workspace {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
                     .text_size(px(12.))
                     .text_color(theme::muted())
-                    .children(summary.filter(|_| folded)),
+                    .children(
+                        summary
+                            .filter(|_| folded)
+                            .map(|said| super::hover::cut("summary", said)),
+                    ),
             )
             .children(end)
     }
@@ -233,7 +236,7 @@ impl Workspace {
                         Section::Versions,
                         "Versions".into(),
                         Some(summary),
-                        vec![count(self.versions.len())],
+                        vec![count(self.versions.len().to_string())],
                         true,
                         cx,
                     ))
@@ -294,7 +297,9 @@ impl Workspace {
                     }))
                     .into_any_element(),
             );
-            commit_end.push(count(self.commits.len()));
+            // Older history not read yet: "1000+" (#25).
+            let more = if self.older.is_some() { "+" } else { "" };
+            commit_end.push(count(format!("{}{more}", self.commits.len())));
             if !sections.is_empty() {
                 sections.push(rule().into_any_element());
             }
@@ -324,6 +329,8 @@ impl Workspace {
                     s.children(self.find.text.is_some().then(|| self.render_find(cx)))
                         .children(self.render_pill(cx))
                         .child(if self.find.shown.as_ref().is_some_and(Vec::is_empty) {
+                            // Not found yet: older history is read on (#25).
+                            self.want_older_commits(cx);
                             self.render_no_match().into_any_element()
                         } else if self.commits.is_empty() && self.branch_task.is_some() {
                             // The branch's commits are being read.
@@ -337,6 +344,10 @@ impl Workspace {
                                 "commits",
                                 self.commit_rows(),
                                 cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                                    // Near the end: the next page of history (#25).
+                                    if range.end + 100 >= this.commit_rows() {
+                                        this.want_older_commits(cx);
+                                    }
                                     range
                                         .map(|row| this.render_commit_row(this.commit_at(row), cx))
                                         .collect::<Vec<_>>()
@@ -383,7 +394,7 @@ impl Workspace {
                         .into_any_element(),
                 );
             }
-            end.push(count(diff.files.len()));
+            end.push(count(diff.files.len().to_string()));
             let done = self.all_reviewed();
             if !folded {
                 open_lists += 1;
@@ -448,11 +459,11 @@ fn open_share(section: gpui::Div, id: &'static str, open: bool) -> impl IntoElem
 }
 
 /// A section's count, at the right of its header.
-fn count(n: usize) -> AnyElement {
+fn count(n: String) -> AnyElement {
     div()
         .flex_none()
         .text_size(px(11.))
         .text_color(theme::faint())
-        .child(SharedString::from(n.to_string()))
+        .child(SharedString::from(n))
         .into_any_element()
 }

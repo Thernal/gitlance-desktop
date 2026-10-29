@@ -314,8 +314,8 @@ impl Workspace {
                                     .cursor_pointer()
                                     .hover(|s| s.bg(theme::hover()))
                                     .text_color(theme::muted())
-                                    .truncate()
-                                    .child(path.display().to_string())
+                                    .min_w_0()
+                                    .child(super::hover::cut("path", path.display().to_string()))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.request_open(path.clone(), None, cx)
                                     }))
@@ -328,7 +328,7 @@ impl Workspace {
     fn welcome_card(&self, card: Card, cx: &mut Context<Self>) -> Div {
         let field = |id: &'static str, field: Field, text: &str, placeholder: &'static str| {
             let active = self.field == Some(field);
-            div()
+            let el = div()
                 .id(id)
                 .h(px(32.))
                 .px(px(10.))
@@ -355,7 +355,8 @@ impl Workspace {
                         ..Default::default()
                     },
                     cx.entity().downgrade(),
-                ))
+                ));
+            super::typing::field_box_out(el, field, cx)
         };
         let label = |text: &'static str| {
             div()

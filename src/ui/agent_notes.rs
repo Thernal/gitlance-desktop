@@ -58,6 +58,10 @@ impl Workspace {
             return self.agent_changes(agent, page, unstaged, count, cx);
         }
         let what = super::agent_events::changes_said(&page);
+        if let Some(item) = page.item().filter(|item| self.nav.opened(item).is_some()) {
+            let notes = super::plural(count, "note");
+            self.call_reviewer(item, format!("{agent} left {notes} on it"));
+        }
         let act = Act::Notes {
             page,
             unstaged,
@@ -286,12 +290,9 @@ impl Workspace {
                     .child(notes.agent.clone()),
             )
             .child(
-                div()
+                super::hover::cut("note-hint", "· a note on its change")
                     .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(theme::muted())
-                    .child("· a note on its change"),
+                    .text_color(theme::muted()),
             )
             .child(
                 discussion::icon_button(
@@ -381,12 +382,9 @@ impl Workspace {
                                 .child(format!("{}'s notes", n.agent)),
                         )
                         .child(
-                            div()
+                            super::hover::cut("notes-count", count)
                                 .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(theme::muted())
-                                .child(count),
+                                .text_color(theme::muted()),
                         )
                         .child(
                             discussion::button(

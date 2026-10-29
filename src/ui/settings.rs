@@ -193,6 +193,24 @@ impl Workspace {
             },
         ));
         let update_status = self.render_update_status(cx);
+        let system = switch("system-notifications", s.system_notifications).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                let on = !this.settings.system_notifications;
+                this.change_settings(|this| this.settings.system_notifications = on, cx);
+                // Turned on: the system asks for permission where it has one (macOS), and says
+                // where they will come.
+                if on {
+                    super::system_notes::identify(cx);
+                    cx.show_system_notification(gpui::SystemNotification {
+                        tag: "system-notifications-on".into(),
+                        title: "Notifications are on".into(),
+                        body: "GitLance tells you here what comes while it is in the background."
+                            .into(),
+                        actions: Vec::new(),
+                    });
+                }
+            },
+        ));
 
         // The host's ways in, as a list to pick from (#156, `connecting.rs`).
         let gitlab = self.render_ways_settings(cx);
@@ -286,6 +304,11 @@ impl Workspace {
                     "Open a repository in",
                     "",
                     open_in,
+                ))
+                .child(item(
+                    "System notifications",
+                    "While GitLance is in the background: the Inbox's news, and an agent's.",
+                    system,
                 ))
                 .child(
                     div()
@@ -710,7 +733,10 @@ impl Workspace {
                                 .rounded_full()
                                 .when(e.changed, |s| s.bg(theme::accent())),
                         )
-                        .child(div().truncate().child(e.label)),
+                        .child(super::hover::cut(
+                            gpui::SharedString::from(format!("key-label-{}", e.name)),
+                            e.label,
+                        )),
                 )
                 .child(
                     div()

@@ -580,16 +580,22 @@ impl Workspace {
                     this.clone(),
                 ))
         });
-        let foot =
-            match names.get(at) {
-                Some(name) => div().flex_1().truncate().text_color(theme::muted()).child(
-                    match emoji::get(name) {
-                        Some(_) => format!(":{name}:"),
-                        None => format!(":{name}: — by name, if GitLab has it"),
-                    },
-                ),
-                None => div().flex_1().child("No emoji by that name"),
-            };
+        let foot = match names.get(at) {
+            Some(name) => super::hover::cut(
+                "reaction-name",
+                match emoji::get(name) {
+                    Some(_) => format!(":{name}:"),
+                    None => format!(":{name}: — by name, if GitLab has it"),
+                },
+            )
+            .flex_1()
+            .text_color(theme::muted())
+            .into_any_element(),
+            None => div()
+                .flex_1()
+                .child("No emoji by that name")
+                .into_any_element(),
+        };
         let foot = div()
             .mt(px(4.))
             .flex()

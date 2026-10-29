@@ -5,7 +5,7 @@
 //! the local branches with how far they are from the main line and their request; a remote's
 //! branches fold under its name.
 
-use super::hover::Hover;
+use super::hover::{CutInTip, Hover};
 use super::lists::Field;
 use super::nav::BranchRow;
 use super::reviewed::Seen;
@@ -603,7 +603,8 @@ impl Workspace {
         }
         let shown = self.shown_requests();
         // The merged or the closed (#114): a flat list, newest first, read as it is scrolled.
-        let past = (self.requests.view != MrState::Opened).then_some(&self.requests.past);
+        let past = (self.requests.view != MrState::Opened)
+            .then(|| self.requests.past.of_scope(self.requests.scope));
         let loading = match past {
             Some(p) => p.loading && p.list.is_empty(),
             None => self.requests.loading && self.requests.list.is_empty(),
@@ -699,7 +700,7 @@ impl Workspace {
                         .gap(px(10.))
                         .text_size(px(12.))
                         .text_color(theme::muted())
-                        .child(div().flex_1().min_w_0().truncate().child(error.clone()))
+                        .child(super::hover::cut("past-error", error.clone()).flex_1())
                         .child(div().id("past-retry").child(bar_button("Retry")).on_click(
                             cx.listener(|this, _: &ClickEvent, _, cx| this.retry_past_page(cx)),
                         ))
@@ -731,7 +732,7 @@ impl Workspace {
                     cx.defer(move |cx| {
                         this.update(cx, |this, cx| {
                             if near {
-                                this.load_past_page(cx);
+                                this.load_past_page(this.requests.scope, cx);
                             } else {
                                 cx.notify();
                             }
@@ -848,7 +849,7 @@ impl Workspace {
         // The merged or the closed (#114): none read, or none of this filter's.
         if view != MrState::Opened {
             let word = view.word().to_lowercase();
-            let past = &self.requests.past;
+            let past = self.requests.past.of_scope(self.requests.scope);
             if let Some(error) = &past.error {
                 return empty_state(
                     "pull-request",
@@ -866,7 +867,7 @@ impl Workspace {
                     ),
                 );
             }
-            let read = !past.list.is_empty();
+            let read = !self.requests.past.of_scope(Scope::All).list.is_empty();
             return match self.requests.scope {
                 Scope::All => empty_state(
                     "pull-request",
@@ -979,15 +980,7 @@ impl Workspace {
                 theme::text()
             })
             .child(icons::icon(icon).size(px(14.)).text_color(tone))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(g.heading()),
-            )
+            .child(super::hover::cut("heading", g.heading()).flex_1())
             .child(
                 div()
                     .flex_none()
@@ -1108,6 +1101,12 @@ impl Workspace {
         div().px(px(6.)).py(px(1.)).child(
             div()
                 .id(("mr-row", iid))
+                .on_mouse_down(
+                    gpui::MouseButton::Right,
+                    cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                        this.request_context(iid, e.position, cx)
+                    }),
+                )
                 .px(px(10.))
                 .py(px(8.))
                 .flex()
@@ -1136,7 +1135,7 @@ impl Workspace {
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .child(words::number(iid)),
                                 )
-                                .child(div().flex_1().min_w_0().truncate().child(m.title.clone()))
+                                .child(div().flex_1().min_w_0().cut_in_tip().child(m.title.clone()))
                                 .children(
                                     part.filter(|_| room.third()).map(|(done, total)| {
                                         super::lists::progress_badge(done, total)
@@ -1651,7 +1650,7 @@ impl Workspace {
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .truncate()
+                                .cut_in_tip()
                                 .text_color(theme::muted())
                                 .child(if self.wt.count == 0 {
                                     "nothing to commit"
@@ -1671,7 +1670,7 @@ impl Workspace {
                         let names: Vec<&str> = f.iter().take(2).map(|f| f.path.as_str()).collect();
                         let more = f.len().saturating_sub(2);
                         div()
-                            .truncate()
+                            .cut_in_tip()
                             .child(if more > 0 {
                                 format!("{} and {more} more", names.join(", "))
                             } else {
@@ -1944,7 +1943,13 @@ impl Workspace {
                                 .text_color(color)
                                 .child(letter),
                         )
-                        .child(div().flex_1().min_w_0().truncate().child(f.path))
+                        .child(
+                            super::hover::cut(
+                                SharedString::from(format!("wt-file-{}", f.path)),
+                                f.path,
+                            )
+                            .flex_1(),
+                        )
                         .child(
                             div()
                                 .flex()

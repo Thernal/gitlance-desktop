@@ -124,6 +124,8 @@ opens in the app. ⌘[ ⌘] go back and forward through every page seen, esc goe
 
 - The working tree against `HEAD` — staged, unstaged and untracked together — refreshed when a file changes.
 - Any two revisions compared (⌥⌘C).
+- A link to what is on screen copied without the browser (⌥⇧⌘C), or from a merge request's, a branch's or a
+  commit's right click.
 - Images as 2-up, Swipe or Onion skin; an SVG as image or source; a changed Markdown file rendered with its
   changed blocks marked.
 - **Zen** (⌘.): the diff alone; ⌥⌘. shows one file at a time at a reading width.

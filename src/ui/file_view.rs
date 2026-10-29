@@ -230,14 +230,25 @@ impl Workspace {
             return;
         };
         let rows = self.file_rows(view);
-        if view.list.item_count() != rows.len() {
+        let fresh = view.list.item_count() != rows.len();
+        if fresh {
             view.list.reset(rows.len());
         }
         if let Some(ix) = rows
             .iter()
             .position(|r| matches!(r, Row::Line(n) if *n + 1 == line as usize))
         {
-            view.list.scroll_to_reveal_item(ix);
+            // Rows not measured yet (a file just read) cannot be revealed: the line goes near the
+            // top, a few above it showing (#154).
+            if fresh {
+                let item_ix = ix.saturating_sub(4);
+                view.list.scroll_to(gpui::ListOffset {
+                    item_ix,
+                    offset_in_item: px(0.),
+                });
+            } else {
+                view.list.scroll_to_reveal_item(ix);
+            }
         }
         cx.notify();
     }

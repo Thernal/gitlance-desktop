@@ -6,9 +6,30 @@ for someone using the app, not for someone reading the code; the commits follow 
 
 ## Unreleased
 
+- **A field keeps what you wrote, not the keyboard.** Click outside a comment, a filter or the find bar, press esc
+  in one that holds text, or go to another file or page, and it keeps its text, dimmed, while the keys go back to
+  the diff: V marks the file you are on, j and k move. Click in it, press `c` beside an unfinished comment, or come
+  back to its page, and you go on typing. A file with an unfinished comment shows a pencil in the files list; a
+  filter left with text clears with a second esc.
+- **Links without the browser.** A merge request's right click — in the list, the Inbox, its row in the menu, its
+  page — copies its link or its number; a branch's, a commit's and a comparison's copy their page on the host, a
+  run of commits or two versions of a request their comparison there, and a file's in a request's diff its place
+  there. ⌥⇧⌘C, or Copy link to this … in ⌘K, copies the page on screen's. A toast says what was copied; a branch
+  or a commit not pushed yet says it has no link instead of copying a dead one.
+- **Every cut text gives the whole of it.** A name, a title, a path or a line cut short shows all of it on a long
+  hover, everywhere — only when it was cut.
 - **The size of the whole change.** Over the files, a row says how many there are and their lines added and
   removed, in the column of each file's own; with a path typed, of the files shown. The review line says only
   the numbers: 4/8.
+- **An agent's work leaves a dot.** What an agent puts for you — its changes opened, a merge request drafted,
+  requests gathered, pending comments, notes — marks its row with an orange dot until you open it, and the
+  Branches or Merge requests row while their rows are folded. A row it left comments on comes under Merge
+  requests by itself.
+- **The New merge request card is easier to correct.** From can be changed to another branch, keeping what is
+  written; From's and Into's lists open under their field, over the form, and ↑ ↓ walk them (they moved the
+  commits behind the card); esc closes the list, not the card. A list of labels or milestones keeps the wheel
+  instead of scrolling the form with it. An agent's draft opens with its branch however you get there, not only
+  from its toast.
 - **An agent shows you its changes without being asked.** It opens them in GitLance, with a summary and a note on
   each file the diff alone does not explain, after a commit, after it makes or rewrites a branch (a squash, a
   rebase, a cherry-pick, a reworded commit), after it addresses your comments, and before it asks you to look or to
@@ -27,6 +48,28 @@ for someone using the app, not for someone reading the code; the commits follow 
   are used as before.
 - **The window never waits on the GitHub CLI.** Its token was asked for each time the window drew; it is read once
   a run, in the background, and again when GitHub refuses it.
+- **A file marked reviewed stays marked.** Once 300 diffs had marks, marking a file in a new one could do nothing
+  (V and its box alike) or wipe another one's marks; now the diff marked longest ago makes room, never the one
+  being marked. A merge request's ✓ in the lists, and how far you got in it, no longer drop away the same way.
+- **A pending reply sits under its discussion.** A reply written in review but not sent yet shows right under the
+  discussion it answers, on that discussion's line, saying whose it answers — in the diff, in Pending comments
+  and to an agent — instead of somewhere else or nowhere.
+- **V reaches every file.** V goes on to the next file not reviewed in the files' own order, opening a folded
+  folder to get there, and goes round to the first ones when it reaches the end.
+- **An agent can point you at a place.** When it says where something is — a file and a line, a commit, a comment
+  on a merge request — a toast says so, "Claude Code points at nav.rs:785 · Show", and Show takes you there: the
+  line in the diff on screen when the file is in it, else in Code. A file opened at a line from a note now shows
+  that line, not the file's top.
+- **The whole history, not its newest 5000.** A branch's commits come a thousand at a time as you scroll down,
+  the count saying 1000+ while there are more; a search reads on through older ones until it has looked at all of
+  them, and a link to an old commit reads down to it.
+- **News reaches you in the background.** Settings → General → System notifications (off unless you turn it
+  on) sends what comes while GitLance is not in front to the system's notifications, on macOS, Windows and
+  Linux: a mention, a review asked, a reply, a to-do; an agent's pending comments, its changes, its answers. One
+  click brings GitLance forward with it open. Many at once come as one; nothing comes while GitLance is in front.
+- **Mine and To review, merged or closed, end where yours end.** The host picks them, so the list stops at your
+  last one instead of reading the whole project to find it, and All · To review · Mine say how many there are in
+  all.
 
 ## 1.2.0 — 2026-10-27
 

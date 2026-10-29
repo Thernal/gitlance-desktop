@@ -4,7 +4,8 @@
 use super::diff_view::chip;
 use super::input::{self, Edit};
 use super::px;
-use super::{COMMIT_LIMIT, Workspace, rows, theme};
+use super::typing::{self, Input};
+use super::{COMMIT_PAGE, Older, Workspace, rows, theme};
 use crate::git::Repo;
 use crate::search::{self, Query};
 use crate::ui::rows::Row;
@@ -74,6 +75,58 @@ impl Workspace {
         }
     }
 
+    /// The branch's older history, a page more (#25): as the list is scrolled near its end, and
+    /// on and on while a search has not found what it looks for. A page is as long as what is
+    /// listed, so a search through a long history reads it in a few.
+    pub(super) fn load_older_commits(&mut self, cx: &mut Context<Self>) {
+        let (Some(root), Some(older)) = (self.root.clone(), self.older.as_mut()) else {
+            return;
+        };
+        if older.task.is_some() {
+            return;
+        }
+        let (tip, skip) = (older.tip, self.commits.len());
+        let count = skip.max(COMMIT_PAGE);
+        older.task = Some(cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async move { Repo::open(&root)?.log(tip, skip, count, None) })
+                .await;
+            this.update(cx, |this, cx| {
+                // Another branch, or the history read again meanwhile: not these.
+                if this.older.as_ref().is_none_or(|o| o.tip != tip) || this.commits.len() != skip {
+                    return;
+                }
+                match read {
+                    Ok(page) => {
+                        let more = page.len() >= count;
+                        this.commits.extend(page);
+                        this.older = more.then_some(Older { tip, task: None });
+                        this.refilter();
+                        this.index_paths(cx);
+                    }
+                    Err(e) => {
+                        this.older = None;
+                        this.error = Some(format!("{e:#}").into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// Reads a page more of history once this frame is drawn, unless one is on its way.
+    pub(super) fn want_older_commits(&self, cx: &mut Context<Self>) {
+        if self.older.as_ref().is_none_or(|o| o.task.is_some()) {
+            return;
+        }
+        let this = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            this.update(cx, |this, cx| this.load_older_commits(cx)).ok();
+        });
+    }
+
     /// Filters `commits` by the field's text; the selection stays where it is.
     pub(super) fn refilter(&mut self) {
         let text = self.find.text.clone().unwrap_or_default();
@@ -96,15 +149,11 @@ impl Workspace {
         if self.find.text.is_none() {
             self.reset_field_edit();
         }
-        self.compose_aside = self.compose.is_some();
-        self.field = None;
         self.settings_open = false;
-        self.dfind = None;
-        self.dterms = Arc::default();
-        self.recompute_matches();
         if self.find.text.is_none() {
             self.find.text = Some(String::new());
         }
+        self.take_keyboard(Input::CommitSearch);
         cx.notify();
     }
 
@@ -239,50 +288,37 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Typing into the open field: the diff find, else the commit search.
+    /// A key: to the input with the keyboard (#168), else the keys of what is on screen.
     pub(super) fn find_key(
         &mut self,
         event: &KeyDownEvent,
         window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
-        if self.ffind.is_some() {
-            return self.ffind_key(event, cx);
-        }
-        if self.palette.is_some() {
-            return self.palette_key(event, window, cx);
-        }
-        if self.open_ask.is_some() {
-            return self.open_ask_key(event, cx);
-        }
-        if self.agent_pick.is_some() {
-            return self.agent_pick_key(event, cx);
-        }
-        if self.update_card.is_some() {
-            return self.update_card_key(event, cx);
-        }
-        if self.submit.is_some() {
-            return self.submit_key(event, cx);
-        }
-        if self.newreq.is_some() {
-            return self.newreq_key(event, cx);
-        }
-        if self.goline.is_some() {
-            return self.goline_key(event, cx);
-        }
-        if self.report_typing() {
-            return self.report_key(event, cx);
-        }
-        if self.compose.is_some() && !self.compose_stepped_aside() {
-            return self.compose_key(event, cx);
-        }
-        if self.reaction_grid.is_some() {
-            return self.reaction_key(event, cx);
+        self.sync_keyboard();
+        match self.typing() {
+            Some(Input::FindFiles) => return self.ffind_key(event, cx),
+            Some(Input::Palette) => return self.palette_key(event, window, cx),
+            Some(Input::OpenAsk) => return self.open_ask_key(event, cx),
+            Some(Input::AgentPick) => return self.agent_pick_key(event, cx),
+            Some(Input::UpdateCard) => return self.update_card_key(event, cx),
+            Some(Input::Reactions) => return self.reaction_key(event, cx),
+            Some(Input::Submit) => return self.submit_key(event, cx),
+            Some(Input::NewRequest) => return self.newreq_key(event, cx),
+            Some(Input::GoLine) => return self.goline_key(event, cx),
+            Some(Input::Report) => return self.report_key(event, cx),
+            Some(Input::Compose) => return self.compose_key(event, cx),
+            Some(Input::Field) => {
+                self.filter_key(event, cx);
+                return;
+            }
+            Some(Input::DiffFind) => return self.dfind_key(event, cx),
+            Some(Input::CommitSearch) => return self.search_key(event, cx),
+            None => {}
         }
         let key = &event.keystroke;
         // ⌫ on the draft picked in the Agents window deletes it; Undo is in its toast (#76).
         if key.key == "backspace"
-            && self.field.is_none()
             && self.tool() == Some(super::tools::Tool::Agents)
             && let Some(id) = self.agent_row.filter(|id| {
                 self.comments
@@ -292,7 +328,7 @@ impl Workspace {
         {
             return self.delete_draft(id, cx);
         }
-        // Esc closes the innermost thing — a card, menu or popover, a field, the find bar, the
+        // Esc closes the innermost thing — a card, menu or popover, the find bar, a filter, the
         // tool window with the keyboard — then goes one page up (#71).
         if key.key == "escape" {
             if self.done_card {
@@ -307,8 +343,9 @@ impl Workspace {
                 cx.notify();
             } else if self.ctx_menu.is_some() {
                 self.close_menu(cx);
-            } else if self.field.is_some() {
-                self.filter_key(event, cx);
+            } else if self.goline.is_some() {
+                self.close_goline();
+                cx.notify();
             } else if self.dfind.is_some() {
                 self.close_dfind(cx);
             } else if self.find.text.is_some() {
@@ -326,48 +363,73 @@ impl Workspace {
                 cx.notify();
             } else if self.tool().is_some() && self.zone == super::zones::Zone::Tool {
                 self.set_tool(None, cx);
+            } else if self.clear_filter() {
+                cx.notify();
             } else {
                 self.go_up(cx);
             }
             return;
         }
-        if self.field.is_some() {
-            self.filter_key(event, cx);
-            return;
-        }
         // 0…9 answer the agent's form in view (#10 C).
-        if self.dfind.is_none()
-            && self.find.text.is_none()
-            && key.modifiers.number_of_modifiers() == 0
+        if key.modifiers.number_of_modifiers() == 0
             && let Some(digit) = key.key.parse::<usize>().ok().filter(|d| *d < 10)
-            && self.answer_by_key(digit, cx)
         {
-            return;
+            self.answer_by_key(digit, cx);
         }
-        if let Some(mut text) = self.dfind.clone() {
-            // ⌥R: the text as a regular expression, or as typed again (#113).
-            if key.modifiers.alt && key.key == "r" {
-                return self.toggle_dfind_regex(cx);
-            }
-            match input::edit(&mut text, &mut self.field_edit, key, cx) {
-                Edit::Changed => self.set_dfind(text, cx),
-                Edit::Selected => cx.notify(),
-                Edit::Enter { shift } => self.step_match(!shift, cx),
-                Edit::Escape | Edit::Ignored => {}
-            }
-            return;
+    }
+
+    /// Esc after esc: the filter that was left with text, of the list on screen, is cleared.
+    fn clear_filter(&mut self) -> bool {
+        if !self.pfilter.is_empty()
+            && self.diff.is_some()
+            && self
+                .space()
+                .is_some_and(|s| s != super::spaces::Space::Code)
+        {
+            self.pfilter.clear();
+            return true;
         }
-        if let Some(mut text) = self.find.text.clone() {
-            match input::edit(&mut text, &mut self.field_edit, key, cx) {
-                Edit::Changed => self.set_find_text(text, cx),
-                Edit::Selected => cx.notify(),
-                Edit::Enter { .. } => {
-                    if self.commit_rows() > 0 {
-                        self.select_commit(self.commit_at(0), cx);
-                    }
+        if !self.bfilter.is_empty() && self.at_root_list() {
+            self.bfilter.clear();
+            return true;
+        }
+        false
+    }
+
+    /// Typing into the find bar over the diff; esc lets the keyboard go, what was typed kept.
+    fn dfind_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let key = &event.keystroke;
+        let Some(mut text) = self.dfind.clone() else {
+            return;
+        };
+        // ⌥R: the text as a regular expression, or as typed again (#113).
+        if key.modifiers.alt && key.key == "r" {
+            return self.toggle_dfind_regex(cx);
+        }
+        match input::edit(&mut text, &mut self.field_edit, key, cx) {
+            Edit::Changed => self.set_dfind(text, cx),
+            Edit::Selected => cx.notify(),
+            Edit::Enter { shift } => self.step_match(!shift, cx),
+            Edit::Escape => self.leave_input(cx),
+            Edit::Ignored => {}
+        }
+    }
+
+    /// Typing into the commits' search; ↵ opens the first commit found.
+    fn search_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let Some(mut text) = self.find.text.clone() else {
+            return;
+        };
+        match input::edit(&mut text, &mut self.field_edit, &event.keystroke, cx) {
+            Edit::Changed => self.set_find_text(text, cx),
+            Edit::Selected => cx.notify(),
+            Edit::Enter { .. } => {
+                if self.commit_rows() > 0 {
+                    self.select_commit(self.commit_at(0), cx);
                 }
-                Edit::Escape | Edit::Ignored => {}
             }
+            Edit::Escape => self.leave_input(cx),
+            Edit::Ignored => {}
         }
     }
 
@@ -378,14 +440,11 @@ impl Workspace {
         if self.dfind.is_none() {
             self.reset_field_edit();
         }
-        self.compose_aside = self.compose.is_some();
-        self.field = None;
         self.settings_open = false;
-        self.find.text = None;
-        self.refilter();
         if self.dfind.is_none() {
             self.dfind = Some(String::new());
         }
+        self.take_keyboard(Input::DiffFind);
         cx.notify();
     }
 
@@ -429,6 +488,7 @@ impl Workspace {
     /// The find bar above the diff: the text, "2 of 4 lines", previous, next, close.
     pub(super) fn render_dfind(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let text = self.dfind.clone()?;
+        let active = self.has_keyboard(Input::DiffFind);
         let count = if let Some(error) = &self.dfind_error {
             format!("Not a regular expression: {error}")
         } else if self.dterms.is_empty() {
@@ -445,62 +505,63 @@ impl Workspace {
                 cx.listener(move |this, _: &ClickEvent, _, cx| this.step_match(forward, cx)),
             )
         };
-        Some(
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap_2()
-                .px(px(10.))
-                .py(px(6.))
-                .border_b_1()
-                .border_color(theme::island_border())
-                .child(
-                    div()
-                        .flex_1()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .h(px(26.))
-                        .px_2()
-                        .rounded(px(super::ROW_RADIUS))
-                        .border_2()
-                        .border_color(theme::focus())
-                        .bg(theme::base())
-                        .child(
-                            super::icons::icon("search")
-                                .size(px(14.))
-                                .text_color(theme::faint()),
-                        )
-                        .child(self.field_text(&text, true, "Find in this diff", cx))
-                        .child({
-                            use super::hover::Hover;
-                            chip("dfind-regex", ".*", self.dfind_regex)
-                                .tip("Regular expression  ⌥R")
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.toggle_dfind_regex(cx)
-                                }))
-                        }),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(12.))
-                        .text_color(if count == "No matches" || self.dfind_error.is_some() {
-                            theme::removed()
-                        } else {
-                            theme::muted()
-                        })
-                        .child(count),
-                )
-                .child(step("dfind-prev", "↑", false))
-                .child(step("dfind-next", "↓", true))
-                .child(
-                    chip("dfind-close", "✕", false)
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_dfind(cx))),
-                ),
-        )
+        let bar = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px(px(10.))
+            .py(px(6.))
+            .border_b_1()
+            .border_color(theme::island_border())
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .h(px(26.))
+                    .px_2()
+                    .rounded(px(super::ROW_RADIUS))
+                    .border_2()
+                    .border_color(if active {
+                        theme::focus()
+                    } else {
+                        theme::island_border()
+                    })
+                    .bg(theme::base())
+                    .cursor_text()
+                    .child(
+                        super::icons::icon("search")
+                            .size(px(14.))
+                            .text_color(theme::faint()),
+                    )
+                    .child(self.field_text(&text, active, "Find in this diff", cx))
+                    .child({
+                        use super::hover::Hover;
+                        chip("dfind-regex", ".*", self.dfind_regex)
+                            .tip("Regular expression  ⌥R")
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.toggle_dfind_regex(cx)
+                            }))
+                    }),
+            )
+            .child(
+                super::hover::cut("find-count", count.clone())
+                    .text_size(px(12.))
+                    .text_color(if count == "No matches" || self.dfind_error.is_some() {
+                        theme::removed()
+                    } else {
+                        theme::muted()
+                    }),
+            )
+            .child(step("dfind-prev", "↑", false))
+            .child(step("dfind-next", "↓", true))
+            .child(
+                chip("dfind-close", "✕", false)
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close_dfind(cx))),
+            );
+        Some(typing::input_box(bar, Input::DiffFind, cx))
     }
 
     /// Reads the paths of every loaded commit, a chunk at a time; the filter updates as they arrive.
@@ -552,7 +613,7 @@ impl Workspace {
 
     /// The search field, its qualifier tags and the count line.
     pub(super) fn render_find(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let active = self.find.text.is_some();
+        let active = self.has_keyboard(Input::CommitSearch);
         let text = self.find.text.clone().unwrap_or_default();
         let field = div()
             .id("find")
@@ -614,7 +675,10 @@ impl Workspace {
         });
         let count = self.find.shown.as_ref().map(|shown| {
             let mut line = format!("{} of {} commits", shown.len(), self.commits.len());
-            if self.find.indexing {
+            // Older history still being read for it (#25).
+            if self.older.is_some() {
+                line.push_str(" · reading older ones…");
+            } else if self.find.indexing {
                 line.push_str(" · reading paths…");
             }
             div()
@@ -625,12 +689,13 @@ impl Workspace {
                 .text_color(theme::faint())
                 .child(line)
         });
-        div()
+        let el = div()
             .flex()
             .flex_col()
             .child(field)
             .children(tags)
-            .children(count)
+            .children(count);
+        typing::input_box(el, Input::CommitSearch, cx)
     }
 
     /// The summary of commit `ix`, with the search words highlighted.
@@ -665,10 +730,13 @@ impl Workspace {
                 div()
                     .text_size(px(11.))
                     .text_color(theme::faint())
-                    .child(format!(
-                        "Searched the {} commits loaded (up to {COMMIT_LIMIT}).",
-                        self.commits.len()
-                    )),
+                    .child(match self.older {
+                        Some(_) => format!(
+                            "Searched the {} newest commits; reading older ones…",
+                            self.commits.len()
+                        ),
+                        None => format!("Searched all {} commits.", self.commits.len()),
+                    }),
             )
     }
 }

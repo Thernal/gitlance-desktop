@@ -33,9 +33,7 @@ impl Workspace {
         let busy = self.update_card.is_some()
             || self.shortcuts
             || self.label_edit.is_some()
-            || self.palette.is_some()
-            || self.field.is_some()
-            || self.compose.is_some();
+            || self.typing().is_some();
         if !busy && updates::take_news().is_some() {
             self.update_card = Some(UpdateCard::default());
             cx.notify();
@@ -185,11 +183,11 @@ impl Workspace {
             .text_size(px(12.))
             .text_color(theme::muted())
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(format!("{} — {said}", crate::report::version())),
+                super::hover::cut(
+                    "version-line",
+                    format!("{} — {said}", crate::report::version()),
+                )
+                .flex_1(),
             )
             .when(newer, |s| {
                 s.child(

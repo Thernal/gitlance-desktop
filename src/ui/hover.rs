@@ -55,9 +55,32 @@ pub fn cut_to(
     lines: usize,
 ) -> gpui::Stateful<gpui::Div> {
     let text: SharedString = text.into();
-    let is_cut = Rc::new(Cell::new(false));
-    let measure = (is_cut.clone(), text.clone());
-    let shown = div().child(text.clone());
+    cut_shown(id, text.clone(), text.clone(), text, lines)
+}
+
+/// `shown` — text drawn its own way, such as selectable — cut to its room, measured as `text`.
+pub fn cut_with(
+    id: impl Into<ElementId>,
+    text: impl Into<SharedString>,
+    shown: impl IntoElement,
+) -> gpui::Stateful<gpui::Div> {
+    let text: SharedString = text.into();
+    cut_shown(id, shown, text.clone(), text, 1)
+}
+
+/// `shown` cut to its room, measured as `text`; `whole` in its long hover when the room cut it or
+/// `text` is already shorter than `whole`.
+fn cut_shown(
+    id: impl Into<ElementId>,
+    shown: impl IntoElement,
+    text: SharedString,
+    whole: SharedString,
+    lines: usize,
+) -> gpui::Stateful<gpui::Div> {
+    let shortened = text != whole;
+    let is_cut = Rc::new(Cell::new(shortened));
+    let measure = (is_cut.clone(), text);
+    let shown = div().child(shown);
     div()
         .id(id)
         .relative()
@@ -91,7 +114,7 @@ pub fn cut_to(
                             .width
                             > room
                     };
-                    is_cut.set(cut);
+                    is_cut.set(shortened || cut);
                 },
                 |_, _, _, _| {},
             )
@@ -103,12 +126,45 @@ pub fn cut_to(
         .tooltip_show_delay(LONG)
         .tooltip(move |_, cx| {
             if is_cut.get() {
-                cx.new(|_| TipOwned(text.clone())).into()
+                cx.new(|_| TipOwned(whole.clone())).into()
             } else {
                 cx.new(|_| NoTip).into()
             }
         })
 }
+
+/// Text cut in the middle to `n` characters (`create::mid`), so a long branch name keeps both
+/// ends, then to its room: its long hover gives the whole when either cut it.
+pub fn mid(id: impl Into<ElementId>, text: &str, n: usize) -> gpui::Stateful<gpui::Div> {
+    shortened(id, super::create::mid(text, n), text.to_owned())
+}
+
+/// `shown`, a shortened `whole` (a name cut in the middle within a line), cut to its room: its
+/// long hover gives `whole` when they differ or the room cut it.
+pub fn shortened(
+    id: impl Into<ElementId>,
+    shown: impl Into<SharedString>,
+    whole: impl Into<SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    let shown: SharedString = shown.into();
+    cut_shown(id, shown.clone(), shown, whole.into(), 1)
+}
+
+/// Text cut to its room inside an element whose own long hover already gives the whole of it (a
+/// row's tooltip): a tooltip of its own, even an empty one, would hide that one. Everything else
+/// is cut with `cut`, `cut_to`, `mid` or `shortened` (#161).
+pub trait CutInTip: Styled + Sized {
+    fn cut_in_tip(self) -> Self {
+        self.truncate()
+    }
+
+    /// The same for text clamped to `lines` lines.
+    fn clamp_in_tip(self, lines: usize) -> Self {
+        self.overflow_hidden().line_clamp(lines)
+    }
+}
+
+impl<E: Styled> CutInTip for E {}
 
 /// "Thu 16 Oct 2026, 11:24": the date behind a relative time, in local time (X61).
 pub fn full_date(time: i64) -> String {
@@ -321,14 +377,11 @@ impl CommitCard {
                     .items_center()
                     .gap(px(6.))
                     .child(
-                        div()
+                        cut("card-sha", sha.clone())
                             .flex_1()
-                            .min_w_0()
-                            .truncate()
                             .font_family(theme::CODE_FONT)
                             .text_size(px(11.))
-                            .text_color(theme::muted())
-                            .child(sha.clone()),
+                            .text_color(theme::muted()),
                     )
                     .child(action("card-copy-sha", "Copy").on_click(
                         move |_: &ClickEvent, _, cx| {
@@ -762,6 +815,30 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every text cut short gives the whole on a long hover (#161): views cut through this file's
+    /// helpers, never with a bare `truncate`, `line_clamp` or `text_ellipsis`.
+    #[test]
+    fn text_is_cut_only_through_the_helpers() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui");
+        let mut bare = Vec::new();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.file_name().is_some_and(|n| n == "hover.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            for (n, line) in text.lines().enumerate() {
+                if [".truncate()", ".line_clamp(", ".text_ellipsis()"]
+                    .iter()
+                    .any(|cut| line.contains(cut))
+                {
+                    bare.push(format!("{}:{}", path.display(), n + 1));
+                }
+            }
+        }
+        assert!(bare.is_empty(), "cut without hover::cut: {bare:#?}");
+    }
 
     #[test]
     fn a_time_reads_as_a_date() {

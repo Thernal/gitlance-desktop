@@ -344,7 +344,7 @@ impl Workspace {
                                             .child(view.title),
                                     )
                                     .children(view.count.map(|c| {
-                                        div().truncate().text_color(theme::faint()).child(c)
+                                        super::hover::cut("count", c).text_color(theme::faint())
                                     })),
                             )
                             .children(view.actions)

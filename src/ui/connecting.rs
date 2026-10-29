@@ -836,7 +836,8 @@ impl Workspace {
                 way_row(("way-row", i), None, icon, name, who, what, on, dim)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.connecting.focus = i;
-                        cx.notify();
+                        // ↑ ↓ ↵ walk the ways from the token's field: it has the keyboard again.
+                        this.start_field(super::lists::Field::Token, cx);
                     }))
                     .children(button),
             );
@@ -1293,11 +1294,9 @@ fn way_row(
                         .gap(px(6.))
                         .min_w_0()
                         .child(
-                            div()
-                                .truncate()
+                            super::hover::cut("name", name)
                                 .text_size(px(13.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(name),
+                                .font_weight(FontWeight::SEMIBOLD),
                         )
                         .children(who.map(|w| {
                             div()
@@ -1308,11 +1307,9 @@ fn way_row(
                         })),
                 )
                 .child(
-                    div()
-                        .truncate()
+                    super::hover::cut("what", what)
                         .text_size(px(12.))
-                        .text_color(theme::muted())
-                        .child(what),
+                        .text_color(theme::muted()),
                 ),
         )
 }
@@ -1361,12 +1358,10 @@ fn not_here(not: &[NotHere], remote: &WebRemote) -> Option<AnyElement> {
                             .size(px(14.))
                             .text_color(theme::faint()),
                     )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .child(format!("{name} — {}", n.why)),
-                    )
+                    .child(super::hover::cut(
+                        gpui::SharedString::from(format!("not-here-{name}")),
+                        format!("{name} — {}", n.why),
+                    ))
             }))
             .into_any_element()
     })

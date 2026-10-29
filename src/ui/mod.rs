@@ -55,15 +55,18 @@ mod roots;
 mod rows;
 mod select;
 mod settings;
+mod share;
 mod shell;
 mod shortcuts;
 mod side;
 mod spaces;
 mod stack;
 mod submit;
+mod system_notes;
 mod theme;
 mod toast;
 mod tools;
+mod typing;
 mod updates;
 mod waiting;
 mod watch;
@@ -160,6 +163,7 @@ actions!(
         SendToAgent,
         OpenIn,
         RevealInFinder,
+        CopyLink,
         ShowShortcuts,
         NameProject,
         ToggleThread,
@@ -225,8 +229,14 @@ actions!(
     ]
 );
 
-/// How much history a branch shows.
-const COMMIT_LIMIT: usize = 5000;
+/// How much of a branch's history is read at first; more is read as the list is scrolled (#25).
+const COMMIT_PAGE: usize = 1000;
+
+/// More of a branch's history to read past the commits listed, from `tip` (#25).
+struct Older {
+    tip: git2::Oid,
+    task: Option<Task<()>>,
+}
 const DIFF_ROW: f32 = 20.;
 const CODE_SIZE: f32 = 12.;
 /// The most a file shown alone in zen is wide: a reading width (#55).
@@ -440,6 +450,8 @@ fn bindings(k: fn(&str) -> String) -> Vec<KeyBinding> {
             Some("Workspace && !Caret"),
         ),
         KeyBinding::new(&k("cmd-alt-c"), Compare, Some("Workspace")),
+        // Android Studio's Copy Reference: the page on screen's link (#162).
+        KeyBinding::new(&k("cmd-alt-shift-c"), CopyLink, Some("Workspace")),
         // Bare letters and arrows are typing while the search field is active.
         KeyBinding::new(&k("k"), PreviousCommit, Some("Workspace && !Typing")),
         KeyBinding::new(&k("j"), NextCommit, Some("Workspace && !Typing")),
@@ -475,6 +487,8 @@ pub fn run(path: Option<PathBuf>) {
         .with_assets(icons::Icons)
         .run(move |cx: &mut App| {
             keymap::install(default_bindings(), cx);
+            // Before any window: who GitLance is to the system's notifications (#26).
+            system_notes::install(cx);
             theme::load();
             motion::set(Settings::load().animations, cx);
             // The themes folder is read again when it changes, with a repository open or not (X52).
@@ -933,6 +947,27 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                             this.open_palette(palette::Kind::Projects, cx);
                             continue;
                         }
+                        // The right clicks that copy a link (#162): the branch checked out, the
+                        // newest commit, a request.
+                        "branchmenu" => {
+                            if let Some(ix) = this.branches.iter().position(|b| b.is_head) {
+                                this.branch_context(ix, Point::new(px(420.), px(160.)), cx);
+                            }
+                            continue;
+                        }
+                        "commitmenu" => {
+                            this.commit_context(0, Point::new(px(420.), px(160.)), cx);
+                            continue;
+                        }
+                        // The two newest commits picked as one diff, as shift and a click do.
+                        "commit-run" => {
+                            this.load_commits(0, 1, None, cx);
+                            continue;
+                        }
+                        "requestmenu" => {
+                            this.request_context(398, Point::new(px(420.), px(160.)), cx);
+                            continue;
+                        }
                         "settings" => {
                             this.open_settings(cx);
                             continue;
@@ -1040,6 +1075,11 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                         "hover-note" | "reaction-grid" => continue,
                         "inbox" => {
                             this.go_space(spaces::Space::Inbox, cx);
+                            continue;
+                        }
+                        // Every space's open rows shown, folded at first or not (#160).
+                        "opens" => {
+                            this.nav.folded = [false; 4];
                             continue;
                         }
                         // The new request for the open branch, and one of its lists open.
@@ -1513,6 +1553,8 @@ pub struct Workspace {
     project: Option<PathBuf>,
     versions: Vec<Version>,
     commits: Vec<CommitInfo>,
+    /// None: `commits` is all the history there is to list.
+    older: Option<Older>,
     selection: Selection,
     version_tab: VersionTab,
     palette: Option<palette::Palette>,
@@ -1670,6 +1712,12 @@ pub struct Workspace {
     agent_requests: Vec<(String, crate::agents::RequestDraft)>,
     /// The branch whose drafted request opens once its page is in (Open on its toast).
     create_waiting: Option<String>,
+    /// Branches with an agent's drafted request whose card has not opened yet: it opens when the
+    /// branch's page is in, however it is opened (#159).
+    drafts_unseen: HashSet<String>,
+    /// Rows an agent put something on for the reviewer, with what, until opened: an orange dot
+    /// (#160).
+    agent_calls: std::collections::HashMap<nav::Item, String>,
     note_lines: std::collections::HashMap<u64, u32>,
     note_task: Option<Task<()>>,
     tabs: shell::TabModel,
@@ -1768,9 +1816,8 @@ pub struct Workspace {
     tree_opened: Option<(String, usize)>,
     /// What a narrow window folded, for the session (#80).
     narrowed: narrow::Narrowed,
-    /// An open composer stepped aside for a field clicked or opened since (a filter, a find):
-    /// the keys go there until the composer is clicked again.
-    compose_aside: bool,
+    /// Which input has the keyboard (#168).
+    keyboard: typing::Keyboard,
     /// A file of Code being read and the line to show once it is in (a note from the Agents
     /// window whose file is not in the diff open).
     file_jump: Option<(String, u32)>,
@@ -1874,6 +1921,7 @@ impl Workspace {
             project: None,
             versions: Vec::new(),
             commits: Vec::new(),
+            older: None,
             selection: Selection::None,
             version_tab: VersionTab::Files,
             palette: None,
@@ -1933,6 +1981,8 @@ impl Workspace {
             agent_notes: Vec::new(),
             agent_requests: Vec::new(),
             create_waiting: None,
+            drafts_unseen: HashSet::new(),
+            agent_calls: Default::default(),
             note_lines: Default::default(),
             note_task: None,
             tabs: Default::default(),
@@ -1993,7 +2043,7 @@ impl Workspace {
             update_checking: false,
             tree_opened: None,
             narrowed: Default::default(),
-            compose_aside: false,
+            keyboard: Default::default(),
             file_jump: None,
             on_screen: Rc::new(Shared::new(true)),
             char_width: 0.,
@@ -2154,6 +2204,7 @@ impl Workspace {
         self.branch_page = None;
         self.versions.clear();
         self.commits.clear();
+        self.older = None;
         self.clear_diff();
     }
 
@@ -2208,7 +2259,9 @@ impl Workspace {
                         .as_ref()
                         .and_then(|(_, base)| repo.range_log(*base, tip, true).ok())
                         .filter(|own| !own.is_empty());
-                    anyhow::Ok((versions, repo.log(tip, COMMIT_LIMIT)?, facts, own))
+                    // Down to the commit asked for, however old (#25).
+                    let log = repo.log(tip, 0, COMMIT_PAGE, keep)?;
+                    anyhow::Ok((versions, log, facts, own))
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -2226,7 +2279,11 @@ impl Workspace {
                             });
                         this.commits = match own {
                             Some(own) if tabbed => own,
-                            _ => commits,
+                            _ => {
+                                let more = commits.len() >= COMMIT_PAGE;
+                                this.older = more.then_some(Older { tip, task: None });
+                                commits
+                            }
                         };
                         this.branch_page = Some(branch_page::Facts {
                             base: facts.base.filter(|_| tabbed),
@@ -2879,7 +2936,11 @@ impl Workspace {
             Entry::new("Copy SHA", Act::Copy(commit.id.to_string())),
             Entry::new("Copy message", Act::Copy(commit.message.clone())),
         ]];
-        if let Some(web) = &self.web {
+        // Its page on the host; one only on this Mac says so instead (#162).
+        let link = self.commit_link_entry(commit.id);
+        let on_host = link.as_ref().is_some_and(|e| !e.off);
+        groups[0].extend(link);
+        if let Some(web) = self.web.as_ref().filter(|_| on_host) {
             groups.push(vec![Entry::new(
                 format!("Open in {} ↗", web.name()),
                 Act::OpenUrl(web.commit(&commit.id.to_string())),
@@ -2902,6 +2963,10 @@ impl Workspace {
             Entry::new("Copy path", Act::Copy(path.clone())),
             Entry::new("Copy file name", Act::Copy(name)),
         ]];
+        // Where the host anchors the diff's files: this one in it (#162).
+        if let Some(link) = self.diff_file_link(&path) {
+            groups[0].push(Entry::new("Copy link", link.act()).key("↗"));
+        }
         if let Some(editor) = crate::editor::pick(self.settings.editor) {
             groups.push(vec![Entry::new(
                 format!("Open in {}", editor.label()),
@@ -2924,15 +2989,18 @@ impl Workspace {
             "Copy branch name",
             Act::Copy(branch.name.clone()),
         )]];
+        // Its page on the host; one only on this Mac says so instead (#162).
+        let link = self.branch_link(&branch.name).ok();
+        groups[0].extend(self.branch_link_entry(&branch.name));
         if self.requests.available && branch.name != "main" && branch.name != "master" {
             groups.push(vec![
                 Entry::new("Create merge request…", Act::CreateRequest(ix)).key("⌥⌘M"),
             ]);
         }
-        if let Some(web) = &self.web {
+        if let (Some(web), Some(link)) = (&self.web, link) {
             groups.push(vec![Entry::new(
                 format!("Open in {} ↗", web.name()),
-                Act::OpenUrl(web.branch(&branch.name)),
+                Act::OpenUrl(link.url),
             )]);
         }
         self.open_menu(at, groups, cx);
@@ -3321,6 +3389,10 @@ impl Workspace {
         self.search(palette::Scope::All, cx);
     }
 
+    fn copy_link_action(&mut self, _: &CopyLink, _: &mut Window, cx: &mut Context<Self>) {
+        self.copy_page_link(cx);
+    }
+
     fn compare_action(&mut self, _: &Compare, _: &mut Window, cx: &mut Context<Self>) {
         if self.root.is_some() {
             self.open_palette(palette::Kind::Base, cx);
@@ -3551,13 +3623,10 @@ impl Workspace {
                         .child(name),
                 )
                 .child(
-                    div()
+                    hover::cut("header-dir", dir)
                         .flex_1()
-                        .min_w_0()
-                        .truncate()
                         .text_size(px(12.))
-                        .text_color(theme::muted())
-                        .child(dir),
+                        .text_color(theme::muted()),
                 )
                 .child(
                     div()
@@ -3580,22 +3649,16 @@ impl Workspace {
             .h(px(36.))
             .px_4()
             .child(
-                div()
+                hover::cut("header-title", self.header_title(diff))
                     .max_w(px(520.))
-                    .min_w_0()
-                    .truncate()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(self.header_title(diff)),
+                    .font_weight(FontWeight::SEMIBOLD),
             )
             .children(file.map(|f| {
-                div()
+                hover::cut("header-file", f)
                     .flex_1()
-                    .min_w_0()
-                    .truncate()
                     .font_family(theme::CODE_FONT)
                     .text_size(px(12.))
                     .text_color(theme::muted())
-                    .child(f)
             }))
             .children(self.review_progress().map(|(done, total)| {
                 div()
@@ -4210,12 +4273,9 @@ impl Workspace {
                     .border_color(theme::island_border())
                     .child(icons::file_icon(f.path(), 16.))
                     .child(
-                        div()
+                        hover::cut("file-path", path)
                             .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(change_color(f, false))
-                            .child(path),
+                            .text_color(change_color(f, false)),
                     )
                     // An SVG read as its source can go back to the picture.
                     .children(

@@ -2,9 +2,10 @@
 //! tree or a flat list with a path filter and the labels on commits. Designed in review round 1
 //! (A9, A10, A11, A13); the branches' list is Branches' root page (`roots.rs`, #72).
 
-use super::hover::Hover;
+use super::hover::{CutInTip, Hover};
 use super::input::{self, Edit};
 use super::px;
+use super::typing::{self, Input};
 use super::{Workspace, change_color, change_tip, plural, row, theme};
 use crate::git::{Deco, DecoKind, FileDiff};
 use gpui::{
@@ -28,7 +29,7 @@ pub fn deco_tags(decos: &[Deco]) -> Vec<gpui::AnyElement> {
             .text_size(px(10.))
             .text_color(color)
             .max_w(px(120.))
-            .truncate()
+            .cut_in_tip()
             .child(text)
             .into_any_element()
     };
@@ -100,7 +101,7 @@ impl Workspace {
             Field::CloneUrl => (&self.welcome.url, input::Look::default()),
             Field::Label => (&self.label_name, input::Look::default()),
         };
-        div()
+        let el = div()
             .id(id)
             .flex_none()
             .flex()
@@ -123,28 +124,24 @@ impl Workspace {
                     .size(px(14.))
                     .text_color(theme::faint()),
             )
-            .child(self.field_look(text, active, placeholder, look, cx.entity().downgrade()))
+            .child(self.field_look(text, active, placeholder, look, cx.entity().downgrade()));
+        typing::field_box_out(el, field, cx)
     }
 
     pub(super) fn start_field(&mut self, field: Field, cx: &mut Context<Self>) {
         if self.field != Some(field) {
             self.reset_field_edit();
         }
-        // A composer open beside it steps aside: the keys come here (the developer, 2026-10-23).
-        self.compose_aside = self.compose.is_some();
-        self.find.text = None;
-        self.dfind = None;
-        self.dterms = Default::default();
-        self.refilter();
-        self.recompute_matches();
         if field == Field::Files {
             self.layout.show_files = true;
         }
+        // A composer or a find open beside it keeps its text, not the keyboard (#168).
+        self.take_keyboard(Input::Field);
         self.field = Some(field);
         cx.notify();
     }
 
-    /// Typing into the branch or path filter; escape clears it. Returns whether it took the key.
+    /// Typing into the field with the keyboard; esc lets it go. Returns whether it took the key.
     pub(super) fn filter_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
         let Some(field) = self.field else {
             return false;
@@ -218,10 +215,8 @@ impl Workspace {
                 self.welcome.said = None;
                 self.field = None;
             }
-            Edit::Escape => {
-                text.clear();
-                self.field = None;
-            }
+            // What was typed stays and still filters; esc again clears it (`clear_filter`).
+            Edit::Escape => self.leave_input(cx),
             Edit::Enter { .. } if field == Field::Host => {
                 self.start_field(Field::Token, cx);
                 return true;
@@ -335,6 +330,23 @@ fn flatten(
     out.extend(node.files.iter().map(|&ix| FileItem::File { ix, depth }));
 }
 
+/// The files of `items`, in their order.
+fn files_of(items: Vec<FileItem>) -> Vec<usize> {
+    items
+        .into_iter()
+        .filter_map(|item| match item {
+            FileItem::File { ix, .. } => Some(ix),
+            FileItem::Dir { .. } => None,
+        })
+        .collect()
+}
+
+/// Whether `path` is under folder `dir` (a chain like `src/ui` is one folder of the tree).
+fn inside(path: &str, dir: &str) -> bool {
+    path.strip_prefix(dir)
+        .is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// The rows for `files`: a tree, a flat list, or — whatever `list` says — a flat list of the files
 /// whose path holds every word of `filter`.
 pub fn file_items(
@@ -390,13 +402,26 @@ impl Workspace {
 
     /// File indexes in the order the island shows them: what ← and → walk through.
     pub(super) fn file_order(&self) -> Vec<usize> {
-        self.items()
-            .into_iter()
-            .filter_map(|item| match item {
-                FileItem::File { ix, .. } => Some(ix),
-                FileItem::Dir { .. } => None,
-            })
-            .collect()
+        files_of(self.items())
+    }
+
+    /// File indexes in the tree's order with every folder open: what `v` walks, so a collapsed
+    /// folder's files are not passed over (#167). A filter still narrows it.
+    pub(super) fn file_order_all(&self) -> Vec<usize> {
+        match &self.diff {
+            Some(diff) => files_of(file_items(
+                &diff.files,
+                self.options.list_files,
+                &self.pfilter,
+                &HashSet::new(),
+            )),
+            None => Vec::new(),
+        }
+    }
+
+    /// Opens every collapsed folder file `path` is under, at any depth.
+    pub(super) fn open_folders_of(&mut self, path: &str) {
+        self.collapsed.retain(|dir| !inside(path, dir));
     }
 
     /// What the files island shows, as keys for keyboard movement.
@@ -546,10 +571,11 @@ impl Workspace {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .truncate()
+                                    .cut_in_tip()
                                     .text_color(change_color(file, done))
                                     .child(name),
                             )
+                            .children(self.draft_mark(file.path()))
                             .children(super::generated_tag(file))
                             .children(super::working::file_tag(diff.tags.get(file.path())))
                             .when(counts, |s| s.child(super::stats(file)))
@@ -602,7 +628,13 @@ impl Workspace {
                             .text_color(theme::muted()),
                         )
                         .child(super::icons::folder_icon(path, 16.))
-                        .child(div().flex_1().min_w_0().truncate().child(name.clone()))
+                        .child(
+                            super::hover::cut(
+                                gpui::SharedString::from(format!("dir-name-{path}")),
+                                name.clone(),
+                            )
+                            .flex_1(),
+                        )
                         .child(
                             div()
                                 .text_size(px(11.))
@@ -651,18 +683,19 @@ impl Workspace {
                     .flex_col()
                     .child(
                         div()
-                            .truncate()
+                            .cut_in_tip()
                             .text_color(change_color(file, done))
                             .child(name),
                     )
                     .children(dir.map(|d| {
                         div()
-                            .truncate()
+                            .cut_in_tip()
                             .text_size(px(11.))
                             .text_color(theme::faint())
                             .child(d)
                     })),
             )
+            .children(self.draft_mark(path))
             .children(super::generated_tag(file))
             .children(super::working::file_tag(tag))
             .when(counts, |s| s.child(super::stats(file)))
@@ -733,4 +766,48 @@ pub(super) fn progress_badge(done: u32, total: u32) -> gpui::Div {
         .text_size(px(11.))
         .text_color(theme::muted())
         .child(format!("{done}/{total}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::ChangeKind;
+
+    fn file(path: &str) -> FileDiff {
+        FileDiff {
+            old_path: Some(path.into()),
+            new_path: Some(path.into()),
+            change: ChangeKind::Modified,
+            added: 1,
+            removed: 0,
+            hunks: Vec::new(),
+            old_text: None,
+            new_text: None,
+            note: None,
+            old_image: None,
+            new_image: None,
+            pictures: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_collapsed_folder_hides_its_files_from_the_rows_only() {
+        let files: Vec<FileDiff> = ["A/a.kt", "B/b.kt", "c.kt", "C/d.kt", "e.kt", "src/ui/f.rs"]
+            .into_iter()
+            .map(file)
+            .collect();
+        let collapsed = HashSet::from(["B".to_owned(), "src/ui".to_owned()]);
+        // Folders come before files: A/a.kt, B/b.kt, C/d.kt, src/ui/f.rs, c.kt, e.kt.
+        assert_eq!(
+            files_of(file_items(&files, false, "", &HashSet::new())),
+            [0, 1, 3, 5, 2, 4]
+        );
+        assert_eq!(
+            files_of(file_items(&files, false, "", &collapsed)),
+            [0, 3, 2, 4]
+        );
+        // What opens for a file: the folders it is under, a chain as one (#167).
+        assert!(inside("B/b.kt", "B") && inside("src/ui/f.rs", "src/ui"));
+        assert!(!inside("Bx/b.kt", "B") && !inside("B", "B") && !inside("c.kt", "B"));
+    }
 }

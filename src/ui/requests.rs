@@ -2,6 +2,7 @@
 //! branch, and the discussions other people left on one, in the review panel. Read-only; GitLab
 //! only (see `crate::mr`).
 
+use super::hover::CutInTip;
 use super::nav::Page;
 use super::px;
 use super::roots::Group;
@@ -24,15 +25,34 @@ pub enum Scope {
     Mine,
 }
 
-/// The merged or the closed requests (#114), read a page at a time as the list is scrolled.
+/// The merged or the closed requests (#114): each scope's own, as the host picks them (#169).
 #[derive(Default)]
 pub struct Past {
     /// Which they are; Opened shows the open list.
     pub of: mr::MrState,
+    /// All's, To review's and Mine's.
+    scopes: [Pages; 3],
+}
+
+impl Past {
+    pub fn of_scope(&self, scope: Scope) -> &Pages {
+        &self.scopes[scope as usize]
+    }
+
+    fn of_scope_mut(&mut self, scope: Scope) -> &mut Pages {
+        &mut self.scopes[scope as usize]
+    }
+}
+
+/// One scope's merged or closed requests, read a page at a time as the list is scrolled.
+#[derive(Default)]
+pub struct Pages {
     pub list: Vec<Mr>,
-    /// The pages read, and whether another may follow.
-    pub pages: u32,
+    /// Where the next page starts (none: the first), and whether one follows.
+    at: Option<String>,
     pub more: bool,
+    /// How many there are in all, where the host says.
+    pub total: Option<u32>,
     pub loading: bool,
     pub error: Option<String>,
     task: Option<Task<()>>,
@@ -104,6 +124,9 @@ pub struct Requests {
     /// The base and head the host compares that request from — its latest push's, as given, here
     /// or not (#145).
     pub host: Option<(u64, HostSides)>,
+    /// GitLab's id of each of that request's versions, by its head: a link to two of them compared
+    /// names the newer by it (#162).
+    pub version_ids: Option<(u64, Vec<(git2::Oid, u64)>)>,
     version_task: Option<Task<()>>,
     /// The token's username: one's own notes are the ones it wrote, and can be edited.
     pub login: Option<String>,
@@ -150,7 +173,7 @@ impl Requests {
     pub fn find(&self, iid: u64) -> Option<&Mr> {
         self.list
             .iter()
-            .chain(&self.past.list)
+            .chain(self.past.scopes.iter().flat_map(|p| &p.list))
             .chain(&self.left)
             .find(|m| m.iid == iid)
     }
@@ -162,51 +185,69 @@ impl Workspace {
         self.requests.view = state;
         self.nav.pick_request = None;
         if state != mr::MrState::Opened && self.requests.past.of != state {
-            self.requests.past = Past {
+            // Every scope's first page at once: the chips count them all.
+            let mut past = Past {
                 of: state,
-                more: true,
                 ..Past::default()
             };
-            self.load_past_page(cx);
+            for pages in &mut past.scopes {
+                pages.more = true;
+            }
+            self.requests.past = past;
+            for scope in [Scope::All, Scope::ReviewMe, Scope::Mine] {
+                self.load_past_page(scope, cx);
+            }
         }
         cx.notify();
     }
 
-    /// The next page of the merged or closed requests, unless one is on its way or none follows.
-    pub(super) fn load_past_page(&mut self, cx: &mut Context<Self>) {
-        let past = &mut self.requests.past;
-        let (Some(remote), state) = (self.web.clone(), past.of) else {
+    /// The next page of `scope`'s merged or closed requests, unless one is on its way or none
+    /// follows.
+    pub(super) fn load_past_page(&mut self, scope: Scope, cx: &mut Context<Self>) {
+        let state = self.requests.past.of;
+        let login = self.requests.login.clone();
+        let whose = match (scope, login) {
+            (Scope::All, _) => Some(mr::Whose::All),
+            (Scope::ReviewMe, Some(login)) => Some(mr::Whose::Reviewer(login)),
+            (Scope::Mine, Some(login)) => Some(mr::Whose::Author(login)),
+            _ => None,
+        };
+        // Who the token is not known yet: read once it is, as the list is drawn.
+        let (Some(remote), Some(whose)) = (self.web.clone(), whose) else {
             return;
         };
-        if past.loading || !past.more || state == mr::MrState::Opened {
+        let pages = self.requests.past.of_scope_mut(scope);
+        if pages.loading || !pages.more || state == mr::MrState::Opened {
             return;
         }
-        past.loading = true;
-        let page = past.pages + 1;
-        past.task = Some(cx.spawn(async move |this, cx| {
+        pages.loading = true;
+        let at = pages.at.clone();
+        pages.task = Some(cx.spawn(async move |this, cx| {
             let read = cx
                 .background_executor()
-                .spawn(async move { mr::list_past(&remote, state, page) })
+                .spawn(async move { mr::list_past(&remote, state, &whose, at.as_deref()) })
                 .await;
             this.update(cx, |this, cx| {
-                let past = &mut this.requests.past;
-                if past.of != state {
+                if this.requests.past.of != state {
                     return;
                 }
-                past.loading = false;
+                let pages = this.requests.past.of_scope_mut(scope);
+                pages.loading = false;
                 match read {
-                    Ok((list, more)) => {
-                        past.pages = page;
-                        past.more = more;
-                        past.error = None;
+                    Ok(page) => {
+                        pages.more = page.next.is_some();
+                        pages.at = page.next;
+                        pages.total = page.total.or(pages.total);
+                        pages.error = None;
                         let known: std::collections::HashSet<u64> =
-                            past.list.iter().map(|m| m.iid).collect();
-                        past.list
-                            .extend(list.into_iter().filter(|m| !known.contains(&m.iid)));
+                            pages.list.iter().map(|m| m.iid).collect();
+                        pages
+                            .list
+                            .extend(page.list.into_iter().filter(|m| !known.contains(&m.iid)));
                     }
                     Err(e) => {
-                        past.more = false;
-                        past.error = Some(format!("{e:#}"));
+                        pages.more = false;
+                        pages.error = Some(format!("{e:#}"));
                     }
                 }
                 cx.notify();
@@ -215,12 +256,13 @@ impl Workspace {
         }));
     }
 
-    /// The page that could not be read, again.
+    /// The page of the scope shown that could not be read, again.
     pub(super) fn retry_past_page(&mut self, cx: &mut Context<Self>) {
-        let past = &mut self.requests.past;
-        past.error = None;
-        past.more = true;
-        self.load_past_page(cx);
+        let scope = self.requests.scope;
+        let pages = self.requests.past.of_scope_mut(scope);
+        pages.error = None;
+        pages.more = true;
+        self.load_past_page(scope, cx);
         cx.notify();
     }
 
@@ -716,7 +758,7 @@ impl Workspace {
                 .when(primary, |s| s.bg(theme::added()).text_color(theme::base()))
                 .when(!primary, |s| s.bg(theme::hover()).text_color(theme::text()))
                 .hover(|s| s.opacity(0.85))
-                .child(div().min_w_0().truncate().child(label))
+                .child(super::hover::cut("label", label))
                 .child(super::keys::caps(
                     key,
                     if primary {
@@ -850,12 +892,18 @@ impl Workspace {
                         .iter()
                         .filter_map(|p| Some((oid(&p.head)?, oid(&p.base), p.created)))
                         .collect();
-                    anyhow::Ok((Repo::open(&root)?.versions_from_pushes(&pushes), host))
+                    let ids: Vec<_> = read
+                        .iter()
+                        .filter_map(|p| Some((oid(&p.head)?, p.id)))
+                        .collect();
+                    let list = Repo::open(&root)?.versions_from_pushes(&pushes);
+                    anyhow::Ok((list, host, ids))
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if let Ok((list, host)) = built {
+                if let Ok((list, host, ids)) = built {
                     this.requests.versions = Some((iid, list));
+                    this.requests.version_ids = Some((iid, ids));
                     this.requests.host = host.map(|h| (iid, h));
                     this.follow_host_sides(iid, cx);
                     this.apply_mr_versions();
@@ -1020,6 +1068,7 @@ impl Workspace {
         };
         if let Ok(list) = Repo::open(&root).and_then(|r| r.range_log(base.1, head.1, true)) {
             self.commits = list;
+            self.older = None;
             self.refilter();
         }
     }
@@ -1058,18 +1107,57 @@ impl Workspace {
             .enumerate()
             .filter(|(_, t)| t.path.as_deref() == Some(path))
             .filter_map(|(ix, t)| {
-                // Written on an earlier version: drawn at its line now, or not at all (#46).
-                if self.thread_is_old(t) {
-                    let h = self.requests.histories.get(&t.id)?;
-                    return h.line_now.map(|n| (ix, false, n));
-                }
-                match (t.new_line, t.old_line) {
-                    (Some(n), _) => Some((ix, false, n)),
-                    (None, Some(o)) => Some((ix, true, o)),
-                    _ => None,
-                }
+                let (old, line) = self.thread_line_now(t)?;
+                Some((ix, old, line))
             })
             .collect()
+    }
+
+    /// Where discussion `t` is drawn in the diff on screen: (old side, line).
+    fn thread_line_now(&self, t: &mr::Thread) -> Option<(bool, u32)> {
+        // Written on an earlier version: drawn at its line now, or not at all (#46).
+        if self.thread_is_old(t) {
+            let h = self.requests.histories.get(&t.id)?;
+            return h.line_now.map(|n| (false, n));
+        }
+        match (t.new_line, t.old_line) {
+            (Some(n), _) => Some((false, n)),
+            (None, Some(o)) => Some((true, o)),
+            _ => None,
+        }
+    }
+
+    /// The discussion pending comment `d` replies to, when it is one of the request's.
+    pub(super) fn draft_thread(&self, d: &mr::Draft) -> Option<usize> {
+        let id = d.reply_to.as_deref()?;
+        self.requests.threads.iter().position(|t| t.id == id)
+    }
+
+    /// Where pending comment `d` is: its own place, or for a reply its discussion's (#166) —
+    /// (path, new line, old line); the path alone for a file's, nothing for the request's.
+    pub(super) fn draft_place(&self, d: &mr::Draft) -> Option<(String, Option<u32>, Option<u32>)> {
+        match self.draft_thread(d).map(|ix| &self.requests.threads[ix]) {
+            Some(t) => Some((t.path.clone()?, t.new_line, t.old_line)),
+            None => Some((d.path.clone()?, d.new_line, d.old_line)),
+        }
+    }
+
+    /// Where pending comment `d` is, said in a list: `file.rs:12`, or why it has no line.
+    pub(super) fn draft_where(&self, d: &mr::Draft) -> (String, Option<(String, u32)>, bool) {
+        let place = self.draft_place(d);
+        let target = place
+            .as_ref()
+            .and_then(|(p, new, old)| Some((p.clone(), new.or(*old)?)));
+        let old = place.as_ref().is_some_and(|(_, new, _)| new.is_none());
+        let said = match &target {
+            Some((p, n)) => format!("{}:{n}", p.rsplit('/').next().unwrap_or(p)),
+            // A reply whose discussion is not among the request's: not General, it was in one.
+            None if d.reply_to.is_some() && self.draft_thread(d).is_none() => {
+                "A reply to a discussion not here".to_owned()
+            }
+            None => "General".to_owned(),
+        };
+        (said, target, old)
     }
 
     /// A discussion of the request, drawn under its line: a frame with a header bar (it folds the
@@ -1124,7 +1212,7 @@ impl Workspace {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
+                    .cut_in_tip()
                     .when(open, |s| {
                         s.child(
                             div()
@@ -1527,11 +1615,22 @@ impl Workspace {
             .drafts
             .iter()
             .enumerate()
-            .filter(|(_, d)| d.path.as_deref() == Some(path))
-            .filter_map(|(ix, d)| match (d.new_line, d.old_line) {
-                (Some(n), _) => Some((ix, false, n)),
-                (None, Some(o)) => Some((ix, true, o)),
-                _ => None,
+            .filter_map(|(ix, d)| {
+                // A reply is drawn under its discussion, wherever that is now (#166).
+                if let Some(t) = self.draft_thread(d).map(|t| &self.requests.threads[t]) {
+                    let (old, line) = self
+                        .thread_line_now(t)
+                        .filter(|_| t.path.as_deref() == Some(path))?;
+                    return Some((ix, old, line));
+                }
+                if d.path.as_deref() != Some(path) {
+                    return None;
+                }
+                match (d.new_line, d.old_line) {
+                    (Some(n), _) => Some((ix, false, n)),
+                    (None, Some(o)) => Some((ix, true, o)),
+                    _ => None,
+                }
             })
             .collect()
     }
@@ -1586,12 +1685,22 @@ impl Workspace {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    // An agent's says who wrote it (#150).
+                    .flex()
+                    // A reply says whose discussion it goes into (#166).
                     .children(
-                        self.draft_agent(id)
-                            .map(|agent| format!("· {agent} wrote it")),
-                    ),
+                        self.draft_thread(d)
+                            .and_then(|t| self.requests.threads[t].notes.first())
+                            .map(|n| {
+                                super::hover::cut(
+                                    "draft-reply",
+                                    format!("· a reply to {}", n.author),
+                                )
+                            }),
+                    )
+                    // An agent's says who wrote it (#150).
+                    .children(self.draft_agent(id).map(|agent| {
+                        super::hover::cut("draft-agent", format!("· {agent} wrote it"))
+                    })),
             )
             .children(super::markdown::has_markdown(&d.body).then(|| {
                 self.rich_switch(("draft-rich", ix))
@@ -1759,11 +1868,9 @@ impl Workspace {
             .iter()
             .enumerate()
             .filter_map(|(ix, d)| {
-                let file = diff
-                    .files
-                    .iter()
-                    .position(|f| Some(f.path()) == d.path.as_deref())?;
-                Some((file, d.new_line.or(d.old_line)?, ix))
+                let (path, new, old) = self.draft_place(d)?;
+                let file = diff.files.iter().position(|f| f.path() == path)?;
+                Some((file, new.or(old)?, ix))
             })
             .collect();
         order.sort_unstable();
@@ -2024,12 +2131,7 @@ impl Workspace {
             }))
         });
         let draft_items = drafts.into_iter().map(|(ix, d)| {
-            let target = d.path.clone().zip(d.new_line.or(d.old_line));
-            let old = d.new_line.is_none();
-            let where_ = match &target {
-                Some((p, n)) => format!("{}:{n}", p.rsplit('/').next().unwrap_or(p)),
-                None => "General".to_owned(),
-            };
+            let (where_, target, old) = self.draft_where(d);
             comment_item(
                 ("comment-draft", ix),
                 theme::warning(),
@@ -2195,16 +2297,18 @@ impl Workspace {
     pub(super) fn shown_requests(&self) -> Vec<&Mr> {
         let filter = self.bfilter.to_lowercase();
         let words: Vec<&str> = filter.split_whitespace().collect();
-        // The merged or the closed as read, newest first; the open by what they need (#114).
+        // The merged or the closed as read, newest first, the host having picked the scope's
+        // (#114, #169); the open by what they need.
         let past = self.requests.view != mr::MrState::Opened;
+        let scope = self.requests.scope;
         let list = if past {
-            &self.requests.past.list
+            &self.requests.past.of_scope(scope).list
         } else {
             &self.requests.list
         };
         let mut shown: Vec<&Mr> = list
             .iter()
-            .filter(|m| self.in_scope(m, self.requests.scope))
+            .filter(|m| past || self.in_scope(m, scope))
             .filter(|m| {
                 let hay = format!(
                     "{} {} {} {}",
@@ -2244,18 +2348,28 @@ impl Workspace {
         if self.requests.login.is_none() || loading {
             return None;
         }
-        // The merged or the closed: counted as far as they are read (#114).
+        // The merged or the closed: as many as the host says, or counted as far as read (#114,
+        // #169).
         let past = self.requests.view != mr::MrState::Opened;
-        let (list, more) = if past {
-            (&self.requests.past.list, self.requests.past.more)
-        } else {
-            (&self.requests.list, false)
+        let count = |scope: Scope| {
+            if !past {
+                let list = &self.requests.list;
+                return list
+                    .iter()
+                    .filter(|m| self.in_scope(m, scope))
+                    .count()
+                    .to_string();
+            }
+            let pages = self.requests.past.of_scope(scope);
+            match pages.total {
+                Some(total) => total.to_string(),
+                None => format!("{}{}", pages.list.len(), if pages.more { "+" } else { "" }),
+            }
         };
-        let count = |scope: Scope| list.iter().filter(|m| self.in_scope(m, scope)).count();
         let filter = |scope: Scope, id: &'static str, name: &'static str| {
             super::diff_view::chip(
                 id,
-                format!("{name} {}{}", count(scope), if more { "+" } else { "" }),
+                format!("{name} {}", count(scope)),
                 self.requests.scope == scope,
             )
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -2612,23 +2726,19 @@ pub(super) fn comment_item(
                 .gap_2()
                 .child(div().flex_none().size(px(6.)).rounded_full().bg(tone))
                 .child(
-                    div()
+                    super::hover::cut("where", where_)
                         .flex_1()
-                        .min_w_0()
-                        .truncate()
                         .font_family(theme::CODE_FONT)
                         .text_size(px(11.))
-                        .text_color(theme::faint())
-                        .child(where_),
+                        .text_color(theme::faint()),
                 ),
         )
         .child(
-            div()
-                .line_clamp(2)
-                .pl(px(14.))
-                .text_size(px(12.))
-                .text_color(theme::muted())
-                .child(body),
+            div().pl(px(14.)).child(
+                super::hover::cut_to("body", body, 2)
+                    .text_size(px(12.))
+                    .text_color(theme::muted()),
+            ),
         )
 }
 
