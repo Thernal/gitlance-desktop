@@ -366,6 +366,7 @@ impl Workspace {
                 self.set_tool(None, cx);
             } else if self.clear_filter() {
                 cx.notify();
+            } else if self.unpick_compare(cx) {
             } else {
                 self.go_up(cx);
             }

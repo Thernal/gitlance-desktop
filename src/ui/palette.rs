@@ -1222,8 +1222,11 @@ impl Workspace {
             && matches!(self.nav_page(), Some(super::nav::Page::Compare(..)))
             && self.nav_page() != Some(&page)
         {
-            self.arrive(page);
+            self.arrive(page.clone());
         }
+        // A comparison's own page lists its commits (#21); a request's or a branch's has its own.
+        let own = request.is_none() && self.nav_page() == Some(&page);
+        self.read_compare_commits(own.then_some(page), cx);
         let settings = self.settings();
         self.load_diff(None, cx, move || {
             let repo = Repo::open(&root)?;

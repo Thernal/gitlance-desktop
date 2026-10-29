@@ -576,14 +576,18 @@ impl BranchCard {
 impl Workspace {
     /// The card of commit `ix` of the list.
     pub(super) fn commit_card(&self, ix: usize) -> Option<CommitCard> {
-        let info = self.commits.get(ix)?.clone();
-        Some(CommitCard {
+        Some(self.card_of(self.commits.get(ix)?.clone()))
+    }
+
+    /// The card of commit `info`, of whatever list.
+    pub(super) fn card_of(&self, info: crate::git::CommitInfo) -> CommitCard {
+        CommitCard {
             refs: self.decor.get(&info.id).cloned().unwrap_or_default(),
             url: self.web.as_ref().map(|w| w.commit(&info.id.to_string())),
             info,
             root: self.root.clone(),
             stat: None,
-        })
+        }
     }
 
     /// The card of the person named `name` (`login` when known): their part in the open request.

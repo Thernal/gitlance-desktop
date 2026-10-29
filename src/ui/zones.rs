@@ -76,7 +76,10 @@ impl Workspace {
             return out;
         }
         // A tabbed item's commits are its Commits tab, not a section of the panel (#73, #74).
-        if self.side_open() && !self.layout.fold_commits && self.side_commits() {
+        if self.side_open()
+            && !self.layout.fold_commits
+            && (self.side_commits() || self.shown_compare().is_some())
+        {
             out.push(Zone::Commits);
         }
         if self.diff.is_some() && !self.settings_open {
@@ -126,6 +129,9 @@ impl Workspace {
             return self.step_commit_pick(down, cx);
         }
         match self.zone {
+            Zone::Commits if self.shown_compare().is_some() => {
+                return self.step_compare_pick(down, cx);
+            }
             Zone::Commits => self.step_commit_row(down, cx),
             Zone::Branches => self.step_pick(down, cx),
             Zone::Files => self.step_file_item(down, cx),

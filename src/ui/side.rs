@@ -192,7 +192,9 @@ impl Workspace {
                 if self.side_versions() {
                     icons.push(("layers", "Versions", None));
                 }
-                if self.side_commits() && !self.commits.is_empty() {
+                if (self.side_commits() && !self.commits.is_empty())
+                    || self.shown_compare().is_some()
+                {
                     icons.push(("commit", "Commits", Some(Zone::Commits)));
                 }
                 if self.diff.as_ref().is_some_and(|d| !d.files.is_empty()) {
@@ -360,6 +362,43 @@ impl Workspace {
                         })
                 });
             sections.push(open_share(commits, "commits-open", !commits_folded).into_any_element());
+        }
+
+        // A comparison's own commits over its changes, as tall as their rows (#21).
+        if let Some(n) = self
+            .shown_compare()
+            .and_then(|c| c.list.as_ref())
+            .map(Vec::len)
+        {
+            let folded = self.section_folded(Section::Commits);
+            if !sections.is_empty() {
+                sections.push(rule().into_any_element());
+            }
+            let rows = self.render_compare_commits(cx);
+            sections.push(
+                div()
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| this.set_zone(Zone::Commits, cx)),
+                    )
+                    .child(self.section_header(
+                        Section::Commits,
+                        format!("Commits{}", self.zone_tag(Zone::Commits)),
+                        self.compare_summary(),
+                        vec![count(n.to_string())],
+                        true,
+                        cx,
+                    ))
+                    .children(
+                        rows.and_then(|rows| {
+                            self.folding("compare-commits", "fold-1", !folded, rows)
+                        }),
+                    )
+                    .into_any_element(),
+            );
         }
 
         if let Some(diff) = self.diff.as_ref().filter(|d| !d.files.is_empty()) {

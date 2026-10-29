@@ -11,6 +11,7 @@ mod bookmarks;
 mod branch_page;
 mod code;
 mod comments;
+mod compare;
 mod complete;
 mod connecting;
 mod create;
@@ -1577,6 +1578,8 @@ pub struct Workspace {
     branch: Option<usize>,
     /// The loaded branch's page: its main line, how far from it, where it is pushed (#74).
     branch_page: Option<branch_page::Facts>,
+    /// A comparison's own commits, and the run of them its diff is narrowed to (#21).
+    compare_commits: Option<compare::CompareCommits>,
     /// The Code space: its tree, revision and tabs (#75).
     code: code::Code,
     /// The project is a plain folder, not a git repository: Code is all it has (#75).
@@ -1861,6 +1864,7 @@ pub struct Workspace {
     /// Advance of one code character, measured on the first render.
     char_width: f32,
     commit_scroll: UniformListScrollHandle,
+    compare_scroll: UniformListScrollHandle,
     file_scroll: UniformListScrollHandle,
     // Replacing a task drops, and so cancels, the one it replaces.
     repo_task: Option<Task<()>>,
@@ -1952,6 +1956,7 @@ impl Workspace {
             branches: Vec::new(),
             branch: None,
             branch_page: None,
+            compare_commits: None,
             code: Default::default(),
             plain: false,
             project: None,
@@ -2084,6 +2089,7 @@ impl Workspace {
             on_screen: Rc::new(Shared::new(true)),
             char_width: 0.,
             commit_scroll: UniformListScrollHandle::new(),
+            compare_scroll: UniformListScrollHandle::new(),
             file_scroll: UniformListScrollHandle::new(),
             repo_task: None,
             branch_task: None,
@@ -3067,6 +3073,9 @@ impl Workspace {
             Selection::Commits { newest, oldest } => self.load_commits(newest, oldest, keep, cx),
             Selection::Versions { from, to } => self.load_versions(from, to, keep, cx),
             Selection::WorkingTree => self.load_working_tree(keep, cx),
+            Selection::None if self.narrowed_compare().is_some() => {
+                self.load_compare_pick(keep, cx)
+            }
             Selection::None => {}
         }
     }
@@ -3641,7 +3650,9 @@ impl Workspace {
         match &diff.header {
             Header::Commit(c) => c.summary.clone(),
             Header::WorkingTree { .. } => "Working tree".to_owned(),
-            Header::Compare { base, head, .. } => format!("{} … {}", base.0, head.0),
+            Header::Compare { base, head, .. } => self
+                .compare_title()
+                .unwrap_or_else(|| format!("{} … {}", base.0, head.0)),
             Header::Interdiff { new, .. } => format!("Interdiff · {}", new.summary),
             Header::Versions { from, to, .. } => format!("v{} → v{}", from.number, to.number),
         }
@@ -3822,6 +3833,10 @@ impl Workspace {
                     ))
                     .into_any_element()
             }
+            // A run of a comparison's commits says so, its × the whole again (#21).
+            Header::Compare { .. } if self.narrowed_compare().is_some() => self
+                .render_compare_only(cx)
+                .unwrap_or_else(|| div().into_any_element()),
             Header::Compare {
                 base,
                 head,
@@ -4146,7 +4161,10 @@ impl Workspace {
                                 div()
                                     .text_size(px(15.))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child(format!("{} … {}", base.0, head.0)),
+                                    .child(
+                                        self.compare_title()
+                                            .unwrap_or_else(|| format!("{} … {}", base.0, head.0)),
+                                    ),
                             ),
                     )
                     .child(

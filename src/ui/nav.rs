@@ -459,6 +459,10 @@ impl Workspace {
                 Selection::None | Selection::WorkingTree => Page::Request(iid),
             });
         }
+        // A run of a comparison's commits is a filter of its page, not a page (#21).
+        if let Some(page) = self.narrowed_compare() {
+            return Some(page.clone());
+        }
         let tabbed = self.branch_tabbed(&refname);
         Some(
             match (self.selection, self.diff.as_ref().map(|d| &d.header)) {
