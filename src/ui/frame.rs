@@ -1014,6 +1014,7 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(Self::compare_action))
             .on_action(cx.listener(Self::copy_link_action))
+            .on_action(cx.listener(Self::pin_tab_action))
             .on_action(cx.listener(Self::palette_up))
             .on_action(cx.listener(Self::palette_down))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {

@@ -74,7 +74,10 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("⌘F", "find in the diff · filter a space's list"),
             ("⌘⌥F", "search all files of the diff"),
             ("⌘⇧F", "search commits"),
-            ("⌥⌘P", "filter the changed files by path"),
+            (
+                "⌥⌘P",
+                "filter the changed files by path; in Code, pin the tab",
+            ),
             ("⌥⌘C", "compare two refs"),
             ("⌥⇧⌘C", "copy the link to this page"),
             ("⌘E", "recent places"),

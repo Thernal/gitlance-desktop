@@ -75,6 +75,8 @@ pub enum Act {
     KeepCodeTab(String),
     CloseCodeTab(String),
     CloseCodeTabs(Option<String>),
+    CloseCodeTabsRight(String),
+    PinCodeTab(String),
     /// The requests list shows the open, the merged or the closed (#114).
     RequestView(crate::mr::MrState),
     AlwaysOpen(String),
@@ -222,6 +224,8 @@ impl Workspace {
             Act::KeepCodeTab(key) => self.keep_code_tab(&key, cx),
             Act::CloseCodeTab(key) => self.close_code_tab(&key, cx),
             Act::CloseCodeTabs(keep) => self.close_code_tabs(keep, cx),
+            Act::CloseCodeTabsRight(key) => self.close_code_tabs_right(key, cx),
+            Act::PinCodeTab(key) => self.toggle_pin(&key, cx),
             Act::NameProject(path) => self.open_label(super::labeling::Target::Project(path), cx),
             Act::NameChat { session, agent } => {
                 self.open_label(super::labeling::Target::Chat { session, agent }, cx)

@@ -164,6 +164,7 @@ actions!(
         OpenIn,
         RevealInFinder,
         CopyLink,
+        PinTab,
         ShowShortcuts,
         NameProject,
         ToggleThread,
@@ -1230,6 +1231,14 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
             });
             wait(2000).await;
         }
+        // Code's tabs: the project's pins, a file kept and one previewed, before the keys (#20).
+        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("code-tabs")) {
+            ws.update(cx, |this, cx| {
+                this.open_code_file("README.md".into(), false, cx);
+                this.open_code_file("src/main.rs".into(), true, cx);
+            });
+            wait(1500).await;
+        }
         if let Ok(keys) = std::env::var("GITLANCE_SNAPSHOT_KEYS") {
             // Keystrokes sent to the window itself (not the keyboard), e.g. `right right cmd-t`.
             // `wait` gives a diff a second to load before the next key.
@@ -2133,6 +2142,8 @@ impl Workspace {
                         this.page.load(&crate::review::key(&root));
                         // Its requests list's folds and the requests opened (#81).
                         this.roots.load(&crate::review::key(&root));
+                        // Code's pinned tabs (#20).
+                        this.code.load_pins(&crate::review::key(&root));
                         this.root = Some(root);
                         // Once the root is this repository's: it reads whether fetch is off for it (#141).
                         this.start_fetching(cx);
@@ -2191,6 +2202,7 @@ impl Workspace {
         self.load_requests(cx);
         self.page.load(&crate::review::key(&root));
         self.roots.load(&crate::review::key(&root));
+        self.code.load_pins(&crate::review::key(&root));
         self.root = Some(root);
         self.branches.clear();
         self.clear_branch();
@@ -3235,6 +3247,10 @@ impl Workspace {
     }
 
     fn filter_files_action(&mut self, _: &FilterFiles, _: &mut Window, cx: &mut Context<Self>) {
+        // ⌥⌘P in Code pins the tab on screen (#20): Code has no changed files to filter.
+        if self.nav.space == spaces::Space::Code && self.pin_shown_tab(cx) {
+            return;
+        }
         self.zone = zones::Zone::Files;
         self.start_field(Field::Files, cx);
     }
@@ -3387,6 +3403,13 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.search(palette::Scope::All, cx);
+    }
+
+    /// ⌘K's Pin tab: Code's tab on screen pinned or unpinned (#20).
+    fn pin_tab_action(&mut self, _: &PinTab, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.pin_shown_tab(cx) {
+            self.toast_info("Pin tab: open a file or a folder in Code".into(), cx);
+        }
     }
 
     fn copy_link_action(&mut self, _: &CopyLink, _: &mut Window, cx: &mut Context<Self>) {

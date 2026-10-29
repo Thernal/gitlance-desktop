@@ -162,6 +162,7 @@ pub enum Cmd {
     ZoomReset,
     Switch,
     CopyLink,
+    PinTab,
     Space(Space),
 }
 
@@ -173,6 +174,7 @@ const COMMANDS: &[(&str, &str, Cmd)] = &[
     ("Switch to a branch or a merge request…", "", Cmd::Switch),
     ("Compare two refs…", "⌥⌘C", Cmd::Compare),
     ("Copy link to this page", "⌥⇧⌘C", Cmd::CopyLink),
+    ("Pin tab", "⌥⌘P", Cmd::PinTab),
     ("Create merge request…", "⌥⌘M", Cmd::CreateRequest),
     (
         "Send the comments to an agent's chat…",
@@ -599,6 +601,7 @@ impl Workspace {
     fn command_label(&self, label: &str, cmd: Cmd) -> String {
         match cmd {
             Cmd::CopyLink => format!("Copy link to {}", self.page_kind()),
+            Cmd::PinTab if self.shown_tab_pinned() => "Unpin tab".to_owned(),
             _ => label.to_owned(),
         }
     }
@@ -1587,6 +1590,7 @@ fn command_action(cmd: Cmd) -> Box<dyn Action> {
         Cmd::ZoomReset => Box::new(ZoomReset),
         Cmd::Switch => Box::new(SwitchTo),
         Cmd::CopyLink => Box::new(super::CopyLink),
+        Cmd::PinTab => Box::new(super::PinTab),
         Cmd::Space(Space::Inbox) => Box::new(super::GoToInbox),
         Cmd::Space(Space::Code) => Box::new(super::GoToCode),
         Cmd::Space(Space::Branches) => Box::new(super::GoToBranches),

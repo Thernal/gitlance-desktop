@@ -96,7 +96,7 @@ Four spaces in the menu on the left (⌃⌘1…4), each keeping the page it was 
 | Space | What is in it |
 |---|---|
 | **Inbox** ⌘⇧N | GitLab to-dos or GitHub notifications, new replies where you wrote, your discussions resolved by someone else, your agents' answers — All · Mentions · Agents · Reviews. Reply (r), resolve, mark done (e) in place. |
-| **Code** | the project's tree at the working tree, `HEAD`, a branch or a commit. Files and folders open as tabs; a file is highlighted, Markdown rendered. A folder that is not a git repository opens too. |
+| **Code** | the project's tree at the working tree, `HEAD`, a branch or a commit. Files and folders open as tabs, the ones you pin kept first, through every close and a restart; a file is highlighted, Markdown rendered. A folder that is not a git repository opens too. |
 | **Branches** | the working tree's changes first, then local branches with ahead / behind the main line and their request. A branch opens as Commits · Changes since it forked. |
 | **Merge requests** | the groups above; a request opens as Overview · Commits · Changes. |
 

@@ -39,6 +39,11 @@ pub struct Code {
     /// `preview` is the one the next click replaces.
     pub tabs: Vec<String>,
     pub preview: Option<String>,
+    /// The tabs pinned (#20): first in `tabs`, in their order; no close takes one, and they are
+    /// kept with the project (`PINS_FILE`).
+    pub pins: Vec<String>,
+    /// The project whose pins are held.
+    pins_of: Option<String>,
     /// The tabs' strip, scrolled to the one on screen.
     tab_scroll: gpui::ScrollHandle,
     /// The root's README at the revision: its path and text.
@@ -85,6 +90,78 @@ impl Code {
         }
         out
     }
+
+    pub fn pinned(&self, key: &str) -> bool {
+        self.pins.iter().any(|p| p == key)
+    }
+
+    /// Project `repo`'s pinned tabs, first among the tabs, unless they are the ones held.
+    pub fn load_pins(&mut self, repo: &str) {
+        if self.pins_of.as_deref() == Some(repo) {
+            return;
+        }
+        self.pins = kept_pins(&crate::storage::read(PINS_FILE), repo);
+        let rest: Vec<String> = self
+            .tabs
+            .drain(..)
+            .filter(|t| !self.pins.contains(t))
+            .collect();
+        self.tabs = self.pins.iter().cloned().chain(rest).collect();
+        self.pins_of = Some(repo.to_owned());
+    }
+
+    /// Tab `key` pinned, the last of the pinned (a preview kept so), or unpinned, the first after
+    /// them.
+    fn toggle_pin(&mut self, key: &str) {
+        let pin = !self.pinned(key);
+        self.pins.retain(|p| p != key);
+        self.tabs.retain(|t| t != key);
+        self.tabs.insert(self.pins.len(), key.to_owned());
+        if pin {
+            self.pins.push(key.to_owned());
+            if self.preview.as_deref() == Some(key) {
+                self.preview = None;
+            }
+        }
+        self.keep_pins();
+    }
+
+    fn keep_pins(&self) {
+        if let Some(repo) = &self.pins_of {
+            let text = crate::storage::read(PINS_FILE);
+            crate::storage::save(PINS_FILE, with_pins(&text, repo, &self.pins));
+        }
+    }
+}
+
+/// Each project's pinned tabs: a line per project, its key and then its tabs, apart by tabs.
+const PINS_FILE: &str = "code-pins.txt";
+
+/// Project `repo`'s pinned tabs in `text`, in their order.
+fn kept_pins(text: &str, repo: &str) -> Vec<String> {
+    text.lines()
+        .find(|l| l.split('\t').next() == Some(repo))
+        .map(|l| {
+            l.split('\t')
+                .skip(1)
+                .filter(|k| !k.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `text` with project `repo`'s line written anew (none without pins); the others' kept.
+fn with_pins(text: &str, repo: &str, pins: &[String]) -> String {
+    let mut lines: Vec<String> = text
+        .lines()
+        .filter(|l| !l.is_empty() && l.split('\t').next() != Some(repo))
+        .map(str::to_owned)
+        .collect();
+    if !pins.is_empty() {
+        lines.push(format!("{repo}\t{}", pins.join("\t")));
+    }
+    lines.join("\n") + "\n"
 }
 
 /// One of Code's tabs being dragged: its path.
@@ -234,9 +311,13 @@ impl Workspace {
         self.open_file_view(path, cx);
     }
 
-    /// Tab `from` dragged onto tab `to`: it takes that place.
+    /// Tab `from` dragged onto tab `to`: it takes that place, a pinned one among the pinned.
     fn move_code_tab(&mut self, from: &str, to: &str, cx: &mut Context<Self>) {
-        let tabs = &mut self.code.tabs;
+        let code = &mut self.code;
+        if code.pinned(from) != code.pinned(to) {
+            return;
+        }
+        let tabs = &mut code.tabs;
         let (Some(a), Some(b)) = (
             tabs.iter().position(|t| t == from),
             tabs.iter().position(|t| t == to),
@@ -245,7 +326,38 @@ impl Workspace {
         };
         let moved = tabs.remove(a);
         tabs.insert(b, moved);
+        if code.pinned(from) {
+            code.pins = code.tabs[..code.pins.len()].to_vec();
+            code.keep_pins();
+        }
         cx.notify();
+    }
+
+    /// Tab `key` pinned — first among the tabs, through every close and a restart — or unpinned,
+    /// first after the pinned ones (#20).
+    pub(super) fn toggle_pin(&mut self, key: &str, cx: &mut Context<Self>) {
+        self.code.toggle_pin(key);
+        self.scroll_to_code_tab();
+        cx.notify();
+    }
+
+    /// ⌥⌘P and ⌘K's Pin tab: the tab on screen in Code pinned or unpinned; false when there is
+    /// none.
+    pub(super) fn pin_shown_tab(&mut self, cx: &mut Context<Self>) -> bool {
+        let tabs = self.code.shown_tabs();
+        let Some(key) = self
+            .shown_tab()
+            .filter(|k| tabs.iter().any(|(t, _)| t == k))
+        else {
+            return false;
+        };
+        self.toggle_pin(&key, cx);
+        true
+    }
+
+    /// Whether Code's tab on screen is pinned: ⌘K says Unpin.
+    pub(super) fn shown_tab_pinned(&self) -> bool {
+        self.shown_tab().is_some_and(|k| self.code.pinned(&k))
     }
 
     /// The tab of the page on screen in Code: a file's path, a folder's with its slash.
@@ -289,8 +401,12 @@ impl Workspace {
         }
     }
 
-    /// ⌘W in Code: the tab on screen closes, its neighbour shows, else the project's page.
+    /// ⌘W in Code: the tab on screen closes, its neighbour shows, else the project's page. A
+    /// pinned one stays: unpinned first (#20).
     pub(super) fn close_code_tab(&mut self, key: &str, cx: &mut Context<Self>) {
+        if self.code.pinned(key) {
+            return self.toast_info("Pinned: unpin it to close it".into(), cx);
+        }
         let shown = self.code.shown_tabs();
         let at = shown.iter().position(|(p, _)| p == key);
         self.code.tabs.retain(|t| t != key);
@@ -311,16 +427,47 @@ impl Workspace {
         }
     }
 
-    /// Every tab closes but `keep`'s (Close others), or every one (Close all).
+    /// Every tab closes but `keep`'s (Close others), or every one (Close all) — the pinned ones
+    /// stay.
     pub(super) fn close_code_tabs(&mut self, keep: Option<String>, cx: &mut Context<Self>) {
         let keep = keep.filter(|k| self.code.shown_tabs().iter().any(|(t, _)| t == k));
-        self.code.tabs.retain(|t| Some(t) == keep.as_ref());
-        if self.code.preview != keep {
+        let code = &mut self.code;
+        code.tabs
+            .retain(|t| Some(t) == keep.as_ref() || code.pins.contains(t));
+        if code.preview != keep {
+            code.preview = None;
+        }
+        self.after_closing(keep, cx);
+    }
+
+    /// Close to the right: the tabs after `key` close, the pinned ones staying.
+    pub(super) fn close_code_tabs_right(&mut self, key: String, cx: &mut Context<Self>) {
+        let tabs = self.code.shown_tabs();
+        let Some(at) = tabs.iter().position(|(t, _)| *t == key) else {
+            return;
+        };
+        let gone: Vec<String> = tabs[at + 1..]
+            .iter()
+            .map(|(t, _)| t.clone())
+            .filter(|t| !self.code.pinned(t))
+            .collect();
+        self.code.tabs.retain(|t| !gone.contains(t));
+        if self.code.preview.as_ref().is_some_and(|p| gone.contains(p)) {
             self.code.preview = None;
         }
+        self.after_closing(Some(key), cx);
+    }
+
+    /// Tabs closed: `keep` shows if the one on screen went, the one on screen stays if it did not,
+    /// else the project's page.
+    fn after_closing(&mut self, keep: Option<String>, cx: &mut Context<Self>) {
+        let shown = self.shown_tab();
+        let left = shown
+            .as_ref()
+            .is_some_and(|s| self.code.shown_tabs().iter().any(|(t, _)| t == s));
         match keep {
-            Some(key) if self.shown_tab().as_ref() != Some(&key) => self.open_code_tab(&key, cx),
-            Some(_) => cx.notify(),
+            _ if left => cx.notify(),
+            Some(key) => self.open_code_tab(&key, cx),
             None => {
                 self.file_view = None;
                 self.show(Space::Code, None, cx);
@@ -770,6 +917,7 @@ impl Workspace {
         let shown = self.shown_tab();
         let rule = theme::island_border();
         let root = self.root.clone();
+        let last_pin = self.code.pins.last().cloned();
         // GPUI clips to a rectangle, not to the island's round corners: the strip rounds its own
         // top inside the island's border, the tabs start a corner's width in so the one on screen
         // never fills a corner, and ▾ rounds the other (the developer, 2026-10-23).
@@ -786,8 +934,11 @@ impl Workspace {
             .flex()
             .overflow_x_scroll()
             .track_scroll(&self.code.tab_scroll)
-            .children(tabs.iter().cloned().map(|(key, preview)| {
+            .children(tabs.iter().cloned().flat_map(|(key, preview)| {
                 let on = shown.as_ref() == Some(&key);
+                let pinned = self.code.pinned(&key);
+                // A line after the last pinned tab parts them from the rest (#20, B).
+                let parted = last_pin.as_ref() == Some(&key) && tabs.len() > self.code.pins.len();
                 let path = key.trim_end_matches('/').to_owned();
                 let folder = key.ends_with('/');
                 let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
@@ -796,7 +947,7 @@ impl Workspace {
                 let full = root.as_ref().map(|r| r.join(&path));
                 let label = name.clone();
                 let whole = key.clone();
-                div()
+                let tab = div()
                     .id(SharedString::from(format!("code-tab-{key}")))
                     .flex_none()
                     .h_full()
@@ -835,6 +986,7 @@ impl Workspace {
                         icons::file_icon(&path, 14.)
                     })
                     .child(div().when(preview, |s| s.italic()).child(name))
+                    // A pinned tab's pin where × would be: a click unpins it.
                     .child(
                         div()
                             .id(SharedString::from(format!("code-tab-x-{key}")))
@@ -844,10 +996,21 @@ impl Workspace {
                             .justify_center()
                             .rounded(px(4.))
                             .hover(|s| s.bg(theme::hover()))
-                            .child(icons::icon("x").size(px(12.)).text_color(theme::faint()))
+                            .child(
+                                icons::icon(if pinned { "pin" } else { "x" })
+                                    .size(px(12.))
+                                    .text_color(theme::faint()),
+                            )
+                            .when(pinned, |s| {
+                                s.tooltip(|_, cx| cx.new(|_| super::Tip("Unpin")).into())
+                            })
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
-                                this.close_code_tab(&close, cx)
+                                if pinned {
+                                    this.toggle_pin(&close, cx)
+                                } else {
+                                    this.close_code_tab(&close, cx)
+                                }
                             })),
                     )
                     .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
@@ -860,16 +1023,33 @@ impl Workspace {
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
-                            let mut groups = Vec::new();
+                            let mut keep = Vec::new();
                             if preview {
-                                groups.push(vec![Entry::new(
+                                keep.push(Entry::new(
                                     "Keep it open",
                                     Act::KeepCodeTab(menu.clone()),
-                                )]);
+                                ));
                             }
+                            keep.push(
+                                Entry::new(
+                                    if pinned { "Unpin tab" } else { "Pin tab" },
+                                    Act::PinCodeTab(menu.clone()),
+                                )
+                                .key("⌥⌘P"),
+                            );
+                            let close = if pinned {
+                                Entry::off("Close — pinned")
+                            } else {
+                                Entry::new("Close", Act::CloseCodeTab(menu.clone())).key("⌘W")
+                            };
+                            let mut groups = vec![keep];
                             groups.push(vec![
-                                Entry::new("Close", Act::CloseCodeTab(menu.clone())).key("⌘W"),
+                                close,
                                 Entry::new("Close others", Act::CloseCodeTabs(Some(menu.clone()))),
+                                Entry::new(
+                                    "Close to the right",
+                                    Act::CloseCodeTabsRight(menu.clone()),
+                                ),
                                 Entry::new("Close all", Act::CloseCodeTabs(None)),
                             ]);
                             let mut place = vec![Entry::new(
@@ -885,7 +1065,16 @@ impl Workspace {
                             groups.push(place);
                             this.open_menu(e.position, groups, cx)
                         }),
-                    )
+                    );
+                let line = parted.then(|| {
+                    div()
+                        .flex_none()
+                        .w(px(2.))
+                        .h_full()
+                        .bg(theme::border())
+                        .into_any_element()
+                });
+                std::iter::once(tab.into_any_element()).chain(line)
             }))
             // The rest of the strip, on its line.
             .child(
@@ -1206,6 +1395,30 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pinned_tab_goes_first_and_is_kept_by_project() {
+        let mut code = Code {
+            tabs: vec!["a.rs".into(), "b.rs".into(), "src/".into()],
+            preview: Some("c.rs".into()),
+            ..Default::default()
+        };
+        code.toggle_pin("src/");
+        // A preview pinned is kept.
+        code.toggle_pin("c.rs");
+        assert_eq!(code.tabs, ["src/", "c.rs", "a.rs", "b.rs"]);
+        assert_eq!(code.pins, ["src/", "c.rs"]);
+        assert_eq!(code.preview, None);
+        // Unpinned, it is the first after the pinned.
+        code.toggle_pin("src/");
+        assert_eq!(code.tabs, ["c.rs", "src/", "a.rs", "b.rs"]);
+        assert_eq!(code.pins, ["c.rs"]);
+        // Each project its own line.
+        let text = with_pins("other\tx.rs\n", "me", &code.pins);
+        assert_eq!(kept_pins(&text, "me"), ["c.rs"]);
+        assert_eq!(kept_pins(&text, "other"), ["x.rs"]);
+        assert!(kept_pins(&with_pins(&text, "me", &[]), "me").is_empty());
+    }
 
     #[test]
     fn a_folder_is_a_tab_beside_the_files() {
