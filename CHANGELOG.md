@@ -16,6 +16,11 @@ for someone using the app, not for someone reading the code; the commits follow 
 - **A comparison's commits.** Comparing two branches, tags or commits lists the commits it holds over its
   files, newest first. A click shows one commit's own changes, a ⇧-click a run of them, ↑ ↓ step through them;
   "a41f9c0 only" says so over the diff, and esc or its × bring the whole comparison back.
+- **Set up GitLance.** The first start opens a page of three tabs before the welcome: Agents connects Claude
+  Code's profiles and gives Codex its command, Keys picks GitLance's, Android Studio's or VS Code's keys and shows
+  the ones that matter, Look picks the theme, the code's colours, the panes, the faces and the sizes. Each is
+  what Settings does, at its shortest; a tab is ticked once it is set. Later or Done brings the welcome back, and
+  Help → Set Up GitLance… opens it again.
 - **Fonts and size.** Settings → Appearance → Fonts and size picks the interface's face and the code's from
   every face installed, each drawn in its own type: a few in the menu, Other… for all of them, filtered as you
   type. The code's size is in points there, beside the interface size, which moved from Settings → Diff too. At a

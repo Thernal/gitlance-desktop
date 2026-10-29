@@ -118,6 +118,15 @@ impl Shell {
             }
             shell.select(active.min(shell.tabs.len() - 1), window, cx);
         }
+        // The first start: Set up over the welcome (#143); a release that adds a part, that part.
+        let parts = if primary {
+            super::setup::due()
+        } else {
+            Vec::new()
+        };
+        if !parts.is_empty() {
+            shell.tabs[shell.active].update(cx, |w, cx| w.open_setup(parts, cx));
+        }
         shell
     }
 

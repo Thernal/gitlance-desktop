@@ -68,6 +68,13 @@ fn home() -> Option<PathBuf> {
         .or_else(|| Some(std::env::home_dir()?.join(".codex")))
 }
 
+/// Whether Codex has GitLance's MCP server (`codex mcp add gitlance`): its config names it.
+pub fn connected() -> bool {
+    home()
+        .and_then(|h| std::fs::read_to_string(h.join("config.toml")).ok())
+        .is_some_and(|c| c.contains("[mcp_servers.gitlance]"))
+}
+
 /// The `codex` program; an app started from the Finder has no shell's PATH.
 fn program() -> Option<PathBuf> {
     let home = std::env::home_dir()?;

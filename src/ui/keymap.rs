@@ -212,6 +212,15 @@ impl Keymap {
         self.preset
     }
 
+    /// The keys GitLance ships for action `name`, before a preset or the user's changes.
+    pub fn shipped(&self, name: &str) -> Vec<String> {
+        self.defaults
+            .iter()
+            .filter(|d| short(d.action().name()) == name)
+            .map(keystrokes)
+            .collect()
+    }
+
     /// How many actions the user changed.
     pub fn changed_count(&self) -> usize {
         self.overrides.len()

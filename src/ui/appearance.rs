@@ -607,16 +607,21 @@ fn card(
 
 /// Cards three to a row.
 fn rows_of_three(cards: Vec<AnyElement>) -> Div {
+    rows_of(3, cards)
+}
+
+/// Cards `per` to a row, the last row's room kept.
+pub(super) fn rows_of(per: usize, cards: Vec<AnyElement>) -> Div {
     let mut rows: Vec<Div> = Vec::new();
     let mut cards = cards.into_iter().peekable();
     while cards.peek().is_some() {
         let mut row = div().flex().gap(px(12.));
         let mut n = 0;
-        for card in cards.by_ref().take(3) {
+        for card in cards.by_ref().take(per) {
             row = row.child(card);
             n += 1;
         }
-        for _ in n..3 {
+        for _ in n..per {
             row = row.child(div().flex_1());
         }
         rows.push(row);
@@ -683,28 +688,11 @@ fn tag_of(t: &Theme) -> Option<(String, bool)> {
 }
 
 impl Workspace {
-    /// The page: Window, Code, several projects, panes, your themes — or the editor.
-    pub(super) fn render_appearance(
-        &self,
-        projects: AnyElement,
-        panes: AnyElement,
-        fold: AnyElement,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        if self.theme_edit.is_some() {
-            return self.render_theme_editor(cx);
-        }
-        let all = theme::all();
+    /// The Window themes as cards, the chosen one framed; a card's Edit opens the editor
+    /// (Settings → Appearance, and Set up's Look).
+    pub(super) fn window_cards(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let choice = theme::choice();
-        let window = all
-            .iter()
-            .find(|t| t.id == choice.window)
-            .unwrap_or(&all[0]);
-        let code = choice
-            .code
-            .as_deref()
-            .and_then(|id| all.iter().find(|t| t.id == id));
-        let windows: Vec<AnyElement> = all
+        theme::all()
             .iter()
             .filter(|t| t.window)
             .enumerate()
@@ -740,7 +728,32 @@ impl Workspace {
                 }))
                 .into_any_element()
             })
-            .collect();
+            .collect()
+    }
+
+    /// The page: Window, Code, fonts and size, several projects, panes, your themes — or the
+    /// editor.
+    pub(super) fn render_appearance(
+        &self,
+        projects: AnyElement,
+        panes: AnyElement,
+        fold: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if self.theme_edit.is_some() {
+            return self.render_theme_editor(cx);
+        }
+        let all = theme::all();
+        let choice = theme::choice();
+        let window = all
+            .iter()
+            .find(|t| t.id == choice.window)
+            .unwrap_or(&all[0]);
+        let code = choice
+            .code
+            .as_deref()
+            .and_then(|id| all.iter().find(|t| t.id == id));
+        let windows = self.window_cards(cx);
         let mut codes: Vec<AnyElement> = vec![
             card(
                 ("code-theme-follow", 0),

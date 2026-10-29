@@ -88,6 +88,8 @@ pub enum Act {
         face: Option<String>,
     },
     OtherFaces(bool),
+    /// Set up's Code colours (#143): a code theme, None following the window.
+    CodeTheme(Option<String>),
 }
 
 #[derive(Clone)]
@@ -249,6 +251,7 @@ impl Workspace {
             Act::EditorSettings => self.open_settings(cx),
             Act::Face { code, face } => self.choose_face(code, face, cx),
             Act::OtherFaces(code) => self.open_all_faces(code, cx),
+            Act::CodeTheme(id) => self.choose_code_theme(id, cx),
             // Need the window: `run_act_in` runs them.
             Act::MoveProject { .. } | Act::CloseProject(_) => {}
         }

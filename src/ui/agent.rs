@@ -2206,7 +2206,7 @@ impl Workspace {
             ))
     }
 
-    fn connect_claude(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn connect_claude(&mut self, cx: &mut Context<Self>) {
         if self.agent_setup_busy {
             return;
         }
@@ -2220,6 +2220,7 @@ impl Workspace {
                 .await;
             this.update(cx, |this, cx| {
                 this.agent_setup_busy = false;
+                this.setup_look_again();
                 this.agent_setup = Some(match result {
                     Ok(text) => text,
                     Err(text) => format!("Not connected — {text}"),

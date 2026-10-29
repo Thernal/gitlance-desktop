@@ -809,6 +809,11 @@ pub fn write_skill(profile: &Path) -> std::io::Result<()> {
     std::fs::write(dir.join("SKILL.md"), SKILL)
 }
 
+/// Whether GitLance connected Claude Code profile `profile`: its skill is there.
+pub fn claude_connected(profile: &Path) -> bool {
+    profile.join("skills/gitlance/SKILL.md").is_file()
+}
+
 /// Adds GitLance's MCP server to every Claude Code profile, for every project (user scope),
 /// replacing an older entry, and the skill beside it. Returns what happened, per profile.
 pub fn connect_claude() -> Result<String, String> {

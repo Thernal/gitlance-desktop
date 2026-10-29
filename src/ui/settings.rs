@@ -12,6 +12,8 @@ impl Workspace {
     pub(super) fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.find.text = None;
         self.refilter();
+        // Set up's "every key in Settings → Keyboard": Settings takes its place.
+        self.setup = None;
         self.settings_open = true;
         cx.notify();
     }
@@ -92,21 +94,7 @@ impl Workspace {
                 },
             ))
         }));
-        let panes = diff_view::group()
-            .child(
-                chip("panes-islands", "Islands", !super::flat()).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.change_settings(|this| this.settings.flat = false, cx)
-                    },
-                )),
-            )
-            .child(
-                chip("panes-flat", "Flat", super::flat()).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
-                        this.change_settings(|this| this.settings.flat = true, cx)
-                    },
-                )),
-            );
+        let panes = self.panes_chips(cx);
         let animations = switch("animations", s.animations).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.change_settings(
@@ -524,21 +512,31 @@ impl Workspace {
     /// Settings → Keyboard: every action with its keys, filtered by name or key. Change waits for
     /// the next key, Reset takes the shipped ones back; a changed action has a dot, and a key two
     /// actions share is outlined in red, the other one named in its tooltip.
-    fn render_keyboard_settings(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        use super::discussion::{Kind, button};
+    /// Islands | Flat (Settings → Appearance, and Set up's Look).
+    pub(super) fn panes_chips(&self, cx: &mut Context<Self>) -> gpui::Div {
+        diff_view::group()
+            .child(
+                chip("panes-islands", "Islands", !super::flat()).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.change_settings(|this| this.settings.flat = false, cx)
+                    },
+                )),
+            )
+            .child(
+                chip("panes-flat", "Flat", super::flat()).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.change_settings(|this| this.settings.flat = true, cx)
+                    },
+                )),
+            )
+    }
+
+    /// The keymaps to start from, the one in use lit (Settings → Keyboard, and Set up's Keys).
+    pub(super) fn key_presets(&self, cx: &mut Context<Self>) -> gpui::Div {
         use super::keymap::{self, Keymap};
-        use super::keys::{self, On};
-        let query = self.keys_filter.trim().to_lowercase();
-        let changed_only = self.keys_changed_only;
         let map = cx.global::<Keymap>();
         let (preset, changed_count) = (map.preset(), map.changed_count());
-        let entries: Vec<_> = map
-            .entries()
-            .into_iter()
-            .filter(|e| matches_keys(e, &query, self.keys_exact))
-            .filter(|e| !changed_only || e.changed)
-            .collect();
-        let presets = div().flex().flex_wrap().gap(px(6.)).pb(px(12.)).children(
+        div().flex().flex_wrap().gap(px(6.)).pb(px(12.)).children(
             keymap::Preset::ALL.into_iter().enumerate().map(|(i, p)| {
                 let on = p == preset;
                 div()
@@ -569,7 +567,24 @@ impl Workspace {
                         cx.notify();
                     }))
             }),
-        );
+        )
+    }
+
+    fn render_keyboard_settings(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        use super::discussion::{Kind, button};
+        use super::keymap::{self, Keymap};
+        use super::keys::{self, On};
+        let query = self.keys_filter.trim().to_lowercase();
+        let changed_only = self.keys_changed_only;
+        let map = cx.global::<Keymap>();
+        let (preset, changed_count) = (map.preset(), map.changed_count());
+        let entries: Vec<_> = map
+            .entries()
+            .into_iter()
+            .filter(|e| matches_keys(e, &query, self.keys_exact))
+            .filter(|e| !changed_only || e.changed)
+            .collect();
+        let presets = self.key_presets(cx);
         let by_keys = self.recording == Some(BY_KEYS);
         let tools = div()
             .flex()

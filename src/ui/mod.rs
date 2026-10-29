@@ -58,6 +58,7 @@ mod roots;
 mod rows;
 mod select;
 mod settings;
+mod setup;
 mod share;
 mod shell;
 mod shortcuts;
@@ -136,6 +137,7 @@ actions!(
         FocusDiff,
         ZenOneFile,
         ReportProblem,
+        SetUp,
         CheckForUpdates,
         CopySelection,
         SelectAll,
@@ -665,6 +667,7 @@ fn menus(options: &ViewOptions) -> Vec<Menu> {
             MenuItem::action("One File at a Time", ToggleOneFile).checked(options.one_file),
         ]),
         Menu::new("Help").items([
+            MenuItem::action("Set Up GitLance…", SetUp),
             MenuItem::action("Keyboard Shortcuts", ShowShortcuts),
             MenuItem::action("Report a Problem…", ReportProblem),
         ]),
@@ -1073,6 +1076,18 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
                         "appearance" => {
                             this.open_settings(cx);
                             this.settings_section = settings::Section::Appearance;
+                            continue;
+                        }
+                        // Set up on a part (#143).
+                        "setup" | "setup-keys" | "setup-look" => {
+                            this.open_setup(setup::Part::ALL.to_vec(), cx);
+                            let at = ["setup", "setup-keys", "setup-look"]
+                                .iter()
+                                .position(|v| *v == name.trim())
+                                .unwrap_or(0);
+                            if let Some(s) = &mut this.setup {
+                                s.at = at;
+                            }
                             continue;
                         }
                         // Applied last, once the request's discussions are in (below).
@@ -1779,6 +1794,8 @@ pub struct Workspace {
     options: ViewOptions,
     settings: Settings,
     settings_open: bool,
+    /// Set up GitLance, while it is open (#143).
+    setup: Option<setup::Setup>,
     find: find::Find,
     watch: watch::Watch,
     /// Review comments of this repository, the one being written, and the Review island.
@@ -2049,6 +2066,7 @@ impl Workspace {
             options: ViewOptions::load(&settings),
             settings,
             settings_open: false,
+            setup: None,
             find: find::Find::default(),
             watch: watch::Watch::default(),
             comments: Vec::new(),
@@ -3400,6 +3418,11 @@ impl Workspace {
     /// ⌥⌘/, Help → Report a Problem…: the report's tool window (#118).
     fn report_problem(&mut self, _: &ReportProblem, _: &mut Window, cx: &mut Context<Self>) {
         self.open_report(cx);
+    }
+
+    /// Help → Set Up GitLance…, ⌘K (#143): every part again.
+    fn set_up(&mut self, _: &SetUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.open_setup(setup::Part::ALL.to_vec(), cx);
     }
 
     /// GitLance → Check for Updates…, ⌘K (#135).

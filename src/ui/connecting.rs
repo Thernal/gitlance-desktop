@@ -1254,7 +1254,7 @@ impl Workspace {
 /// A row of the ways: Settings' pick mark (`picked`), its icon, the name with the account, what it
 /// does; the caller adds what goes on its right.
 #[allow(clippy::too_many_arguments)]
-fn way_row(
+pub(super) fn way_row(
     id: impl Into<gpui::ElementId>,
     picked: Option<bool>,
     icon: &'static str,

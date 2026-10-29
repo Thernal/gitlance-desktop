@@ -812,6 +812,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::focus_diff))
             .on_action(cx.listener(Self::zen_one_file))
             .on_action(cx.listener(Self::report_problem))
+            .on_action(cx.listener(Self::set_up))
             .on_action(cx.listener(Self::check_for_updates))
             .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::select_all))
@@ -1072,6 +1073,7 @@ impl Render for Workspace {
             .child(self.render_title_bar(cx))
             .children(self.render_toasts(cx))
             .child(match self.root {
+                _ if self.setup.is_some() => self.render_setup(cx),
                 _ if self.settings_open => self.render_settings(cx).into_any_element(),
                 None => self.render_welcome(cx).into_any_element(),
                 Some(_) => div()

@@ -185,6 +185,10 @@ impl Workspace {
 
     /// ↵: one step in.
     pub(super) fn activate(&mut self, cx: &mut Context<Self>) {
+        // Set up's Next, or Done on its last part (#143).
+        if self.setup.is_some() {
+            return self.setup_next(cx);
+        }
         if self.inbox && self.zone != Zone::Tool {
             return self.inbox_open(cx);
         }
