@@ -28,7 +28,7 @@ No IDE to open, no worktrees to create.
 | | | What you can do |
 |:-:|---|---|
 | 🔍 | **Review any diff** | a commit, a branch, the working tree or any two revisions — every file in one scroll, each marked reviewed as you go |
-| 🔀 | **Merge and pull requests** | GitLab's and GitHub's, grouped by what each needs from you; discuss on the lines, approve, submit a review, create one |
+| 🔀 | **Merge and pull requests** | GitLab's and GitHub's, grouped by what each needs from you; discuss on the lines, approve, submit a review, merge, create one |
 | 🕘 | **Versions of a branch** | after an amend, a rebase or a force push: what changed between two versions, without the rebase's noise |
 | 🤖 | **Comments for your agent** | write them on lines, files or folders; Claude Code or Codex changes the code and answers each one |
 | 📥 | **Inbox** | mentions, review requests, replies and your agents' answers in one list, answered in place |
@@ -156,6 +156,8 @@ every repository with a remote, is what brings other people's pushes in. Version
 - Discussions on the lines — replies, reactions, editing and deleting your own notes, resolving (⇧N ⇧P walk
   them, r replies, x resolves, e edits); `@` lists people and `:` lists emoji while you write.
 - Pending comments and Submit review (⌘⇧↵): Comment, Approve (a), Request changes (GitLab 17+).
+- Merge beside Approve: what stands in the way and where it is fixed, Rebase when that is what is missing, merge
+  when the pipeline succeeds; the card sends the head you have, so a push after it is refused.
 - The pipeline or checks, approvals, and the reviewers with where each stands.
 - What changed since the version you viewed; a comment written on an earlier version is drawn at its line now,
   with that line's history version by version.

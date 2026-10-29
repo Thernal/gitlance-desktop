@@ -28,6 +28,8 @@ pub(super) enum Input {
     UpdateCard,
     /// What is beside a folder of Code's path (`beside.rs`).
     Beside,
+    /// The card before a merge goes, its message (`merging.rs`, #164).
+    Merge,
     /// A one-line field: a list's filter, the token, the host, a name being given … —
     /// `Workspace::field` says which, and is set only while it has the keyboard.
     Field,
@@ -48,7 +50,7 @@ pub(super) enum Input {
 }
 
 impl Input {
-    const ALL: [Input; 15] = [
+    const ALL: [Input; 16] = [
         Input::Palette,
         Input::FindFiles,
         Input::OpenAsk,
@@ -56,6 +58,7 @@ impl Input {
         Input::Reactions,
         Input::UpdateCard,
         Input::Beside,
+        Input::Merge,
         Input::Field,
         Input::Compose,
         Input::GoLine,
@@ -78,6 +81,7 @@ impl Input {
                 | Input::Reactions
                 | Input::UpdateCard
                 | Input::Beside
+                | Input::Merge
         )
     }
 
@@ -128,6 +132,7 @@ impl Workspace {
             Input::Reactions => self.reaction_grid.is_some(),
             Input::UpdateCard => self.update_card.is_some(),
             Input::Beside => self.beside.is_some(),
+            Input::Merge => self.merging.is_some(),
             Input::Field => self.field.is_some(),
             Input::Compose => self.compose.is_some(),
             Input::GoLine => self.goline.is_some(),
@@ -352,10 +357,11 @@ pub(super) fn field_box_out<E: InteractiveElement>(
 #[cfg(test)]
 mod tests {
     /// The key handlers `find_key` routes to by `Input`: the only places a key may edit a text.
-    const ROUTED: [&str; 12] = [
+    const ROUTED: [&str; 13] = [
         "ffind_key",
         "palette_key",
         "beside_key",
+        "merge_key",
         "reaction_key",
         "submit_key",
         "newreq_key",

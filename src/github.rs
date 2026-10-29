@@ -260,6 +260,7 @@ fn send_with(
         "403" => bail!("GitHub refused it: {}", message()),
         "404" => bail!("GitHub does not know this repository (or the token cannot see it)"),
         "422" | "400" => bail!("GitHub would not take that: {}", message()),
+        "405" | "409" => bail!("GitHub refused it: {}", message()),
         other => bail!("GitHub answered {other}"),
     }
 }
@@ -1200,6 +1201,130 @@ pub fn submit(
     Ok(())
 }
 
+/// What GitHub says of merging pull request `number` (#164): `mergeable_state`, the ways the
+/// repository allows, auto-merge. The fixture's are `github/merge-<n>.json` and `github/repo.json`.
+pub fn merge_state(remote: &WebRemote, number: u64) -> Result<crate::merge::Host> {
+    let (pull, repo) = match fixture() {
+        Some(_) => (
+            read_fixture(&format!("merge-{number}.json")).unwrap_or(Ok(Value::Null))?,
+            read_fixture("repo.json").unwrap_or(Ok(Value::Null))?,
+        ),
+        None => {
+            let (_, _, repo) = api(remote)?;
+            (
+                get(remote, &format!("pulls/{number}"))?,
+                get(remote, &format!("/repos/{repo}"))?,
+            )
+        }
+    };
+    Ok(parse_merge_state(&pull, &repo))
+}
+
+pub fn parse_merge_state(pull: &Value, repo: &Value) -> crate::merge::Host {
+    use crate::merge::{Host, Method, Squash};
+    // A token that cannot read the settings is not told them: each way is taken as allowed.
+    let allowed = |key: &str| repo[key].as_bool().unwrap_or(true);
+    let methods = [
+        ("allow_squash_merge", Method::Squash),
+        ("allow_merge_commit", Method::Merge),
+        ("allow_rebase_merge", Method::Rebase),
+    ]
+    .into_iter()
+    .filter(|(key, _)| allowed(key))
+    .map(|(_, m)| m)
+    .collect();
+    let deletes = repo["delete_branch_on_merge"].as_bool().unwrap_or(false);
+    Host {
+        github: true,
+        status: s(&pull["mergeable_state"]),
+        can: repo["permissions"]["push"].as_bool().unwrap_or(true),
+        conflicts: pull["mergeable"] == false && pull["mergeable_state"] == "dirty",
+        behind: 0,
+        pipeline_must_pass: false,
+        discussions_must_resolve: false,
+        auto_set: !pull["auto_merge"].is_null(),
+        auto_allowed: repo["allow_auto_merge"].as_bool().unwrap_or(false),
+        squash: Squash::Never,
+        delete_branch: deletes,
+        deletes_itself: deletes,
+        methods,
+        node: s(&pull["node_id"]),
+    }
+}
+
+const AUTO_MERGE: &str = "mutation($id: ID!, $method: PullRequestMergeMethod!, $sha: GitObjectID, $title: String, $body: String) {
+  enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: $method, expectedHeadOid: $sha, commitHeadline: $title, commitBody: $body }) { clientMutationId }
+}";
+
+/// Merges pull request `number` as of the head that was reviewed, the message's first line its
+/// title; or sets it to merge when its checks pass. Its branch goes after, when asked and the
+/// repository does not delete it itself.
+pub fn merge(remote: &WebRemote, number: u64, m: &crate::merge::Merge) -> Result<()> {
+    let (title, body) = match m.message.trim().split_once('\n') {
+        Some((title, body)) => (title.trim().to_owned(), body.trim().to_owned()),
+        None => (m.message.trim().to_owned(), String::new()),
+    };
+    if crate::mr::record(format!(
+        "merge {number} {} {} delete={} auto={} {title}",
+        m.sha,
+        m.method.key(),
+        m.delete_branch,
+        m.when_pipeline_succeeds
+    ))? {
+        return Ok(());
+    }
+    let pull = get(remote, &format!("pulls/{number}"))?;
+    if m.when_pipeline_succeeds {
+        graphql(
+            remote,
+            AUTO_MERGE,
+            json!({
+                "id": s(&pull["node_id"]),
+                "method": m.method.key().to_uppercase(),
+                "sha": m.sha,
+                "title": title,
+                "body": body,
+            }),
+        )?;
+        return Ok(());
+    }
+    rest(
+        remote,
+        "PUT",
+        &format!("pulls/{number}/merge"),
+        Some(&json!({
+            "sha": m.sha,
+            "merge_method": m.method.key(),
+            "commit_title": title,
+            "commit_message": body,
+        })),
+    )?;
+    // A fork's branch is not the repository's to delete; one deleted already answers 422.
+    let same = pull["head"]["repo"]["full_name"] == pull["base"]["repo"]["full_name"];
+    if m.delete_branch && same {
+        let _ = rest(
+            remote,
+            "DELETE",
+            &format!("git/refs/heads/{}", s(&pull["head"]["ref"])),
+            None,
+        );
+    }
+    Ok(())
+}
+
+/// Pull request `number` (node `node`) no longer merges when its checks pass.
+pub fn cancel_auto_merge(remote: &WebRemote, number: u64, node: &str) -> Result<()> {
+    if crate::mr::record(format!("cancel-auto-merge {number}"))? {
+        return Ok(());
+    }
+    graphql(
+        remote,
+        "mutation($id: ID!) { disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }",
+        json!({ "id": node }),
+    )?;
+    Ok(())
+}
+
 pub fn delete_draft(remote: &WebRemote, number: u64, id: u64) -> Result<()> {
     if crate::mr::record(format!("delete-draft {number} {id}"))? {
         return Ok(());
@@ -1454,6 +1579,28 @@ mod tests {
         let reviewed = list_past(&at, MrState::Merged, &Whose::Reviewer("me".into()), None);
         assert_eq!(reviewed.unwrap().total, Some(2));
         TEST_FIXTURE.with(|f| *f.borrow_mut() = None);
+    }
+
+    #[test]
+    fn a_repository_says_the_ways_it_merges() {
+        use crate::merge::Method;
+        let pull = json!({
+            "mergeable_state": "blocked", "mergeable": true, "node_id": "PR_1",
+            "auto_merge": {"merge_method": "squash"},
+        });
+        let repo = json!({
+            "allow_merge_commit": false, "allow_squash_merge": true, "allow_rebase_merge": true,
+            "allow_auto_merge": true, "delete_branch_on_merge": true, "permissions": {"push": true},
+        });
+        let host = parse_merge_state(&pull, &repo);
+        assert_eq!(host.methods, [Method::Squash, Method::Rebase]);
+        assert!(host.auto_set && host.auto_allowed && host.deletes_itself && host.can);
+        assert_eq!(
+            (host.status.as_str(), host.node.as_str()),
+            ("blocked", "PR_1")
+        );
+        // A token that cannot read the settings is told every way.
+        assert_eq!(parse_merge_state(&pull, &Value::Null).methods.len(), 3);
     }
 
     #[test]

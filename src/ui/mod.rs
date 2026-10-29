@@ -37,6 +37,7 @@ mod lists;
 mod markdown;
 mod md_page;
 mod menu;
+mod merging;
 mod motion;
 mod narrow;
 mod nav;
@@ -138,6 +139,7 @@ actions!(
         ZenOneFile,
         ReportProblem,
         SetUp,
+        MergeRequest,
         CheckForUpdates,
         CopySelection,
         SelectAll,
@@ -1256,6 +1258,11 @@ fn snapshot(window: gpui::WindowHandle<shell::Shell>, cx: &mut App) {
             });
             wait(2000).await;
         }
+        // Merge's card, or its list of what is in the way, before the keys (#164).
+        if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("merge")) {
+            ws.update(cx, |this, cx| this.open_merge(cx));
+            wait(500).await;
+        }
         // Code's tabs: the project's pins, a file kept and one previewed, before the keys (#20).
         if std::env::var("GITLANCE_SNAPSHOT_VIEW").is_ok_and(|v| v.contains("code-tabs")) {
             ws.update(cx, |this, cx| {
@@ -1882,6 +1889,8 @@ pub struct Workspace {
     /// The card of a newer GitLance (#135), and a check asked for by hand running.
     update_card: Option<updates::UpdateCard>,
     update_checking: bool,
+    /// The card before a request is merged (#164).
+    merging: Option<merging::MergeCard>,
     /// The tree folder opened last, and a count of openings: its rows fade in (`tree_row`).
     tree_opened: Option<(String, usize)>,
     /// What a narrow window folded, for the session (#80).
@@ -2116,6 +2125,7 @@ impl Workspace {
             label_edit: None,
             label_name: String::new(),
             update_card: None,
+            merging: None,
             update_checking: false,
             tree_opened: None,
             narrowed: Default::default(),
@@ -3423,6 +3433,11 @@ impl Workspace {
     /// Help → Set Up GitLance…, ⌘K (#143): every part again.
     fn set_up(&mut self, _: &SetUp, _: &mut Window, cx: &mut Context<Self>) {
         self.open_setup(setup::Part::ALL.to_vec(), cx);
+    }
+
+    /// ⌘K's Merge this merge request (#164): the card, or what is in the way.
+    fn merge_request(&mut self, _: &MergeRequest, _: &mut Window, cx: &mut Context<Self>) {
+        self.open_merge(cx);
     }
 
     /// GitLance → Check for Updates…, ⌘K (#135).

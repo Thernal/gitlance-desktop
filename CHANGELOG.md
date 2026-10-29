@@ -16,6 +16,14 @@ for someone using the app, not for someone reading the code; the commits follow 
 - **A comparison's commits.** Comparing two branches, tags or commits lists the commits it holds over its
   files, newest first. A click shows one commit's own changes, a ⇧-click a run of them, ↑ ↓ step through them;
   "a41f9c0 only" says so over the diff, and esc or its × bring the whole comparison back.
+- **Merge, from the request's page.** Merge is beside Approve. While something stands in the way it is quiet and
+  says how many — "3 in the way" —, and its ▾ lists each reason with where it is fixed: the approvals still
+  needed, the discussions not resolved (they open), the pipeline that must pass (its page opens), a draft,
+  conflicts. Rebase is offered when the branch is behind and GitLab needs it rebased, "Merge when the pipeline
+  succeeds…" while the pipeline runs, and Cancel once that is set. Merge… opens a card: from → into, squash and
+  delete the branch as the project has them (GitHub: merge commit, squash or rebase, as the repository allows),
+  the commit message, and ⌘↵ merges. It sends the version you have, so a push nobody has seen is refused — the
+  card says so and shows the new version. ⌘K has Merge this merge request.
 - **Set up GitLance.** The first start opens a page of three tabs before the welcome: Agents connects Claude
   Code's profiles and gives Codex its command, Keys picks GitLance's, Android Studio's or VS Code's keys and shows
   the ones that matter, Look picks the theme, the code's colours, the panes, the faces and the sizes. Each is

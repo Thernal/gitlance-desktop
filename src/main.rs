@@ -24,6 +24,7 @@ mod links;
 mod markdown;
 mod mcp;
 mod mddiff;
+mod merge;
 mod mr;
 mod notes;
 mod pictures;

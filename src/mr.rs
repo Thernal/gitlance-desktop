@@ -1219,7 +1219,7 @@ fn send_with(
         "401" | "403" => bail!(REFUSED),
         "404" => bail!("GitLab does not know this project (or the token cannot see it)"),
         "400" | "422" => bail!("GitLab would not take that: {}", message(body)),
-        "409" => bail!("GitLab refused it: {}", message(body)),
+        "405" | "409" => bail!("GitLab refused it: {}", message(body)),
         other => bail!("GitLab answered {other}"),
     }
 }
@@ -1762,6 +1762,148 @@ pub fn approve(remote: &WebRemote, iid: u64, head: &str) -> Result<()> {
         "POST",
         &[("sha", head.to_owned())],
     )?;
+    Ok(())
+}
+
+/// What GitLab says of merging request `iid` (#164): its status, the project's rules and its
+/// defaults. The fixture's are `merge-<iid>.json` and `project.json`.
+pub fn merge_state(remote: &WebRemote, iid: u64) -> Result<crate::merge::Host> {
+    if remote.github {
+        return github::merge_state(remote, iid);
+    }
+    let (request, project) = match fixture() {
+        Some(dir) => {
+            let read = |name: &str| {
+                std::fs::read_to_string(dir.join(name))
+                    .ok()
+                    .and_then(|t| serde_json::from_str(&t).ok())
+                    .unwrap_or(Value::Null)
+            };
+            (read(&format!("merge-{iid}.json")), read("project.json"))
+        }
+        None => {
+            let (_, project) = api(remote)?;
+            (
+                get(
+                    remote,
+                    &format!("merge_requests/{iid}?include_diverged_commits_count=true"),
+                )?,
+                get(remote, &format!("/projects/{project}"))?,
+            )
+        }
+    };
+    Ok(parse_merge_state(&request, &project))
+}
+
+pub fn parse_merge_state(m: &Value, project: &Value) -> crate::merge::Host {
+    use crate::merge::{Host, Squash};
+    let flag = |v: &Value, key: &str| v.get(key).and_then(Value::as_bool).unwrap_or(false);
+    // A GitLab before 15.6 says only `merge_status`.
+    let status = match text(m, "detailed_merge_status") {
+        s if !s.is_empty() => s,
+        _ => match text(m, "merge_status").as_str() {
+            "can_be_merged" => "mergeable".to_owned(),
+            "cannot_be_merged" => "conflict".to_owned(),
+            "cannot_be_merged_recheck" => "checking".to_owned(),
+            other => other.to_owned(),
+        },
+    };
+    Host {
+        github: false,
+        status,
+        can: m
+            .get("user")
+            .and_then(|u| u.get("can_merge"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        conflicts: flag(m, "has_conflicts"),
+        behind: m
+            .get("diverged_commits_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32,
+        pipeline_must_pass: flag(project, "only_allow_merge_if_pipeline_succeeds"),
+        discussions_must_resolve: flag(project, "only_allow_merge_if_all_discussions_are_resolved"),
+        auto_set: flag(m, "merge_when_pipeline_succeeds"),
+        auto_allowed: true,
+        squash: match text(project, "squash_option").as_str() {
+            "always" => Squash::Always,
+            "never" => Squash::Never,
+            "default_on" => Squash::Choose(true),
+            _ => Squash::Choose(flag(m, "squash")),
+        },
+        delete_branch: flag(m, "force_remove_source_branch")
+            || m.get("should_remove_source_branch")
+                .and_then(Value::as_bool)
+                .unwrap_or_else(|| flag(project, "remove_source_branch_after_merge")),
+        deletes_itself: false,
+        methods: Vec::new(),
+        node: String::new(),
+    }
+}
+
+/// Merges request `iid` as of the head that was reviewed (#164): GitLab refuses when the branch
+/// moved on since. Or sets it to merge when the pipeline succeeds.
+pub fn merge(remote: &WebRemote, iid: u64, m: &crate::merge::Merge) -> Result<()> {
+    if remote.github {
+        return github::merge(remote, iid, m);
+    }
+    if record(format!(
+        "merge {iid} {} squash={} delete={} auto={} {}",
+        m.sha,
+        m.squash,
+        m.delete_branch,
+        m.when_pipeline_succeeds,
+        m.message.lines().next().unwrap_or_default()
+    ))? {
+        return Ok(());
+    }
+    let mut form = vec![
+        ("sha", m.sha.clone()),
+        ("squash", m.squash.to_string()),
+        ("should_remove_source_branch", m.delete_branch.to_string()),
+    ];
+    if !m.message.trim().is_empty() {
+        let key = match m.squash {
+            true => "squash_commit_message",
+            false => "merge_commit_message",
+        };
+        form.push((key, m.message.clone()));
+    }
+    // `auto_merge` from GitLab 17.11; the older word for the ones before.
+    if m.when_pipeline_succeeds {
+        form.push(("merge_when_pipeline_succeeds", "true".into()));
+        form.push(("auto_merge", "true".into()));
+    }
+    call(remote, &format!("merge_requests/{iid}/merge"), "PUT", &form)?;
+    Ok(())
+}
+
+/// Request `iid` no longer merges when its pipeline succeeds; `node` is GitHub's id of it.
+pub fn cancel_auto_merge(remote: &WebRemote, iid: u64, node: &str) -> Result<()> {
+    if remote.github {
+        return github::cancel_auto_merge(remote, iid, node);
+    }
+    if record(format!("cancel-auto-merge {iid}"))? {
+        return Ok(());
+    }
+    call(
+        remote,
+        &format!("merge_requests/{iid}/cancel_merge_when_pipeline_succeeds"),
+        "POST",
+        &[],
+    )?;
+    Ok(())
+}
+
+/// GitLab puts the request's commits on top of its target; the pipeline runs again.
+pub fn rebase(remote: &WebRemote, iid: u64) -> Result<()> {
+    if remote.github {
+        bail!("GitHub cannot rebase a pull request from here: update the branch on GitHub");
+    }
+    if record(format!("rebase {iid}"))? {
+        return Ok(());
+    }
+    call(remote, &format!("merge_requests/{iid}/rebase"), "PUT", &[])?;
     Ok(())
 }
 
@@ -2487,6 +2629,42 @@ mod tests {
         assert_eq!(read(theirs.clone(), None), (30, Some("2".into()), Some(31)));
         assert_eq!(read(theirs, Some("2")), (1, None, Some(31)));
         assert_eq!(read(Whose::All, Some("2")), (5, None, Some(35)));
+        TEST_FIXTURE.with(|f| *f.borrow_mut() = None);
+    }
+
+    #[test]
+    fn a_merge_reads_the_projects_rules_and_sends_the_head_reviewed() {
+        use crate::merge::{Merge, Squash};
+        let request = json!({
+            "detailed_merge_status": "mergeable", "user": {"can_merge": false},
+            "diverged_commits_count": 3,
+        });
+        let project = json!({
+            "squash_option": "default_on", "remove_source_branch_after_merge": true,
+            "only_allow_merge_if_pipeline_succeeds": true,
+        });
+        let host = parse_merge_state(&request, &project);
+        assert_eq!(
+            (host.can, host.behind, host.squash, host.delete_branch),
+            (false, 3, Squash::Choose(true), true)
+        );
+        assert!(host.pipeline_must_pass && !host.discussions_must_resolve);
+        // A GitLab before 15.6 says only `merge_status`.
+        let old = parse_merge_state(&json!({"merge_status": "cannot_be_merged"}), &Value::Null);
+        assert_eq!(old.status, "conflict");
+        let dir = tempfile::TempDir::new().unwrap();
+        TEST_FIXTURE.with(|f| *f.borrow_mut() = Some(dir.path().to_owned()));
+        let remote = WebRemote {
+            base: "https://git.example.com/g/p".into(),
+            github: false,
+        };
+        let m = Merge::defaults(&host, "abc123", "Title (!7)\n\nWhy".into(), false);
+        merge(&remote, 7, &m).unwrap();
+        let posted = std::fs::read_to_string(dir.path().join("posted.txt")).unwrap();
+        assert_eq!(
+            posted,
+            "merge 7 abc123 squash=true delete=true auto=false Title (!7)\n"
+        );
         TEST_FIXTURE.with(|f| *f.borrow_mut() = None);
     }
 

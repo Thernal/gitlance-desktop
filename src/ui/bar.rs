@@ -621,6 +621,7 @@ impl Workspace {
                         self.render_approval_chip(cx)
                             .map(IntoElement::into_any_element),
                     );
+                    out.extend(self.render_merge_control(cx));
                 } else {
                     let color = if state == crate::mr::MrState::Merged {
                         theme::accent()

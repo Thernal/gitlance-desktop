@@ -215,6 +215,18 @@ const ICONS: &[(&str, &str)] = &[
         ),
     ),
     (
+        "merge",
+        lucide!(
+            r#"<circle cx="18" cy="18" r="3"/>"#
+            r#"<circle cx="6" cy="6" r="3"/>"#
+            r#"<path d="M6 21V9a9 9 0 0 0 9 9"/>"#
+        ),
+    ),
+    (
+        "clock",
+        lucide!(r#"<circle cx="12" cy="12" r="10"/>"# r#"<path d="M12 6v6l4 2"/>"#),
+    ),
+    (
         "user-check",
         lucide!(
             r#"<path d="m16 11 2 2 4-4"/>"#

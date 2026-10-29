@@ -90,6 +90,8 @@ pub enum Act {
     OtherFaces(bool),
     /// Set up's Code colours (#143): a code theme, None following the window.
     CodeTheme(Option<String>),
+    /// A reason a request cannot merge, where it is fixed (#164).
+    MergeFix(crate::merge::Fix),
 }
 
 #[derive(Clone)]
@@ -102,6 +104,8 @@ pub struct Entry {
     pub off: bool,
     /// Its label drawn in this face (a face's menu, #24).
     pub face: Option<gpui::SharedString>,
+    /// Said faint after the label: why a request cannot merge (#164).
+    pub detail: Option<String>,
     pub act: Act,
 }
 
@@ -113,6 +117,7 @@ impl Entry {
             checked: None,
             off: false,
             face: None,
+            detail: None,
             act,
         }
     }
@@ -139,6 +144,11 @@ impl Entry {
         self.face = Some(face);
         self
     }
+
+    pub fn detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
 }
 
 /// Entries in groups; a rule is drawn between groups, a group may have a heading.
@@ -147,6 +157,8 @@ pub struct CtxMenu {
     pub at: Point<Pixels>,
     pub groups: Vec<Vec<Entry>>,
     pub titles: Vec<Option<&'static str>>,
+    /// `WIDTH`, or wider for entries with a detail (#164).
+    pub width: f32,
 }
 
 const ROW: f32 = 28.;
@@ -177,7 +189,12 @@ impl Workspace {
         let (titles, groups): (Vec<_>, Vec<_>) =
             groups.into_iter().filter(|(_, g)| !g.is_empty()).unzip();
         if !groups.is_empty() {
-            self.ctx_menu = Some(CtxMenu { at, groups, titles });
+            self.ctx_menu = Some(CtxMenu {
+                at,
+                groups,
+                titles,
+                width: WIDTH,
+            });
             self.menu_leaving = None;
             cx.notify();
         }
@@ -252,6 +269,7 @@ impl Workspace {
             Act::Face { code, face } => self.choose_face(code, face, cx),
             Act::OtherFaces(code) => self.open_all_faces(code, cx),
             Act::CodeTheme(id) => self.choose_code_theme(id, cx),
+            Act::MergeFix(fix) => self.go_fix(fix, cx),
             // Need the window: `run_act_in` runs them.
             Act::MoveProject { .. } | Act::CloseProject(_) => {}
         }
@@ -370,8 +388,9 @@ impl Workspace {
         let room = f32::from(viewport.height) - 2. * EDGE;
         let scrolls = height > room;
         let height = height.min(room);
+        let width = menu.width;
         let x = f32::from(at.x)
-            .min(f32::from(viewport.width) - WIDTH - EDGE)
+            .min(f32::from(viewport.width) - width - EDGE)
             .max(EDGE);
         let y = f32::from(at.y)
             .min(f32::from(viewport.height) - height - EDGE)
@@ -415,14 +434,32 @@ impl Workspace {
                                 ""
                             },
                         ))
-                        .child(
-                            super::hover::cut(
+                        .child(match entry.detail.clone() {
+                            None => super::hover::cut(
                                 "label",
                                 super::keys::text(&entry.label).into_owned(),
                             )
                             .when_some(entry.face.clone(), |s, face| s.font_family(face))
-                            .flex_1(),
-                        )
+                            .flex_1()
+                            .into_any_element(),
+                            Some(detail) => div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .gap(px(6.))
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .child(entry.label.clone()),
+                                )
+                                .child(
+                                    super::hover::cut("detail", detail)
+                                        .flex_1()
+                                        .text_color(theme::faint()),
+                                )
+                                .into_any_element(),
+                        })
                         .child(
                             div()
                                 .text_size(px(11.))
@@ -443,7 +480,7 @@ impl Workspace {
             .occlude()
             .left(px(x))
             .top(px(y))
-            .w(px(WIDTH))
+            .w(px(width))
             .h(px(height))
             .flex()
             .flex_col()

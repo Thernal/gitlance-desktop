@@ -102,6 +102,11 @@ pub struct Requests {
     pub pipeline: Option<Pipeline>,
     /// Who approved the request, and where the reviewer stands.
     pub approvals: Option<mr::Approvals>,
+    /// What the host says of merging an open one (#164), and the call about it on its way: its
+    /// word in Merge's place.
+    pub merge: Option<crate::merge::Host>,
+    pub merge_busy: Option<&'static str>,
+    pub merge_task: Option<Task<()>>,
     /// The host's last answer for them, and the tick the read that gave it began at.
     pub base: super::waiting::Base,
     pub from: u64,
@@ -448,6 +453,12 @@ impl Workspace {
             self.requests.reload_task = None;
             self.requests.pipeline = None;
             self.requests.approvals = None;
+            self.requests.merge = None;
+            self.requests.merge_busy = None;
+            // A merge's card is of the request it was opened on (#164).
+            if self.merging.as_ref().is_some_and(|c| !c.busy) {
+                self.merging = None;
+            }
             self.requests.details = None;
             self.requests.histories.clear();
             self.requests.awards.clear();
@@ -467,6 +478,10 @@ impl Workspace {
             return;
         };
         let known = self.requests.login.is_some();
+        let open = self
+            .requests
+            .find(iid)
+            .is_some_and(|m| m.state == mr::MrState::Opened);
         self.requests.reading = true;
         let from = self.requests.waiting.tick();
         self.requests.thread_task = Some(cx.spawn(async move |this, cx| {
@@ -478,24 +493,26 @@ impl Workspace {
                     let pipeline = mr::pipeline(&remote, iid).ok().flatten();
                     let approvals = mr::approvals(&remote, iid).ok();
                     let details = mr::details(&remote, iid).ok();
+                    let merge = open.then(|| mr::merge_state(&remote, iid).ok()).flatten();
                     let login = if known {
                         None
                     } else {
                         mr::username(&remote).ok()
                     };
                     mr::threads(&remote, iid)
-                        .map(|t| (t, drafts, pipeline, approvals, login, details))
+                        .map(|t| (t, drafts, pipeline, approvals, login, (details, merge)))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if this.requests.current == Some(iid) {
                     this.requests.reading = false;
                     match result {
-                        Ok((threads, drafts, pipeline, approvals, login, details)) => {
+                        Ok((threads, drafts, pipeline, approvals, login, (details, merge))) => {
                             if login.is_some() {
                                 this.requests.login = login;
                             }
                             this.requests.details = details;
+                            this.requests.merge = merge;
                             this.requests.pipeline = pipeline;
                             let base = super::waiting::Base {
                                 threads,
