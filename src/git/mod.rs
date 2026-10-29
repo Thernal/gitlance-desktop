@@ -10,7 +10,9 @@ mod tests;
 
 #[cfg(test)]
 pub use diff::Hunk;
-pub use diff::{ChangeKind, DiffLine, DiffSettings, FileDiff, ImageKind, ImageSide, LineKind};
+pub use diff::{
+    ChangeKind, DiffLine, DiffSettings, FileDiff, ImageKind, ImageSide, LineKind, svg_size,
+};
 pub use versions::{PairCommit, PairKind, RangePair, Version, VersionDiff};
 
 use anyhow::{Context as _, Result};

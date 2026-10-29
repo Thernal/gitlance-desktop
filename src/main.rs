@@ -26,6 +26,7 @@ mod mcp;
 mod mddiff;
 mod mr;
 mod notes;
+mod pictures;
 mod platform;
 mod rank;
 mod report;

@@ -82,7 +82,7 @@ impl Workspace {
                 if this
                     .update(cx, |this, cx| {
                         this.poll_agents(cx);
-                        if crate::avatars::take_fresh() {
+                        if crate::pictures::take_fresh() {
                             cx.notify();
                         }
                     })

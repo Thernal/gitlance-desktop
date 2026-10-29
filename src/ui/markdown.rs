@@ -319,10 +319,10 @@ fn blocks_of(blocks: &[Block], ctx: &mut Ctx) -> Div {
         .children(blocks.iter().map(|b| block(b, ctx)))
 }
 
-/// A paragraph with images, in a document: the images drawn, at most a column wide — alone, or
-/// under the paragraph's words when it has some.
+/// A paragraph with images: the images drawn, at most a column wide — alone, or under the
+/// paragraph's words when it has some. In a comment, once every image of it has come in from the
+/// web (`crate::pictures`); until then its links, as written.
 fn pictures(i: &Inline, ctx: &mut Ctx) -> Option<AnyElement> {
-    ctx.doc.as_ref()?;
     let images: Vec<(String, String)> = i
         .spans
         .iter()
@@ -334,7 +334,12 @@ fn pictures(i: &Inline, ctx: &mut Ctx) -> Option<AnyElement> {
             )
         })
         .collect();
-    if images.is_empty() {
+    if images.is_empty()
+        || ctx.doc.is_none()
+            && images
+                .iter()
+                .any(|(src, _)| web_picture(src, ctx.base.as_deref()).is_none())
+    {
         return None;
     }
     let covered = |at: usize| {
@@ -360,44 +365,61 @@ fn pictures(i: &Inline, ctx: &mut Ctx) -> Option<AnyElement> {
     })
 }
 
-/// Images by (src, alt), drawn from the document's pictures; one not in the repository is named.
-fn picture_row(images: &[(String, String)], ctx: &Ctx) -> Option<AnyElement> {
-    let pictures = ctx.doc.as_ref()?;
-    Some(
-        div()
-            .flex()
-            .flex_wrap()
-            .gap(px(8.))
-            .children(images.iter().map(|(src, alt)| {
-                let (src, alt) = (src.clone(), alt.clone());
-                match pictures.get(&src) {
-                    Some((image, size)) => {
-                        let (w, h) = size.map_or((480., 270.), |(w, h)| {
-                            let (w, h) = (w.max(1) as f32, h.max(1) as f32);
-                            let k = (560. / w).min(320. / h).min(1.);
-                            (w * k, h * k)
-                        });
-                        gpui::img(image.clone())
-                            .w(px(w))
-                            .h(px(h))
-                            .rounded(px(4.))
-                            .into_any_element()
-                    }
-                    // A web address or a file not in the repository: its name, not fetched.
-                    None => div()
-                        .px(px(8.))
-                        .py(px(4.))
-                        .rounded(px(4.))
-                        .border_1()
-                        .border_color(theme::island_border())
-                        .text_size(px(12.))
-                        .text_color(theme::muted())
-                        .child(format!("{alt} · {src}"))
-                        .into_any_element(),
-                }
-            }))
-            .into_any_element(),
-    )
+/// An image from the web, once it is in: an address, or an upload of the comment's project as
+/// GitLab writes it (`/uploads/…`, asked with the host's token).
+fn web_picture(src: &str, base: Option<&str>) -> Option<crate::pictures::Picture> {
+    match base {
+        Some(project) if src.starts_with("/uploads/") => crate::pictures::upload(project, src),
+        _ => crate::pictures::image(src),
+    }
+}
+
+/// Images by (src, alt): a document's from its pictures, else from the web once they are in (a
+/// click opens the address); one not in is named.
+fn picture_row(images: &[(String, String)], ctx: &mut Ctx) -> Option<AnyElement> {
+    let mut row = div().flex().flex_wrap().gap(px(8.));
+    for (src, alt) in images {
+        let kept = ctx.doc.as_ref().and_then(|p| p.get(src).cloned());
+        let web = kept
+            .is_none()
+            .then(|| web_picture(src, ctx.base.as_deref()))
+            .flatten();
+        let Some((image, size)) = kept.or_else(|| web.clone()) else {
+            // Not in the repository, not in from the web (yet): its name.
+            row = row.child(
+                div()
+                    .px(px(8.))
+                    .py(px(4.))
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(theme::island_border())
+                    .text_size(px(12.))
+                    .text_color(theme::muted())
+                    .child(format!("{alt} · {src}")),
+            );
+            continue;
+        };
+        let (w, h) = size.map_or((480., 270.), |(w, h)| {
+            let (w, h) = (w.max(1) as f32, h.max(1) as f32);
+            let k = (560. / w).min(320. / h).min(1.);
+            (w * k, h * k)
+        });
+        let picture = gpui::img(image).w(px(w)).h(px(h)).rounded(px(4.));
+        if web.is_none() {
+            row = row.child(picture);
+            continue;
+        }
+        ctx.next += 1;
+        let url = resolve(src, ctx.base.as_deref());
+        row = row.child(
+            div()
+                .id(ElementId::NamedInteger(ctx.key.clone(), ctx.next as u64))
+                .cursor_pointer()
+                .on_click(move |_, _, cx| cx.open_url(&url))
+                .child(picture),
+        );
+    }
+    Some(row.into_any_element())
 }
 
 fn block(block: &Block, ctx: &mut Ctx) -> AnyElement {

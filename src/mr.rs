@@ -1224,6 +1224,50 @@ fn send_with(
     }
 }
 
+/// Fetches an upload of the project into `out` through the API (`<secret>/<file>`, as a comment
+/// writes it after `/uploads/`): a private project's uploads are behind sign-in, which the address
+/// itself does not take a token for. `false` when there is no token, or the host refused or does
+/// not have the call (GitLab before 17.4). The token goes as `Authorization`, which curl does not
+/// carry on to another host when the upload is redirected to its storage.
+pub fn upload(remote: &WebRemote, path: &str, out: &std::path::Path) -> bool {
+    let (Ok((host, project)), Some(token)) = (api(remote), token(remote)) else {
+        return false;
+    };
+    let url = format!("{host}/api/v4/projects/{project}/uploads/{path}");
+    let config = format!(
+        "url = \"{}\"\nheader = \"Authorization: Bearer {}\"\noutput = \"{}\"\n",
+        quote(&url),
+        quote(&token),
+        quote(&out.to_string_lossy())
+    );
+    // The token goes in on stdin, not on the command line, where `ps` would show it.
+    let Ok(mut child) = Command::new("curl")
+        .args([
+            "-sSfL",
+            "--max-time",
+            "20",
+            "--max-filesize",
+            "25000000",
+            "-K",
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(config.as_bytes());
+    }
+    let fetched = child.wait().is_ok_and(|s| s.success());
+    if !fetched {
+        let _ = std::fs::remove_file(out);
+    }
+    fetched
+}
+
 /// The `message` GitLab sends with an error, as text.
 fn message(body: &str) -> String {
     serde_json::from_str::<Value>(body)

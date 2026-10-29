@@ -6,6 +6,10 @@ for someone using the app, not for someone reading the code; the commits follow 
 
 ## Unreleased
 
+- **Pictures in comments, kept.** An image in a comment or a merge request's description — a screenshot uploaded
+  to GitLab, a picture from the web — is drawn under its words, and a click opens it; a document's web images and
+  badges are drawn too, not only named. Each is fetched once and kept on disk with people's pictures, so it shows at
+  once the next time, offline too; a private project's uploads are asked with your GitLab token.
 - **A field keeps what you wrote, not the keyboard.** Click outside a comment, a filter or the find bar, press esc
   in one that holds text, or go to another file or page, and it keeps its text, dimmed, while the keys go back to
   the diff: V marks the file you are on, j and k move. Click in it, press `c` beside an unfinished comment, or come
