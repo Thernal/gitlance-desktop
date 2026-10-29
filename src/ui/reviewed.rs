@@ -630,14 +630,7 @@ impl Workspace {
             self.review_state(ix) == Some(State::Done)
         });
         if let Some(ix) = next {
-            if let Some(path) = self
-                .diff
-                .as_ref()
-                .and_then(|d| d.files.get(ix))
-                .map(|f| f.path().to_owned())
-            {
-                self.open_folders_of(&path);
-            }
+            self.open_folders_of(ix);
             // It is read next: a generated file folded opens too, as its "Show it anyway" (#144).
             if let Some(path) = self
                 .diff

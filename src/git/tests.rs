@@ -646,9 +646,10 @@ fn the_working_tree_reads_staged_unstaged_and_untracked_changes() {
     let repo = fx.open();
     let all = repo.working_tree(DiffSettings::default(), false).unwrap();
     assert_eq!(paths(&all.files), ["a.txt", "b.txt", "c.txt"]);
-    assert_eq!(all.tags["a.txt"], "not staged");
-    assert_eq!(all.tags["b.txt"], "staged");
-    assert_eq!(all.tags["c.txt"], "untracked");
+    assert_eq!(tag_of(&all, "a.txt"), "not staged");
+    assert_eq!(tag_of(&all, "b.txt"), "staged");
+    assert_eq!(tag_of(&all, "c.txt"), "untracked");
+    assert_eq!(all.staged, None);
     let c = all.files.iter().find(|f| f.path() == "c.txt").unwrap();
     assert_eq!(c.new_text.as_deref(), Some("new\n"));
 
@@ -659,6 +660,57 @@ fn the_working_tree_reads_staged_unstaged_and_untracked_changes() {
     assert_eq!(count, 3);
     fs::write(dir.join("a.txt"), "three!\n").unwrap();
     assert_ne!(repo.working_summary().unwrap().1, before);
+}
+
+/// The word the working tree gives the first file at `path`.
+fn tag_of(tree: &WorkingTree, path: &str) -> &'static str {
+    tree.tags[tree.files.iter().position(|f| f.path() == path).unwrap()]
+}
+
+#[test]
+fn the_working_trees_groups_put_a_file_partly_staged_in_both() {
+    use std::fs;
+    let fx = Fixture::new();
+    let dir = fx.repo.workdir().unwrap().to_owned();
+    fs::write(dir.join("a.txt"), "1\n2\n3\n4\n5\n6\n7\n8\n").unwrap();
+    fs::write(dir.join("b.txt"), "one\n").unwrap();
+    let mut index = fx.repo.index().unwrap();
+    index.add_path(std::path::Path::new("a.txt")).unwrap();
+    index.add_path(std::path::Path::new("b.txt")).unwrap();
+    index.write().unwrap();
+    let tree = fx.repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let sig = Signature::new("Test", "t@example.com", &Time::new(1, 0)).unwrap();
+    fx.repo
+        .commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+        .unwrap();
+
+    // a.txt: its first line staged, its last changed since; b.txt only on disk; c.txt new.
+    fs::write(dir.join("a.txt"), "one\n2\n3\n4\n5\n6\n7\n8\n").unwrap();
+    index.add_path(std::path::Path::new("a.txt")).unwrap();
+    index.write().unwrap();
+    fs::write(dir.join("a.txt"), "one\n2\n3\n4\n5\n6\n7\neight\n").unwrap();
+    fs::write(dir.join("b.txt"), "two\n").unwrap();
+    fs::write(dir.join("c.txt"), "new\n").unwrap();
+
+    let groups = fx.open().working_groups(DiffSettings::default()).unwrap();
+    assert_eq!(groups.staged, Some(1));
+    let listed: Vec<_> = groups.files.iter().map(FileDiff::path).collect();
+    assert_eq!(listed, ["a.txt", "a.txt", "b.txt", "c.txt"]);
+    assert_eq!(
+        groups.tags,
+        ["staged", "not staged", "not staged", "untracked"]
+    );
+    // Each part with its own lines: the staged one the first line, the other the last.
+    let lines = |f: &FileDiff| {
+        f.hunks
+            .iter()
+            .flat_map(|h| &h.lines)
+            .filter(|l| l.kind != LineKind::Context)
+            .filter_map(|l| l.old_line.or(l.new_line))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(lines(&groups.files[0]), [1, 1]);
+    assert_eq!(lines(&groups.files[1]), [8, 8]);
 }
 
 #[test]

@@ -211,10 +211,32 @@ pub struct Stale {
 }
 
 /// Uncommitted work against `HEAD`.
+#[derive(Default)]
 pub struct WorkingTree {
     pub files: Vec<FileDiff>,
-    /// Per path: `staged`, `partly staged`, `not staged` or `untracked`.
-    pub tags: HashMap<String, &'static str>,
+    /// Per file: `staged`, `partly staged`, `not staged` or `untracked`.
+    pub tags: Vec<&'static str>,
+    /// Grouped (`working_groups`): how many of the files, first, are what is staged — the rest
+    /// are what is not; None otherwise.
+    pub staged: Option<usize>,
+}
+
+/// What the working tree is read from: its staged and not staged changes, apart.
+struct WorkingParts<'r> {
+    head: Option<git2::Tree<'r>>,
+    staged: Vec<FileDiff>,
+    unstaged: Vec<FileDiff>,
+    unstaged_paths: std::collections::HashSet<String>,
+    untracked: std::collections::HashSet<String>,
+}
+
+/// The working tree's diff options: new files with their content.
+fn working_options(settings: DiffSettings) -> git2::DiffOptions {
+    let mut o = diff::options(settings);
+    o.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .show_untracked_content(true);
+    o
 }
 
 pub struct Comparison {
@@ -630,55 +652,117 @@ impl Repo {
         diff::tree_to_tree(&self.inner, old.as_ref(), Some(&new), settings)
     }
 
-    /// The changes of the working tree against `HEAD` (staged, not staged and untracked files);
-    /// with `only_unstaged` only what changed since the last `git add`. Read-only.
+    /// The changes of the working tree against `HEAD` (staged, not staged and untracked files),
+    /// a file once; with `only_unstaged` only what changed since the last `git add`. Read-only.
     pub fn working_tree(&self, settings: DiffSettings, only_unstaged: bool) -> Result<WorkingTree> {
+        let Some(parts) = self.working_parts(settings)? else {
+            return Ok(WorkingTree::default());
+        };
+        let files = if only_unstaged {
+            parts.unstaged
+        } else {
+            diff::collect(
+                &self.inner,
+                self.inner.diff_tree_to_workdir_with_index(
+                    parts.head.as_ref(),
+                    Some(&mut working_options(settings)),
+                )?,
+                diff::Sides {
+                    old: parts.head.as_ref(),
+                    new: None,
+                    disk: true,
+                    old_index: None,
+                    new_index: None,
+                },
+            )?
+        };
+        let tags = files
+            .iter()
+            .map(|f| {
+                let path = f.path();
+                match (
+                    parts.staged.iter().any(|s| s.path() == path),
+                    parts.unstaged_paths.contains(path),
+                    parts.untracked.contains(path),
+                ) {
+                    (_, _, true) => "untracked",
+                    (true, true, _) => "partly staged",
+                    (true, false, _) => "staged",
+                    _ => "not staged",
+                }
+            })
+            .collect();
+        Ok(WorkingTree {
+            files,
+            tags,
+            staged: None,
+        })
+    }
+
+    /// The working tree as `git status` tells it (#22): what is staged — `HEAD` against the
+    /// index —, then what is not — the index against the disk, new files too. A file partly
+    /// staged is in both, each with its part. Read-only.
+    pub fn working_groups(&self, settings: DiffSettings) -> Result<WorkingTree> {
+        let Some(parts) = self.working_parts(settings)? else {
+            return Ok(WorkingTree::default());
+        };
+        let staged = parts.staged.len();
+        let tags = std::iter::repeat_n("staged", staged)
+            .chain(parts.unstaged.iter().map(|f| {
+                if parts.untracked.contains(f.path()) {
+                    "untracked"
+                } else {
+                    "not staged"
+                }
+            }))
+            .collect();
+        let mut files = parts.staged;
+        files.extend(parts.unstaged);
+        Ok(WorkingTree {
+            files,
+            tags,
+            staged: Some(staged),
+        })
+    }
+
+    /// The working tree's staged and not staged changes and its new files; None in a bare
+    /// repository.
+    fn working_parts(&self, settings: DiffSettings) -> Result<Option<WorkingParts<'_>>> {
         if self.inner.workdir().is_none() {
-            return Ok(WorkingTree {
-                files: Vec::new(),
-                tags: HashMap::new(),
-            });
+            return Ok(None);
         }
         let head = self.inner.head().ok().and_then(|h| h.peel_to_tree().ok());
-        let opts = |settings| {
-            let mut o = diff::options(settings);
-            o.include_untracked(true)
-                .recurse_untracked_dirs(true)
-                .show_untracked_content(true);
-            o
-        };
-        // A document's images: on the old side from HEAD, or for the not staged changes alone
-        // from the index they are compared with; on the new side from the disk.
-        let sides = diff::Sides {
-            old: head.as_ref(),
-            new: None,
-            disk: true,
-            old_index: None,
-        };
         let index = self.inner.index()?;
+        // A document's images: on the old side from what each part is compared with — HEAD, or
+        // the index for what is not staged —, on the new side from the index or the disk.
         let unstaged = diff::collect(
             &self.inner,
             self.inner
-                .diff_index_to_workdir(None, Some(&mut opts(settings)))?,
+                .diff_index_to_workdir(None, Some(&mut working_options(settings)))?,
             diff::Sides {
+                old: None,
+                new: None,
+                disk: true,
                 old_index: Some(&index),
-                ..sides
+                new_index: None,
             },
         )?;
-        let staged = self.inner.diff_tree_to_index(
-            head.as_ref(),
-            None,
-            Some(&mut diff::options(settings)),
+        let staged = diff::collect(
+            &self.inner,
+            self.inner.diff_tree_to_index(
+                head.as_ref(),
+                None,
+                Some(&mut diff::options(settings)),
+            )?,
+            diff::Sides {
+                old: head.as_ref(),
+                new: None,
+                disk: false,
+                old_index: None,
+                new_index: Some(&index),
+            },
         )?;
-        let staged_paths: std::collections::HashSet<String> = staged
-            .deltas()
-            .filter_map(|d| {
-                d.new_file()
-                    .path()
-                    .map(|p| p.to_string_lossy().into_owned())
-            })
-            .collect();
-        let untracked: std::collections::HashSet<String> = self
+        let untracked = self
             .inner
             .statuses(Some(
                 git2::StatusOptions::new()
@@ -690,34 +774,14 @@ impl Repo {
             .filter(|e| e.status().contains(git2::Status::WT_NEW))
             .filter_map(|e| e.path().ok().map(str::to_owned))
             .collect();
-        let unstaged_paths: std::collections::HashSet<String> =
-            unstaged.iter().map(|f| f.path().to_owned()).collect();
-
-        let mut tags = HashMap::new();
-        for path in staged_paths.iter().chain(&unstaged_paths) {
-            let tag = match (
-                staged_paths.contains(path),
-                unstaged_paths.contains(path),
-                untracked.contains(path),
-            ) {
-                (_, _, true) => "untracked",
-                (true, true, _) => "partly staged",
-                (true, false, _) => "staged",
-                _ => "not staged",
-            };
-            tags.insert(path.clone(), tag);
-        }
-        let files = if only_unstaged {
-            unstaged
-        } else {
-            diff::collect(
-                &self.inner,
-                self.inner
-                    .diff_tree_to_workdir_with_index(head.as_ref(), Some(&mut opts(settings)))?,
-                sides,
-            )?
-        };
-        Ok(WorkingTree { files, tags })
+        let unstaged_paths = unstaged.iter().map(|f| f.path().to_owned()).collect();
+        Ok(Some(WorkingParts {
+            head,
+            staged,
+            unstaged,
+            unstaged_paths,
+            untracked,
+        }))
     }
 
     /// The paths changed in the working tree or the index, new ones too (not ignored): what is

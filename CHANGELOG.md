@@ -13,6 +13,9 @@ for someone using the app, not for someone reading the code; the commits follow 
 - **What is beside a folder, from Code's path.** A click on a folder's name in the path over a file lists what
   is beside it — folders first, then files, the one you came through saying "here" — and typing filters it. ↑ ↓
   and ↵ open a folder's page or a file's tab; the first row opens the folder itself, as the click used to.
+- **Staged and not staged, apart.** The working tree's files are in two groups, Staged and Not staged, each under
+  a header that folds it and says how many; the filter is over both. A file partly staged is in each with its
+  own part's lines, and every file's card says which part it is. Not staged only shows that group alone.
 - **Pictures in comments, kept.** An image in a comment or a merge request's description — a screenshot uploaded
   to GitLab, a picture from the web — is drawn under its words, and a click opens it; a document's web images and
   badges are drawn too, not only named. Each is fetched once and kept on disk with people's pictures, so it shows at

@@ -1475,8 +1475,23 @@ struct Diff {
     files: Arc<Vec<FileDiff>>,
     /// The commits of a version comparison, paired (empty for anything else).
     pairs: Vec<RangePair>,
-    /// Per path, a word for the file list (the working tree: staged, untracked…).
-    tags: std::collections::HashMap<String, &'static str>,
+    /// The working tree's words for its files (staged, untracked…) and its two groups.
+    tags: working::FileTags,
+}
+
+impl Diff {
+    /// How many files: a file partly staged, in both of the working tree's groups (#22), is one.
+    fn file_count(&self) -> usize {
+        match self.tags.staged {
+            Some(_) => self
+                .files
+                .iter()
+                .map(FileDiff::path)
+                .collect::<HashSet<_>>()
+                .len(),
+            None => self.files.len(),
+        }
+    }
 }
 
 /// A pane boundary that can be dragged.
@@ -2541,11 +2556,17 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 match loaded {
                     Ok(diff) => {
-                        // The file asked for, else the one a page comes back to (#71).
+                        // The file asked for, else the one a page comes back to (#71): the one
+                        // at the same place while it is still there — a file partly staged is
+                        // listed twice (#22) —, else the first with its path.
                         let keep = keep
                             .or_else(|| this.restore_scroll.as_ref().map(|(path, _)| path.clone()));
-                        let ix =
-                            keep.and_then(|path| diff.files.iter().position(|f| f.path() == path));
+                        let ix = keep.and_then(|path| {
+                            let at = this.file;
+                            (diff.files.get(at).map(|f| f.path()) == Some(path.as_str()))
+                                .then_some(at)
+                                .or_else(|| diff.files.iter().position(|f| f.path() == path))
+                        });
                         let empty = diff.files.is_empty();
                         this.diff = Some(diff);
                         // The files of the diff it replaces are gone.
@@ -3898,7 +3919,7 @@ impl Workspace {
             .child(
                 div()
                     .text_color(theme::muted())
-                    .child(plural(diff.files.len(), "file")),
+                    .child(plural(diff.file_count(), "file")),
             )
             .child(div().text_color(theme::added()).child(format!("+{added}")))
             .child(
@@ -4317,6 +4338,14 @@ impl Workspace {
                         hover::cut("file-path", path)
                             .flex_1()
                             .text_color(change_color(f, false)),
+                    )
+                    // The working tree's part it is (#22): staged, not staged, untracked; with
+                    // every file in one scroll the card's own header has it.
+                    .children(
+                        self.stack
+                            .is_none()
+                            .then(|| working::file_tag(diff.tags.word(self.file)))
+                            .flatten(),
                     )
                     // An SVG read as its source can go back to the picture.
                     .children(

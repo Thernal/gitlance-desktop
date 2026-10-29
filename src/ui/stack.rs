@@ -306,14 +306,19 @@ impl Workspace {
         let Some(diff) = &self.diff else {
             return;
         };
-        let order: Vec<usize> =
-            super::lists::file_items(&diff.files, self.options.list_files, "", &HashSet::new())
-                .into_iter()
-                .filter_map(|item| match item {
-                    super::lists::FileItem::File { ix, .. } => Some(ix),
-                    super::lists::FileItem::Dir { .. } => None,
-                })
-                .collect();
+        let order: Vec<usize> = super::lists::file_items(
+            &diff.files,
+            self.options.list_files,
+            "",
+            &HashSet::new(),
+            diff.tags.staged,
+        )
+        .into_iter()
+        .filter_map(|item| match item {
+            super::lists::FileItem::File { ix, .. } => Some(ix),
+            _ => None,
+        })
+        .collect();
         let files = diff.files.len();
         // The place a reload keeps: rows below the header of the file it was in.
         let anchor = self
@@ -915,6 +920,10 @@ impl Workspace {
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(super::change_color(file, state == Some(State::Done))),
                     )
+                    // The working tree's part it is (#22): staged, not staged, untracked.
+                    .children(super::working::file_tag(
+                        self.diff.as_ref().and_then(|d| d.tags.word(ix)),
+                    ))
                     // Another chat is changing it (#77).
                     .children(self.changing(file.path()).map(|(name, letter, hue)| {
                         div()

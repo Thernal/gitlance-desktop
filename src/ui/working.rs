@@ -130,16 +130,27 @@ impl Workspace {
             return;
         };
         let only_unstaged = self.wt.only_unstaged;
+        let at = self.file;
         self.clear_diff();
+        // A reload finds a file partly staged at its place, in the group it was in (#22).
+        self.file = at;
         self.selection = Selection::WorkingTree;
         let settings = self.settings();
         self.load_diff(keep, cx, move || {
-            let tree = Repo::open(&root)?.working_tree(settings, only_unstaged)?;
+            // All changes as `git status` groups them (#22); Not staged only is that group alone.
+            let repo = Repo::open(&root)?;
+            let tree = match only_unstaged {
+                true => repo.working_tree(settings, true)?,
+                false => repo.working_groups(settings)?,
+            };
             Ok(Diff {
                 header: Header::WorkingTree { only_unstaged },
                 files: Arc::new(tree.files),
                 pairs: Vec::new(),
-                tags: tree.tags,
+                tags: FileTags {
+                    words: tree.tags,
+                    staged: tree.staged,
+                },
             })
         });
         cx.notify();
@@ -173,6 +184,27 @@ impl Workspace {
     }
 }
 
+/// The working tree's words for its files, by index: `staged`, `partly staged`, `not staged` or
+/// `untracked`; empty for any other diff.
+#[derive(Default)]
+pub(super) struct FileTags {
+    pub words: Vec<&'static str>,
+    /// In two groups (#22): how many of the files, first, are what is staged.
+    pub staged: Option<usize>,
+}
+
+impl FileTags {
+    pub fn word(&self, ix: usize) -> Option<&'static str> {
+        self.words.get(ix).copied()
+    }
+
+    /// The word a row of the list shows: in a group only `untracked`, as its header says the rest.
+    pub fn row_word(&self, ix: usize) -> Option<&'static str> {
+        self.word(ix)
+            .filter(|w| self.staged.is_none() || *w == "untracked")
+    }
+}
+
 /// How a working-tree file is tagged in the file list.
 pub(super) fn tag_color(tag: &str) -> gpui::Rgba {
     match tag {
@@ -183,12 +215,12 @@ pub(super) fn tag_color(tag: &str) -> gpui::Rgba {
 }
 
 /// The small word after a file's name.
-pub(super) fn file_tag(tag: Option<&&'static str>) -> Option<gpui::Div> {
+pub(super) fn file_tag(tag: Option<&'static str>) -> Option<gpui::Div> {
     tag.map(|t| {
         div()
             .flex_none()
             .text_size(px(10.))
             .text_color(tag_color(t))
-            .child(*t)
+            .child(t)
     })
 }

@@ -218,6 +218,7 @@ pub(super) fn version_diff(
         new: Some(&to_tip),
         disk: false,
         old_index: Some(&index),
+        new_index: None,
     };
     let mut files = diff::collect(repo, changes, sides)?;
     for file in &mut files {

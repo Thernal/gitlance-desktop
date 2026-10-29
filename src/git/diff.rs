@@ -181,6 +181,9 @@ pub(super) struct Sides<'a> {
     /// The old side is an index (the working tree's not staged changes, a rebased version's
     /// replay): a document's images are read from it instead of `old`.
     pub old_index: Option<&'a git2::Index>,
+    /// The new side is the index (the working tree's staged changes): a document's images are
+    /// read from it.
+    pub new_index: Option<&'a git2::Index>,
 }
 
 impl FileDiff {
@@ -293,6 +296,7 @@ pub(super) fn tree_to_tree(
             new,
             disk: false,
             old_index: None,
+            new_index: None,
         },
     )
 }
@@ -377,10 +381,10 @@ pub(super) fn collect(
             pictures.extend(read_pictures(repo, p, text, from, true));
         }
         if let (Some(p), Content::Text(text)) = (&new_path, &new) {
-            let from = if sides.disk {
-                Pictured::Disk
-            } else {
-                Pictured::Tree(sides.new)
+            let from = match (sides.disk, sides.new_index) {
+                (true, _) => Pictured::Disk,
+                (false, Some(index)) => Pictured::Index(index),
+                (false, None) => Pictured::Tree(sides.new),
             };
             pictures.extend(read_pictures(repo, p, text, from, false));
         }

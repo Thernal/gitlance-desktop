@@ -380,13 +380,8 @@ impl Workspace {
             self.set_zone(Zone::Diff, cx);
             return;
         }
-        // ← on a file: the folder it is in.
-        let path = self
-            .diff
-            .as_ref()
-            .and_then(|d| d.files.get(self.file))
-            .map(|f| f.path().to_owned());
-        if let Some(path) = path {
+        // ← on a file: the folder it is in, or its group (#22).
+        if let Some(path) = self.file_key(self.file) {
             let parent = self
                 .item_keys()
                 .into_iter()

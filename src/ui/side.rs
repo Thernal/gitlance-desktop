@@ -370,7 +370,7 @@ impl Workspace {
             } else {
                 Some(match self.review_progress() {
                     Some((done, total)) => format!("{done} / {total} reviewed"),
-                    None => plural(diff.files.len(), "file"),
+                    None => plural(diff.file_count(), "file"),
                 })
             };
             let list = self.options.list_files;
@@ -394,7 +394,7 @@ impl Workspace {
                         .into_any_element(),
                 );
             }
-            end.push(count(diff.files.len().to_string()));
+            end.push(count(diff.file_count().to_string()));
             let done = self.all_reviewed();
             if !folded {
                 open_lists += 1;
