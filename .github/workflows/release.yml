@@ -59,7 +59,11 @@ jobs:
           ditto -c -k --keepParent target/GitLance.app "dist/GitLance-$VERSION-macos.zip"
           cp -R target/GitLance.app dmg/
           ln -s /Applications dmg/Applications
-          hdiutil create -volname GitLance -srcfolder dmg -ov -format UDZO "dist/GitLance-$VERSION-macos.dmg"
+          # Sized from the folder by hdiutil, the image came out too small on macos-26 ("No space left on
+          # device"): the folder's size, a fifth more and 20 MB.
+          size=$(du -sm dmg | cut -f1)
+          hdiutil create -volname GitLance -srcfolder dmg -size "$((size + size / 5 + 20))m" -ov -format UDZO \
+            "dist/GitLance-$VERSION-macos.dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: macos
