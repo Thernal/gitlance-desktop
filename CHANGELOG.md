@@ -6,6 +6,11 @@ for someone using the app, not for someone reading the code; the commits follow 
 
 ## Unreleased
 
+- **An agent shows you its changes without being asked.** It opens them in GitLance, with a summary and a note on
+  each file the diff alone does not explain, after a commit, after it makes or rewrites a branch (a squash, a
+  rebase, a cherry-pick, a reworded commit), after it addresses your comments, and before it asks you to look or to
+  approve — a local branch not pushed yet included. Settings → Agents → Connect also gives Claude Code a `gitlance`
+  skill saying the same; press it again to add the skill to a profile connected before.
 - **Every way in, easiest first.** A repository whose host GitLance has no token for lists the ways this computer
   offers, each with the account it signs in as and a button named for what it does: the GitLab or GitHub CLI's
   token (Use — nothing is asked, nothing copied), the one git keeps, one made with your SSH key (read-only under

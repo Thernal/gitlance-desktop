@@ -750,8 +750,19 @@ fn claude_program() -> Option<PathBuf> {
     on_path.into_iter().chain(known).find(|p| p.is_file())
 }
 
+/// The skill written beside the server in each Claude Code profile (#158): when to open the changes for the
+/// reviewer, kept in the agent's context apart from the server's instructions, which come once.
+pub const SKILL: &str = include_str!("../assets/skills/gitlance/SKILL.md");
+
+/// Writes the skill into a Claude Code profile, replacing an older one: `<profile>/skills/gitlance/SKILL.md`.
+pub fn write_skill(profile: &Path) -> std::io::Result<()> {
+    let dir = profile.join("skills").join("gitlance");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("SKILL.md"), SKILL)
+}
+
 /// Adds GitLance's MCP server to every Claude Code profile, for every project (user scope),
-/// replacing an older entry. Returns what happened, per profile.
+/// replacing an older entry, and the skill beside it. Returns what happened, per profile.
 pub fn connect_claude() -> Result<String, String> {
     let claude = claude_program().ok_or("Claude Code's `claude` was not found.")?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -779,6 +790,7 @@ pub fn connect_claude() -> Result<String, String> {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         if out.status.success() {
+            write_skill(profile).map_err(|e| format!("{name}: {e}"))?;
             done.push(name);
         } else {
             return Err(format!(
@@ -1183,5 +1195,21 @@ mod tests {
             claude_folder(Path::new("/Users/a/My.Repo")),
             "-Users-a-My-Repo"
         );
+    }
+
+    #[test]
+    fn the_skill_is_written_into_a_profile_and_names_the_moments() {
+        let profile = tempfile::tempdir().unwrap();
+        write_skill(profile.path()).unwrap();
+        // Again, over an older one.
+        write_skill(profile.path()).unwrap();
+        let file = profile.path().join("skills/gitlance/SKILL.md");
+        let text = std::fs::read_to_string(file).unwrap();
+        let (_, front) = text.split_once("---\n").unwrap();
+        let (front, _) = front.split_once("\n---").unwrap();
+        assert!(front.contains("name: gitlance"));
+        for moment in ["after a commit", "rewritten", "addressed", "to approve"] {
+            assert!(front.contains(moment), "{moment}");
+        }
     }
 }

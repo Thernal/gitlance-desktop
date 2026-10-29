@@ -18,7 +18,13 @@ const PROTOCOL: &str = "2025-06-18";
 /// What the agent is told when the server connects.
 fn instructions(exe: &str) -> String {
     format!(
-        "GitLance is the reviewer's diff app. The reviewer writes comments on lines there and sends them to a chat. \
+        "Show the reviewer your work in GitLance without being asked, with open_changes, at these moments: after you \
+commit; after you make or rewrite a branch (squash, rebase, cherry-pick, reword); after you address review comments; \
+and before you ask the reviewer to look or to approve. A local branch not pushed yet counts. Open your branch against \
+its base, or the working tree when nothing is committed, with a summary of the whole and a note on each file whose \
+change the diff alone does not explain: why this way, what you left alone, what to look at closely.
+
+GitLance is the reviewer's diff app. The reviewer writes comments on lines there and sends them to a chat. \
 So that they reach this chat, start the watcher once, in the background, as soon as you work in a git repository: \
 run `\"{exe}\" agent-watch` with the Monitor tool if you have it, otherwise with Bash and run_in_background. \
 Do not wait for it. When it prints (review comments arrived), call list_comments, change the code for each comment, \
@@ -32,11 +38,10 @@ opens in the app for the reviewer to check and send. \
 To review a merge request, read it with get_request — its diff as GitLab or GitHub compares it, its discussions \
 and the pending comments already there — and leave each remark with add_pending_comment on a line the diff shows. When you have looked at several, \
 gather them with gather_requests, each with a line on what you did there, so the reviewer finds them together. \
-When you finish work the reviewer should read, open it for them with open_changes: your branch against its base, \
-or the working tree. Where a change needs explaining — why this way, what you left alone, what to look at closely — \
-give notes on its lines and a summary, with open_changes or alone with annotate_changes; answers to them come back as \
-review comments. When a branch is ready for a merge request, you may draft its title and description with \
-draft_request; the reviewer checks it and creates it in GitLance. \
+Notes can also be left alone, on changes already opened, with annotate_changes; answers to them come back as review \
+comments. When a branch is ready for a merge request, you may draft its title and description with \
+draft_request; the reviewer checks it and creates it in GitLance. When you tell the reviewer where something is — a \
+file and a line, a commit, a comment on a merge request — point at it with show, so they can go there. \
 Pending comments are seen by the reviewer alone; the reviewer edits, deletes or keeps them and submits the review: \
 never submit, approve or publish anything yourself. \
 GitLance shows the reviewer what you did only while it runs. When your work needs the reviewer to look and a tool \
@@ -162,7 +167,7 @@ fn tools() -> Value {
         },
         {
             "name": "open_changes",
-            "description": "Open what you changed for the reviewer, as a row under Branches in GitLance: two refs or commits compared (head against base, since their merge base unless direct), or the working tree. Nothing on their screen moves; a note offers to show it. With notes and a summary, they show on the diff as annotate_changes leaves them. Answers what it opened, or why it could not.",
+            "description": "Open what you changed for the reviewer, as a row under Branches in GitLance: two refs or commits compared (head against base, since their merge base unless direct), or the working tree. Call it without being asked: after a commit; after a branch is made or rewritten (squash, rebase, cherry-pick, reword); after review comments are addressed; before asking the reviewer to look or to approve — a local branch not pushed yet included. Give a summary and a note on each file whose change the diff alone does not explain; they show on the diff as annotate_changes leaves them. Nothing on the reviewer's screen moves; a note offers to show it. Answers what it opened, or why it could not.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -171,7 +176,7 @@ fn tools() -> Value {
                     "direct": {"type": "boolean", "description": "Compare the two as they are, not since their merge base"},
                     "working_tree": {"type": "boolean", "description": "The uncommitted changes instead of two refs"},
                     "unstaged": {"type": "boolean", "description": "With working_tree: only what is not staged"},
-                    "summary": {"type": "string", "description": "Optional: what the changes do, in a few sentences, shown over the diff"},
+                    "summary": {"type": "string", "description": "What the changes do, in a few sentences, shown over the diff"},
                     "notes": notes
                 }
             }
@@ -438,14 +443,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(init["result"]["protocolVersion"], "2025-03-26");
-        assert!(
-            init["result"]["instructions"]
-                .as_str()
-                .unwrap()
-                .contains("\"/x/GitLance\" agent-watch")
-        );
+        let said = init["result"]["instructions"].as_str().unwrap();
+        assert!(said.contains("\"/x/GitLance\" agent-watch"));
+        // When to open the changes comes first, apart from the rest (#158).
+        let (first, _) = said.split_once("\n\n").unwrap();
+        assert!(first.contains("open_changes") && first.contains("after you commit"));
         let list = handle(&bus, "", &json!({"id": 2, "method": "tools/list"})).unwrap();
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 11);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 12);
         assert!(handle(&bus, "", &json!({"method": "notifications/initialized"})).is_none());
         let unknown = handle(&bus, "", &json!({"id": 3, "method": "nope"})).unwrap();
         assert_eq!(unknown["error"]["code"], -32601);

@@ -179,7 +179,7 @@ their notes, and a file another chat is changing says so over its diff.
 
 | Agent | Setup |
 |---|---|
-| **Claude Code** | Settings → Agents → Connect adds GitLance's MCP server to every Claude Code profile. A chat then runs `GitLance agent-watch` in the background and wakes when comments arrive. |
+| **Claude Code** | Settings → Agents → Connect adds GitLance's MCP server to every Claude Code profile, with a `gitlance` skill telling the agent when to open its changes for you. A chat then runs `GitLance agent-watch` in the background and wakes when comments arrive. |
 | **Codex** (limited) | `codex mcp add gitlance -- <GitLance> mcp`. A Codex running in a terminal in the project then listens by itself. Not seen yet: Codex in VS Code or the Codex app. |
 
 </details>
