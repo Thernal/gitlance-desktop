@@ -4,7 +4,7 @@
 //! Designed in `../Design/mockups/ide-ideas/a-ideas.html` (1).
 
 use super::px;
-use super::{Header, ROW_RADIUS, Workspace, plural, theme};
+use super::{Header, ROW_RADIUS, Workspace, theme};
 use crate::git::FileDiff;
 use crate::storage;
 use gpui::{ClickEvent, Context, FontWeight, IntoElement, MouseButton, div, prelude::*};
@@ -684,7 +684,7 @@ impl Workspace {
         )
     }
 
-    /// "7 of 17 reviewed" with a bar under the files label, and Mark all / Unmark all.
+    /// "7/17" with a bar under it, and Mark all / Unmark all.
     pub(super) fn render_review_progress(
         &self,
         cx: &mut Context<Self>,
@@ -736,21 +736,22 @@ impl Workspace {
                         .items_center()
                         .gap_2()
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(11.))
-                                .text_color(if done == total {
-                                    theme::added()
+                            // Only the numbers: the total over the files says what they count (#157).
+                            super::hover::cut(
+                                "progress-count",
+                                if done == total {
+                                    format!("{done}/{total} ✓")
                                 } else {
-                                    theme::muted()
-                                })
-                                .child(if done == total {
-                                    format!("All {} reviewed ✓", plural(total, "file"))
-                                } else {
-                                    format!("{done}/{total} reviewed")
-                                }),
+                                    format!("{done}/{total}")
+                                },
+                            )
+                            .flex_1()
+                            .text_size(px(11.))
+                            .text_color(if done == total {
+                                theme::added()
+                            } else {
+                                theme::muted()
+                            }),
                         )
                         .child(toggle),
                 )

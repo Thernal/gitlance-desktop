@@ -6,6 +6,9 @@ for someone using the app, not for someone reading the code; the commits follow 
 
 ## Unreleased
 
+- **The size of the whole change.** Over the files, a row says how many there are and their lines added and
+  removed, in the column of each file's own; with a path typed, of the files shown. The review line says only
+  the numbers: 4/8.
 - **An agent shows you its changes without being asked.** It opens them in GitLance, with a summary and a note on
   each file the diff alone does not explain, after a commit, after it makes or rewrites a branch (a squash, a
   rebase, a cherry-pick, a reworded commit), after it addresses your comments, and before it asks you to look or to

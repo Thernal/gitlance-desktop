@@ -5,7 +5,7 @@
 use super::hover::Hover;
 use super::input::{self, Edit};
 use super::px;
-use super::{Workspace, change_color, change_tip, row, theme};
+use super::{Workspace, change_color, change_tip, plural, row, theme};
 use crate::git::{Deco, DecoKind, FileDiff};
 use gpui::{
     ClickEvent, Context, KeyDownEvent, MouseButton, MouseDownEvent, ScrollStrategy, div, prelude::*,
@@ -450,6 +450,7 @@ impl Workspace {
             .child(self.widths.measure("changes"))
             .children(self.render_review_progress(cx))
             .child(self.render_field("file-filter", Field::Files, "Filter by path  ⌥⌘P", cx))
+            .children(self.render_changes_total())
             .child(if count == 0 {
                 div()
                     .flex_1()
@@ -465,6 +466,50 @@ impl Workspace {
             })
     }
 
+    /// A file's +/− shows while the list has 240 px (#79).
+    fn counts_fit(&self) -> bool {
+        let width = self.widths.width("changes");
+        width <= 0. || width >= 240.
+    }
+
+    /// Over the files: how many, and their lines' total in the column of each file's own + and −
+    /// (#157); with a path typed, the files shown of all, and theirs.
+    fn render_changes_total(&self) -> Option<gpui::Div> {
+        let diff = self.diff.as_ref()?;
+        let all = diff.files.len();
+        if all == 0 {
+            return None;
+        }
+        let shown: Vec<usize> = if self.pfilter.trim().is_empty() {
+            (0..all).collect()
+        } else {
+            self.file_order()
+        };
+        let (added, removed) = shown.iter().fold((0, 0), |(a, r), &ix| {
+            (a + diff.files[ix].added, r + diff.files[ix].removed)
+        });
+        let label = if shown.len() == all {
+            plural(all, "file")
+        } else {
+            format!("{} of {}", shown.len(), plural(all, "file"))
+        };
+        Some(
+            div()
+                .flex_none()
+                .h(px(24.))
+                .px(px(14.))
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(px(11.))
+                .text_color(theme::muted())
+                .child(super::hover::cut("changes-total-label", label).flex_1())
+                .when(self.counts_fit(), |s| {
+                    s.child(super::line_counts(added, removed))
+                }),
+        )
+    }
+
     fn render_file_item(&self, item: &FileItem, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(diff) = &self.diff else {
             return div().into_any_element();
@@ -472,10 +517,7 @@ impl Workspace {
         let tree = !self.options.list_files && self.pfilter.trim().is_empty();
         // A file's row: its status and name always, its +/− while the list has 240 px (#79); its
         // tooltip the whole path.
-        let counts = {
-            let width = self.widths.width("changes");
-            width <= 0. || width >= 240.
-        };
+        let counts = self.counts_fit();
         match item {
             FileItem::File { ix, depth } if tree => {
                 let file = &diff.files[*ix];

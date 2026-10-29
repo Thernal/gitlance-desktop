@@ -4636,7 +4636,11 @@ pub(super) fn generated_tag(file: &FileDiff) -> Option<gpui::Div> {
 
 /// A file's added and removed line counts.
 fn stats(file: &FileDiff) -> impl IntoElement + use<> {
-    let (added, removed) = (file.added, file.removed);
+    line_counts(file.added, file.removed)
+}
+
+/// Lines added and removed, green and red, each only when there are some.
+fn line_counts(added: usize, removed: usize) -> gpui::Div {
     div()
         .flex()
         .gap_1()
